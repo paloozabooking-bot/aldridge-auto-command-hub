@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" role="img" aria-label="Aldridge Auto's Crest">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#132542" />
+      <stop offset="100%" stop-color="#091324" />
+    </linearGradient>
+    <linearGradient id="chromeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc" />
+      <stop offset="50%" stop-color="#cbd5e1" />
+      <stop offset="100%" stop-color="#94a3b8" />
+    </linearGradient>
+  </defs>
+  <!-- Shield Emblem -->
+  <path d="M14 14 L48 6 L82 14 L82 50 C82 70 66 84 48 90 C30 84 14 70 14 50 Z" fill="url(#shieldGrad)" stroke="url(#chromeGrad)" stroke-width="3.5" />
+  <path d="M19 18 L48 11 L77 18 L77 49 C77 65 63 78 48 84 C33 78 19 65 19 49 Z" fill="none" stroke="#ea580c" stroke-width="1.8" />
+  <!-- PNW Evergreen Silhouettes -->
+  <polygon points="27,66 32,54 37,66" fill="#22c55e" opacity="0.85" />
+  <polygon points="59,66 64,54 69,66" fill="#22c55e" opacity="0.85" />
+  <!-- Gear & Wrench Center -->
+  <circle cx="48" cy="43" r="15" fill="none" stroke="url(#chromeGrad)" stroke-width="4" stroke-dasharray="6 3.4" />
+  <circle cx="48" cy="43" r="9" fill="#0b1628" stroke="#ea580c" stroke-width="2" />
+  <path d="M39 52 L57 34 M39 34 L57 52" stroke="#f8fafc" stroke-width="3.2" stroke-linecap="round" />
+  <!-- Wordmark -->
+  <text x="98" y="39" font-family="Plus Jakarta Sans, Arial, sans-serif" font-weight="800" font-size="26" letter-spacing="0.6" fill="#f8fafc">ALDRIDGE AUTO'S</text>
+  <rect x="98" y="47" width="208" height="2.5" rx="1.2" fill="#ea580c" />
+  <text x="98" y="65" font-family="Plus Jakarta Sans, Arial, sans-serif" font-weight="700" font-size="13" letter-spacing="1.8" fill="#cbd5e1">OEM PARTS • AUTO REPAIR • U-HAUL</text>
+  <text x="98" y="81" font-family="JetBrains Mono, monospace" font-weight="600" font-size="10.5" fill="#4ade80">UNIVERSITY PLACE / TACOMA, WA • 5.0★</text>
+</svg>

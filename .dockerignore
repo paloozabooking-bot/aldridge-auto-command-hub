@@ -1,0 +1,9 @@
+node_modules
+.git
+data/archive_*.db
+data/backup_*.db
+data/*.db-wal
+data/*.db-shm
+data/drive_batches
+data/audit_outputs
+data/drive_downloaded_*

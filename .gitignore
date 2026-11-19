@@ -1,0 +1,15 @@
+node_modules/
+data/archive_*.db
+data/archive_57_uploads/
+data/backup_*.db
+data/*.db-shm
+data/*.db-wal
+data/drive_batches/
+data/audit_inputs/
+data/audit_outputs/
+data/audit_sources/
+data/drive_downloaded_*.csv
+data/uploads/*
+!data/uploads/.gitkeep
+.env
+.DS_Store

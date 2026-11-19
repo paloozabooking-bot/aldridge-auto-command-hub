@@ -1,0 +1,2349 @@
+const state = {
+  data: null,
+  cart: [],
+  capturedImageBase64: '',
+  currentPartPhotos: [],
+  folderQueue: [],
+  cameraStream: null,
+  activePolicyKey: 'master_return_refund_policy',
+  deferredInstallPrompt: null
+};
+
+function esc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function showToast(msg) {
+  const stack = document.getElementById('toast-stack');
+  if (!stack) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  stack.appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.error || `Request failed (${res.status})`);
+  }
+  return json;
+}
+
+async function loadBootstrap() {
+  state.data = await api('/api/bootstrap');
+  renderAll();
+}
+
+/* ==================== NAVIGATION & MODES ==================== */
+function switchCustomerView(viewId) {
+  document.getElementById('mode-customer-btn').classList.add('active');
+  document.getElementById('mode-staff-btn').classList.remove('active');
+  document.getElementById('customer-nav').style.display = 'flex';
+
+  document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
+  const target = document.getElementById(viewId);
+  if (target) target.classList.add('active');
+
+  document.querySelectorAll('#customer-nav .nav-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === viewId);
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function activateStaffMode(staffTabId = 'staff-intake') {
+  document.getElementById('mode-staff-btn').classList.add('active');
+  document.getElementById('mode-customer-btn').classList.remove('active');
+  document.getElementById('customer-nav').style.display = 'none';
+
+  document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
+  document.getElementById('view-staff').classList.add('active');
+  switchStaffTab(staffTabId);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function switchStaffTab(tabId) {
+  document.querySelectorAll('.staff-tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.staff === tabId);
+  });
+  document.querySelectorAll('.staff-section').forEach((sec) => {
+    sec.classList.toggle('active', sec.id === tabId);
+  });
+}
+
+/* ==================== MASTER RENDER ==================== */
+function renderAll() {
+  if (!state.data) return;
+  const { settings, inventory, specials } = state.data;
+
+  // Apply Brand Theme Palette & Logo
+  document.body.dataset.theme = settings.theme_preset || 'pnw_navy_orange';
+  const logoEl = document.getElementById('header-brand-logo');
+  if (logoEl) {
+    logoEl.src = settings.logo_url || '/assets/aldridge-crest.jpg';
+  }
+
+  // Branding & Header/Footer
+  const fullAddr = `${settings.street_address}, ${settings.city_display || settings.city}, ${settings.state} ${settings.zip}`;
+  document.title = `${settings.business_name} — University Place & Tacoma OEM Parts, 5.0★ Service & U-Haul #${settings.uhaul_dealer_id || '046117'}`;
+  document.getElementById('util-address').textContent = fullAddr;
+  document.getElementById('util-hours').textContent = settings.hours_weekday;
+  document.getElementById('util-phone').textContent = settings.phone;
+  const uhaulPhoneEl = document.getElementById('util-uhaul-phone');
+  if (uhaulPhoneEl) uhaulPhoneEl.textContent = settings.uhaul_phone || '(253) 948-3487';
+  const ratingEl = document.getElementById('util-rating');
+  if (ratingEl && settings.google_rating_badge) {
+    ratingEl.textContent = settings.google_rating_badge.startsWith('★')
+      ? settings.google_rating_badge
+      : `★ ${settings.google_rating_badge}`;
+  }
+
+  document.getElementById('header-business-name').textContent = settings.business_name;
+  document.getElementById('header-tagline').textContent = settings.tagline;
+  document.getElementById('footer-name').textContent = settings.business_name;
+  document.getElementById('footer-addr').textContent = fullAddr;
+  document.getElementById('footer-contact').textContent =
+    `Shop & Parts: ${settings.phone} • U-Haul: ${settings.uhaul_phone || '(253) 948-3487'} • ${settings.email}`;
+
+  const activeItems = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
+  document.getElementById('hero-stock-count').textContent = `${activeItems.length} Active SKUs Synced`;
+
+  // Update SEO JSON-LD @graph dynamically
+  const seoEl = document.getElementById('seo-json-ld');
+  if (seoEl) {
+    const canonBase = `https://${settings.shopify_domain || 'aldridgesales.myshopify.com'}`;
+    seoEl.textContent = JSON.stringify({
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': ['AutoRepair', 'AutoPartsStore', 'LocalBusiness'],
+          '@id': `${canonBase}/#business`,
+          name: settings.business_name,
+          alternateName: settings.google_listing_name || "Aldridge Auto's",
+          description: `${settings.business_name} in University Place / Tacoma, WA: 5.0-star auto repair & diagnostics, ${activeItems.length} tested Used OEM auto parts (Calculated Parcel Shipping, Free 98467 Counter Pickup & Certified Shop Bay Installation), and Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}.`,
+          url: `${canonBase}/`,
+          telephone: settings.phone,
+          email: settings.email,
+          priceRange: '$$',
+          address: {
+            '@type': 'PostalAddress',
+            streetAddress: settings.street_address,
+            addressLocality: settings.city_display || settings.city,
+            addressRegion: settings.state,
+            postalCode: settings.zip,
+            addressCountry: 'US'
+          },
+          geo: {
+            '@type': 'GeoCoordinates',
+            latitude: 47.2062,
+            longitude: -122.5365
+          },
+          areaServed: ['University Place', 'Tacoma', 'Lakewood', 'Fircrest', 'Steilacoom', 'Fife'].map((c) => ({ '@type': 'City', name: c })),
+          openingHoursSpecification: [
+            {
+              '@type': 'OpeningHoursSpecification',
+              dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+              opens: '12:00',
+              closes: '19:00'
+            }
+          ],
+          aggregateRating: {
+            '@type': 'AggregateRating',
+            ratingValue: '5.0',
+            bestRating: '5',
+            reviewCount: '87'
+          },
+          department: [
+            {
+              '@type': 'AutoRental',
+              name: `${settings.business_name} — Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}`,
+              telephone: settings.uhaul_phone || '(253) 948-3487',
+              url: settings.uhaul_dealer_url || 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
+              description: 'Limited-stock neighborhood U-Haul truck & trailer rental dispatch with 24/7 Truck Share and 24-hour drop-off return (no hitch sales or hitch installation on-site).'
+            }
+          ]
+        },
+        {
+          '@type': 'WebSite',
+          '@id': `${canonBase}/#website`,
+          url: `${canonBase}/`,
+          name: `${settings.business_name} — OEM Auto Parts, 5.0★ Auto Repair & U-Haul #${settings.uhaul_dealer_id || '046117'}`,
+          potentialAction: {
+            '@type': 'SearchAction',
+            target: `${canonBase}/?sku={search_term_string}`,
+            'query-input': 'required name=search_term_string'
+          }
+        }
+      ]
+    }, null, 2);
+  }
+
+  renderSpecials(specials);
+  populateCategoryFilter(inventory);
+  renderPartsCards(activeItems.slice(0, 6), 'home-featured-parts');
+  renderCatalogFiltered();
+  renderUhaulHub(settings);
+  showCustomerPolicy('master_return_refund_policy');
+
+  // Employee Backend Sections
+  renderStaffKpis();
+  populateDonorAndSkuDropdowns();
+  renderStaffInventoryTable();
+  renderSyncAndChecklists();
+  selectStaffPolicy(state.activePolicyKey);
+  renderStaffApprovalsAndOrders();
+  renderStaffCrmAndInbox();
+  populateSettingsVaultForm(settings);
+  renderLaunchCenter();
+  updateCartBadge();
+}
+
+/* ==================== SPECIALS & SHARE-TO-FRIEND ==================== */
+function renderSpecials(specials) {
+  const grid = document.getElementById('home-specials-grid');
+  if (!grid) return;
+  if (!specials.length) {
+    grid.innerHTML = '<div class="surface-card">No active specials right now — check back soon!</div>';
+    return;
+  }
+  grid.innerHTML = specials.slice(0, 3).map((sp) => `
+    <article class="special-card">
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+          <span class="badge badge-warn">${esc(sp.badge)}</span>
+          <span style="font-size:0.75rem;color:var(--text-muted);">Exp: ${esc(sp.valid_until)}</span>
+        </div>
+        <h3 style="margin:0 0 0.3rem;font-size:1.05rem;">${esc(sp.title)}</h3>
+        <div style="font-weight:800;color:var(--brand-amber);font-size:1.1rem;margin-bottom:0.45rem;">${esc(sp.discount_text)}</div>
+        <p style="font-size:0.84rem;color:var(--text-secondary);margin:0 0 0.9rem;">${esc(sp.description)}</p>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <span class="promo-code-box">CODE: ${esc(sp.promo_code)}</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="shareSpecial(${sp.id}, '${esc(sp.title)}', '${esc(sp.promo_code)}')">
+          Share w/ Friend (${sp.share_count || 0})
+        </button>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function shareSpecial(id, title, code) {
+  const url = `${window.location.origin}/?promo=${encodeURIComponent(code)}`;
+  const shareText = `${title} — Use code ${code} at ${state.data?.settings?.business_name || "Aldridge Auto's"}! ${url}`;
+  try {
+    await api(`/api/specials/${id}/share`, { method: 'POST' });
+    if (navigator.share) {
+      await navigator.share({ title, text: shareText, url });
+    } else if (navigator.clipboard) {
+      await navigator.clipboard.writeText(shareText);
+      showToast('Referral offer link copied to clipboard — paste in Text or Social!');
+    }
+    await loadBootstrap();
+  } catch (err) {
+    showToast('Offer ready to share: ' + code);
+  }
+}
+
+async function shareSiteWithFriend() {
+  const s = state.data?.settings;
+  const url = window.location.origin;
+  const text = `Check out ${s?.business_name || "Aldridge Auto's"} in University Place / Tacoma for OEM Auto Parts, 5.0★ Auto Repair & U-Haul #046117: ${url}`;
+  if (navigator.share) {
+    await navigator.share({ title: s?.business_name || "Aldridge Auto's", text, url }).catch(() => {});
+  } else if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    showToast('Shareable shop link copied to clipboard!');
+  }
+}
+
+/* ==================== OEM PARTS STOREFRONT & 3-TIER SELECTOR ==================== */
+function populateCategoryFilter(items) {
+  const sel = document.getElementById('parts-category-filter');
+  if (!sel) return;
+  const current = sel.value;
+  const cats = Array.from(new Set(items.map((i) => i.category).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All Categories</option>' +
+    cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = current;
+}
+
+function renderCatalogFiltered() {
+  if (!state.data) return;
+  const q = (document.getElementById('parts-search-input')?.value || '').toLowerCase().trim();
+  const cat = document.getElementById('parts-category-filter')?.value || '';
+  const mode = document.getElementById('parts-mode-filter')?.value || '';
+
+  const filtered = state.data.inventory.filter((item) => {
+    if (item.quantity <= 0 || item.status !== 'active') return false;
+    if (cat && item.category !== cat) return false;
+    if (mode === 'self_pull' && !item.allow_self_pull) return false;
+    if (mode === 'parcel' && item.shipping_class !== 'parcel_calculated') return false;
+    if (mode === 'freight' && item.shipping_class === 'parcel_calculated') return false;
+    if (q) {
+      const hay = `${item.sku} ${item.title} ${item.oem_part_number} ${item.interchange_number} ${item.hollander_number} ${item.fitment_years} ${item.fitment_make} ${item.fitment_model} ${item.category}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  renderPartsCards(filtered, 'catalog-parts-grid');
+}
+
+function showAllCatalogItems() {
+  state.showAllCatalog = true;
+  renderCatalogFiltered();
+}
+
+function renderPartsCards(items, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = `<div class="surface-card" style="grid-column:1/-1;text-align:center;">
+      <h3 style="margin:0 0 0.4rem;">Clean-Slate Verified On-Hand Inventory Ready</h3>
+      <p style="margin:0;color:var(--text-secondary);">New verified on-hand OEM parts appear here automatically the moment they are published in Employee Backend → 1. AI Camera Intake.</p>
+    </div>`;
+    return;
+  }
+
+  const limit = containerId === 'catalog-parts-grid' && !state.showAllCatalog ? 48 : items.length;
+  const visibleItems = items.slice(0, limit);
+  const handlingFee = Number(state.data?.settings?.handling_fee_default ?? 10).toFixed(2);
+
+  const cardsHtml = visibleItems.map((item) => {
+    const img = item.photos?.[0] || '/assets/oem-parts.jpg';
+    const photoCount = item.photos?.length || 1;
+    const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
+    const shipBadge = isLocalPickupOnly
+      ? '<span class="badge badge-warn">Local Pickup Only (UP, WA 98467)</span>'
+      : `<span class="badge badge-ok">Calculated Parcel (+$${handlingFee} Hdl)</span>`;
+    const pullBadge = `<span class="badge badge-dark">1 Single Variant • ${photoCount} Real Photo${photoCount === 1 ? '' : 's'}</span>`;
+    const partPrice = Number(item.price_we_pull || 0);
+    const installEst = Number(item.price_pull_install || 0) > partPrice
+      ? Number(item.price_pull_install)
+      : Math.round(partPrice + Number(item.install_labor_hours || 1.5) * Number(state.data?.settings?.labor_rate_hourly || 135));
+
+    const primaryLabel = isLocalPickupOnly
+      ? '<strong>Single-Variant OEM Part</strong> (Local Counter Pickup — 98467)'
+      : '<strong>Single-Variant OEM Part</strong> (Ship Parcel or Free 98467 Pickup)';
+
+    return `
+      <article class="part-card">
+        <div class="part-thumb">
+          <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
+          <div class="part-badges">
+            ${pullBadge}
+            ${shipBadge}
+          </div>
+        </div>
+        <div class="part-body">
+          <div class="part-sku-line">
+            <span>SKU: ${esc(item.sku)}</span>
+            <span>OEM #: ${esc(item.oem_part_number || 'Does Not Apply')}</span>
+          </div>
+          <h3 class="part-title">${esc(item.title)}</h3>
+          <div class="part-fitment">
+            <strong>Fits:</strong> ${esc(item.fitment_years)} ${esc(item.fitment_make)} ${esc(item.fitment_model)} •
+            <span>${esc(item.condition || 'Used')} (${item.quantity} in stock)</span> •
+            <span class="mono" style="font-size:0.74rem;color:var(--text-muted);">${Number(item.weight_lbs || 8)} lbs (${Math.ceil(Number(item.length_in || 14))}×${Math.ceil(Number(item.width_in || 10))}×${Math.ceil(Number(item.height_in || 8))} in)</span>
+          </div>
+
+          <div class="tier-selector">
+            <div class="tier-option" style="cursor:default;">
+              <span>${primaryLabel}</span>
+              <span class="tier-price">$${partPrice.toFixed(2)}</span>
+            </div>
+            <div style="margin-top:0.35rem;padding:0.42rem 0.55rem;background:var(--status-warn-bg);color:var(--status-warn-fg);border-radius:5px;font-size:0.76rem;line-height:1.35;">
+              <strong>🔧 Optional 5.0★ Shop Bay Install (98467):</strong> Est. <strong>$${installEst.toFixed(2)}</strong> turnkey installed (info callout — labor quoted/paid at bay; never double-books stock).
+            </div>
+          </div>
+
+          <div style="display:flex;gap:0.5rem;">
+            <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="selectPartAndBuy(${item.id}, false)">
+              Buy Part ($${partPrice.toFixed(2)})
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="selectPartAndBuy(${item.id}, true)" title="Buy single-variant part &amp; request a shop installation bay slot">
+              + Install Slot
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="askAboutSku('${esc(item.sku)}')">
+              VIN
+            </button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  const moreBanner = items.length > visibleItems.length
+    ? `<div class="surface-card" style="grid-column:1/-1;text-align:center;padding:1rem;">
+        <p style="margin:0 0 0.6rem;font-size:0.86rem;color:var(--text-secondary);">
+          Showing <strong>${visibleItems.length}</strong> of <strong>${items.length}</strong> active OEM parts (use instant search above by Year/Make/Model/Part, or load all below).
+        </p>
+        <button type="button" class="btn btn-dark btn-sm" onclick="showAllCatalogItems()">Show All ${items.length} Active Parts</button>
+      </div>`
+    : '';
+
+  container.innerHTML = cardsHtml + moreBanner;
+}
+
+function selectPartAndBuy(itemId, requestInstallSlot = false) {
+  const item = state.data.inventory.find((i) => i.id === itemId);
+  if (!item) return;
+  const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
+  const chosenMode = requestInstallSlot
+    ? 'we_pull_and_install'
+    : (isLocalPickupOnly ? 'local_pickup_we_pull' : 'ship_calculated');
+
+  const existing = state.cart.find((c) => c.sku === item.sku);
+  if (!existing) {
+    state.cart.push({ sku: item.sku, qty: 1 });
+  }
+  updateCartBadge();
+  document.getElementById('chk-mode').value = chosenMode;
+  openCartModal();
+}
+
+function askAboutSku(sku) {
+  switchCustomerView('view-support');
+  document.getElementById('inq-sku').value = sku;
+  document.getElementById('inq-subject').value = `VIN Fitment Check for SKU ${sku}`;
+  document.getElementById('inq-vin').focus();
+}
+
+function updateCartBadge() {
+  const count = state.cart.reduce((acc, c) => acc + c.qty, 0);
+  document.getElementById('cart-count-badge').textContent = String(count);
+}
+
+function openCartModal() {
+  document.getElementById('checkout-success-box').style.display = 'none';
+  document.getElementById('checkout-form').style.display = state.cart.length ? 'block' : 'none';
+  const defaultDate = new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0];
+  if (!document.getElementById('chk-date').value) {
+    document.getElementById('chk-date').value = defaultDate;
+  }
+  renderCartSummary();
+  document.getElementById('cart-modal').classList.add('open');
+}
+
+function closeCartModal() {
+  document.getElementById('cart-modal').classList.remove('open');
+}
+
+function removeFromCart(sku) {
+  state.cart = state.cart.filter((c) => c.sku !== sku);
+  updateCartBadge();
+  openCartModal();
+}
+
+function renderCartSummary() {
+  const box = document.getElementById('cart-items-container');
+  const totalsBox = document.getElementById('cart-totals-box');
+  const modeSelect = document.getElementById('chk-mode');
+
+  if (!state.cart.length) {
+    box.innerHTML = '<div style="padding:1rem;background:var(--bg-subtle);border-radius:6px;text-align:center;">Your order bag is empty. Browse photographed OEM parts to add items.</div>';
+    totalsBox.innerHTML = '';
+    return;
+  }
+
+  const hasHeavyLocalPickup = state.cart.some((line) => {
+    const item = state.data.inventory.find((i) => i.sku === line.sku);
+    return item && (Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated');
+  });
+
+  const shipOpt = modeSelect.querySelector('option[value="ship_calculated"]');
+  if (shipOpt) {
+    shipOpt.disabled = hasHeavyLocalPickup;
+  }
+  if (hasHeavyLocalPickup && modeSelect.value === 'ship_calculated') {
+    modeSelect.value = 'local_pickup_we_pull';
+  }
+
+  const mode = modeSelect.value;
+  document.getElementById('chk-address-wrap').style.display = mode === 'ship_calculated' ? 'flex' : 'none';
+  document.getElementById('chk-appt-fields').style.display = mode !== 'ship_calculated' ? 'block' : 'none';
+  const waiverWrap = document.getElementById('chk-waiver-wrap');
+  if (waiverWrap) waiverWrap.style.display = 'none';
+
+  let subtotal = 0;
+  let totalWeight = 0;
+
+  const linesHtml = state.cart.map((line) => {
+    const item = state.data.inventory.find((i) => i.sku === line.sku);
+    if (!item) return '';
+    const unit = Number(item.price_we_pull || 0);
+    const installInfo = Number(item.price_pull_install || 0);
+    subtotal += unit * line.qty;
+    totalWeight += Number(item.weight_lbs || 8) * line.qty;
+
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:0.55rem 0;border-bottom:1px solid var(--border-light);font-size:0.85rem;">
+        <div>
+          <strong>${esc(item.title)}</strong><br/>
+          <span class="mono" style="font-size:0.75rem;color:var(--text-muted);">SKU: ${esc(item.sku)} • 1 Single Variant${installInfo > unit ? ` • Est. Bay Installed: $${installInfo.toFixed(2)}` : ''} • Security: ${esc(item.security_mark_code)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.65rem;">
+          <strong class="mono">$${(unit * line.qty).toFixed(2)}</strong>
+          <button type="button" class="btn btn-sm btn-outline" onclick="removeFromCart('${esc(item.sku)}')">Remove</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  box.innerHTML = linesHtml;
+
+  const settings = state.data.settings;
+  const handlingFee = mode === 'ship_calculated' ? Number(settings.handling_fee_default ?? 10) : 0;
+  const shipEst = mode === 'ship_calculated'
+    ? Math.max(12.95, Number((8.5 + totalWeight * 0.92).toFixed(2)))
+    : 0;
+  const taxRate = Number(settings.tax_rate ?? 0.101);
+  const tax = Number((subtotal * taxRate).toFixed(2));
+  const grandTotal = (subtotal + shipEst + handlingFee + tax).toFixed(2);
+
+  totalsBox.innerHTML = `
+    ${hasHeavyLocalPickup ? '<div style="margin-bottom:0.45rem;padding:0.45rem 0.6rem;background:var(--status-warn-bg);color:var(--status-warn-fg);border-radius:4px;font-size:0.79rem;"><strong>70+ lb / Oversize Rule:</strong> Local Pickup Only in University Place, WA 98467 (Parcel Shipping Disabled).</div>' : ''}
+    ${mode === 'we_pull_and_install' ? '<div style="margin-bottom:0.45rem;padding:0.45rem 0.6rem;background:var(--bg-white);border:1px solid var(--border-light);border-radius:4px;font-size:0.78rem;"><strong>Single-Variant Part Checkout:</strong> Reserves the physical part now; Certified Shop Bay Installation labor is confirmed &amp; settled at Bldg B upon inspection.</div>' : ''}
+    <div style="display:flex;justify-content:space-between;"><span>Single-Variant Part Subtotal:</span><span class="mono">$${subtotal.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between;"><span>${mode === 'ship_calculated' ? `Calculated Parcel Shipping (${totalWeight.toFixed(1)} lbs)` : 'Local Counter / Bay — University Place, WA 98467'}:</span><span class="mono">$${shipEst.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between;"><span>Protective Packaging &amp; Handling Buffer:</span><span class="mono">$${handlingFee.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between;"><span>Estimated ${esc(settings.state || 'WA')} Sales Tax (${(taxRate * 100).toFixed(1)}%):</span><span class="mono">$${tax.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between;font-weight:800;font-size:1rem;margin-top:0.4rem;padding-top:0.4rem;border-top:1px solid var(--border-strong);">
+      <span>Total Part Checkout:</span><span class="mono">$${grandTotal}</span>
+    </div>
+  `;
+}
+
+/* ==================== U-HAUL COMPLIANT HUB ==================== */
+function renderUhaulHub(settings) {
+  const u = settings.uhaul_synced_data || {};
+  const url = settings.uhaul_dealer_url || 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/';
+  const trailersUrl = settings.uhaul_trailers_url || 'https://www.uhaul.com/Locations/Trailer-Rentals-near-Tacoma-WA-98467/046117/';
+  document.getElementById('uhaul-dealer-heading').textContent = u.dealer_title || "Aldridge Auto's — Official U-Haul Neighborhood Dealer #046117";
+  document.getElementById('uhaul-live-portal-btn').href = url;
+  document.getElementById('uhaul-secondary-link').href = url;
+  const trBtn = document.getElementById('uhaul-trailers-link');
+  if (trBtn) trBtn.href = trailersUrl;
+  const eqList = document.getElementById('uhaul-equipment-list');
+  eqList.innerHTML = (u.equipment_categories || []).map((c) => `<li>${esc(c)}</li>`).join('');
+}
+
+function showCustomerPolicy(key) {
+  const p = state.data?.policies?.[key] || '';
+  const el = document.getElementById('customer-policy-preview');
+  if (el) el.textContent = p;
+}
+
+/* ==================== EMPLOYEE BACKEND RENDERERS ==================== */
+function renderStaffKpis() {
+  const { inventory, appointments, returnClaims, customers } = state.data;
+  const activeSkus = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
+  const totalValue = activeSkus.reduce((sum, i) => sum + Number(i.price_we_pull || 0) * i.quantity, 0);
+  const pendingAppts = appointments.filter((a) => a.status === 'pending_approval').length;
+  const openRmas = returnClaims.filter((r) => r.status === 'pending_evidence_review').length;
+
+  document.getElementById('staff-kpi-strip').innerHTML = `
+    <div class="kpi-card">
+      <div class="kpi-label">Active Multi-Channel SKUs</div>
+      <div class="kpi-value">${activeSkus.length}</div>
+      <div class="kpi-sub">Retail We-Pull Value: $${totalValue.toLocaleString()}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Pending Staff Approvals</div>
+      <div class="kpi-value" style="color:${pendingAppts > 0 ? 'var(--brand-amber)' : 'inherit'};">${pendingAppts}</div>
+      <div class="kpi-sub">Self-Pull, Pickup, Pull+Install &amp; Bay Slots</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">CRM &amp; VIP Subscribers</div>
+      <div class="kpi-value">${customers.length}</div>
+      <div class="kpi-sub">Unified Parts, Repair &amp; U-Haul Leads</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">RMA Evidence Queue</div>
+      <div class="kpi-value">${openRmas}</div>
+      <div class="kpi-sub">Strict Security-Mark &amp; Scan Proof</div>
+    </div>
+  `;
+}
+
+function populateDonorAndSkuDropdowns() {
+  const { donors, inventory } = state.data;
+  const donorSel = document.getElementById('intake-donor-select');
+  if (donorSel) {
+    const cur = donorSel.value;
+    donorSel.innerHTML = '<option value="">-- Standalone / Shelved Part (No Donor Vehicle) --</option>' +
+      donors.map((d) => `<option value="${d.id}">[${esc(d.stock_number)}] ${d.year} ${esc(d.make)} ${esc(d.model)} (${esc(d.engine)}) • ${d.mileage.toLocaleString()} mi • ${esc(d.yard_row)}</option>`).join('');
+    donorSel.value = cur;
+  }
+
+  const woSel = document.getElementById('wo-sku-select');
+  if (woSel) {
+    const avail = inventory.filter((i) => i.quantity > 0 && i.status === 'active').slice(0, 150);
+    woSel.innerHTML = avail.length
+      ? avail.map((i) => `<option value="${esc(i.sku)}">${esc(i.sku)} — ${esc(i.title.slice(0, 42))} (Bin: ${esc(i.bin_location)})</option>`).join('')
+      : '<option value="">No active SKUs in stock</option>';
+  }
+}
+
+function showAllStaffLedgerRows() {
+  state.showAllStaffLedger = true;
+  renderStaffInventoryTable();
+}
+
+function renderStaffInventoryTable() {
+  const { inventory } = state.data;
+  const q = (document.getElementById('staff-inv-search')?.value || '').toLowerCase().trim();
+  const rows = inventory.filter((i) => {
+    if (!q) return true;
+    return `${i.sku} ${i.title} ${i.oem_part_number} ${i.bin_location} ${i.security_mark_code} ${i.fitment_years} ${i.fitment_make} ${i.fitment_model}`.toLowerCase().includes(q);
+  });
+
+  document.getElementById('inv-ledger-count').textContent = String(rows.length);
+  const limit = !q && !state.showAllStaffLedger ? 75 : rows.length;
+  const visibleRows = rows.slice(0, limit);
+  const tbody = document.getElementById('staff-inventory-tbody');
+  const rowsHtml = visibleRows.map((i) => {
+    const photoCount = i.photos?.length || 1;
+    const qrBadge = i.qr_card_ready
+      ? `<span class="badge badge-ok" style="margin-top:3px;">+ Shopify QR Card</span>`
+      : '';
+    const statusBadge = i.status === 'active' && i.quantity > 0
+      ? `<span class="badge badge-ok">Active (${photoCount} clean img)</span> ${qrBadge}`
+      : `<span class="badge badge-warn">${esc(i.status)}</span>`;
+    const qrCardHref = i.qr_card_url || `/api/inventory/${encodeURIComponent(i.sku)}/qr-card.png`;
+    return `
+      <tr>
+        <td class="mono">
+          <strong>${esc(i.sku)}</strong><br/>
+          <span class="badge badge-warn" style="margin-top:3px;">${esc(i.security_mark_code)}</span>
+        </td>
+        <td>
+          <strong>${esc(i.title)}</strong><br/>
+          <span class="mono" style="font-size:0.76rem;color:var(--text-muted);">OEM: ${esc(i.oem_part_number || 'Does Not Apply')} | Fit: ${esc(i.custom_label_0 || `${i.fitment_years} ${i.fitment_make} ${i.fitment_model}`)} | eBay US Cat: #${esc(i.ebay_us_category_id || '6030')}</span>
+        </td>
+        <td class="mono">
+          ${esc(i.bin_location || 'UNSET')}<br/>
+          <span style="font-size:0.75rem;color:var(--text-secondary);">${esc(i.custom_label_1 || (i.pull_status === 'on_vehicle' ? 'On Donor Vehicle' : 'Pulled & Shelved'))}</span><br/>
+          ${statusBadge}
+        </td>
+        <td class="mono" style="font-size:0.78rem;">
+          1-Var Part: <strong>$${Number(i.price_we_pull).toFixed(2)}</strong><br/>
+          <span style="color:var(--text-secondary);">Desc Install Info: ${Number(i.price_pull_install || 0) > 0 ? `$${Number(i.price_pull_install).toFixed(2)}` : '—'}</span>
+        </td>
+        <td style="font-size:0.78rem;">
+          ${esc(i.shipping_class)}<br/>
+          <span class="mono">${i.weight_lbs} lbs • ${Math.ceil(Number(i.length_in || 14))}×${Math.ceil(Number(i.width_in || 10))}×${Math.ceil(Number(i.height_in || 8))} in</span>
+        </td>
+        <td class="mono"><strong>${i.quantity}</strong></td>
+        <td>
+          <div style="display:flex;flex-wrap:wrap;gap:0.35rem;">
+            <a href="https://post.craigslist.org/c/sea?lang=en&cc=us#aldridge_sku=${encodeURIComponent(i.sku)}&hub=${encodeURIComponent(window.location.origin)}" target="_blank" class="btn btn-primary btn-sm">⚡ Auto-Post CL (98467)</a>
+            <a href="/api/inventory/${encodeURIComponent(i.sku)}/packing-slip" target="_blank" class="btn btn-outline btn-sm">Packing Slip (QR)</a>
+            <a href="${esc(qrCardHref)}" target="_blank" class="btn btn-outline btn-sm">QR Card</a>
+            <a href="/api/inventory/${encodeURIComponent(i.sku)}/label" target="_blank" class="btn btn-outline btn-sm">Y813BT 4x6</a>
+            <button type="button" class="btn btn-dark btn-sm" onclick="toggleSoldState(${i.id}, ${i.quantity})">${i.quantity > 0 ? 'Zero/Sold' : 'Restock 1'}</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const moreRow = rows.length > visibleRows.length
+    ? `<tr><td colspan="7" style="text-align:center;padding:0.85rem;">
+        Showing first <strong>${visibleRows.length}</strong> of <strong>${rows.length}</strong> SKUs — type any SKU/Vehicle above or
+        <button type="button" class="btn btn-dark btn-sm" style="margin-left:0.5rem;" onclick="showAllStaffLedgerRows()">Show All ${rows.length} SKUs</button>
+      </td></tr>`
+    : '';
+
+  tbody.innerHTML = rowsHtml + moreRow;
+}
+
+async function copyLocalListing(sku) {
+  try {
+    const res = await api(`/api/inventory/${encodeURIComponent(sku)}/local-copy`);
+    await navigator.clipboard.writeText(res.copy);
+    showToast(`Copied ready-to-post OfferUp / FB Marketplace / Craigslist listing for ${sku}!`);
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function toggleSoldState(id, currentQty) {
+  const nextQty = currentQty > 0 ? 0 : 1;
+  await api(`/api/inventory/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ quantity: nextQty, status: nextQty === 0 ? 'sold' : 'active' })
+  });
+  showToast(nextQty === 0 ? 'SKU zeroed across Master Hub & live marketplace feeds!' : 'SKU restocked & re-activated across feeds!');
+  await loadBootstrap();
+}
+
+async function copyWaAgMetaEmail() {
+  const draft = state.data?.audit?.wa_ag_email_draft || '';
+  if (!draft) return;
+  await navigator.clipboard.writeText(draft);
+  showToast('Copied WA Attorney General / Meta Escalations C#26046204 email draft to clipboard!');
+}
+
+function renderSyncAndChecklists() {
+  const { feeds, settings, syncLogs, audit, weightDimensionAudit } = state.data;
+
+  const auditPanel = document.getElementById('audit-command-panel');
+  const wd = weightDimensionAudit || {};
+  const totalActive = wd.total_active_skus ?? 57;
+  const parcelActive = wd.parcel_calculated_count ?? 45;
+  const localActive = wd.local_pickup_only_98467_count ?? 12;
+
+  if (auditPanel && audit) {
+    const st = audit.stats || {};
+    auditPanel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:0.85rem;">
+        <div style="flex:1;min-width:260px;">
+          <div class="eyebrow-label">CLEAN CATALOG POLICY • REAL PHOTOS REQUIRED • SINGLE VARIANT ONLY</div>
+          <h3 style="margin:0.15rem 0 0.35rem;">Live Action Console (Shopify <code>${esc(settings.shopify_domain || 'aldridgesales.myshopify.com')}</code> • eBay <code>AABCAS</code> • Meta <code>C#26046204</code>)</h3>
+          <p style="margin:0;font-size:0.83rem;color:var(--text-secondary);">
+            <strong>1) Shopify <code>aldridgesales.myshopify.com</code>:</strong> ${totalActive} verified photo SKUs (<code>ALD-OH-001</code>..<code>057</code>) staged with <strong>1 Single Variant (<code>1 in stock</code>)</strong> + Shop Install callout &amp; website/PWA links in description HTML.
+            <strong>2) eBay <code>AABCAS</code>:</strong> 100% policy-compliant descriptions (zero off-eBay URLs, domains, or phone numbers).
+            <strong>3) Meta <code>C#26046204</code>:</strong> Send WA AG <code>#730525</code> reply below for Personal Marketplace restoration.
+          </p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:265px;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Open Clean 57-SKU Sync &amp; Ad Center</button>
+          <a href="${esc(feeds.shopify_csv)}" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Clean ${totalActive}-SKU Single-Variant Shopify CSV</a>
+          <button type="button" class="btn btn-dark btn-sm" onclick="copyWaAgMetaEmail()">Copy WA AG / Meta C#26046204 Email Draft</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:0.45rem;flex-wrap:wrap;font-size:0.76rem;">
+        <span class="badge badge-ok">Verified Photo SKUs: ${totalActive} (1 Variant Only)</span>
+        <span class="badge badge-ok">Parcel (&lt;70 lb): ${parcelActive}</span>
+        <span class="badge badge-warn">Local Pickup 98467: ${localActive}</span>
+        <span class="badge badge-ok">Shop Install Pricing: In Description HTML</span>
+        <span class="badge badge-ok">eBay Off-Site Links: 0 (100% Compliant)</span>
+        <span class="badge badge-err">Crosslist: NEVER CONNECT TO EBAY</span>
+      </div>
+    `;
+  }
+
+  const feedRows = [
+    { label: `1. Clean ${totalActive}-SKU Single-Variant Shopify CSV (1 Variant • Shop Install Callout + Direct App/Site Links)`, url: feeds.shopify_csv, type: 'download' },
+    { label: `2. Clean ${totalActive}-SKU eBay Motors Seller Hub CSV (1 Variant • 100% Policy-Compliant Zero Off-eBay Links)`, url: feeds.ebay_motors_csv, type: 'download' },
+    { label: `3. Google Merchant Center & Local Inventory XML (${totalActive} Verified Photo SKUs w/ L×W×H + Weight)`, url: feeds.google_merchant_xml, type: 'copy_url' },
+    { label: `4. Meta Commerce Catalog CSV (Facebook Business Page Shop & Marketplace Feed • ${totalActive} Photo SKUs)`, url: feeds.meta_catalog_csv, type: 'copy_url' },
+    { label: `5. Vendoo Single-Variant Export CSV (${totalActive} Photo SKUs w/ Exact Weight & L×W×H)`, url: feeds.vendoo_csv, type: 'download' },
+    { label: `6. TikTok Shop Parcel Auto Parts CSV ($0 Monthly Fee • ${parcelActive} Parcel Photo SKUs Only)`, url: feeds.tiktok_shop_csv, type: 'download' },
+    { label: '7. Shopify Co-Master Inbound Webhook URL (orders/create & products/update Auto-Zero)', url: feeds.shopify_webhook_endpoint, type: 'copy_url' }
+  ];
+
+  document.getElementById('sync-feeds-list').innerHTML = feedRows.map((f) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.65rem;padding:0.6rem 0.75rem;background:var(--bg-subtle);border-radius:6px;font-size:0.82rem;">
+      <div style="min-width:0;">
+        <strong>${esc(f.label)}</strong><br/>
+        <span class="mono" style="font-size:0.73rem;color:var(--text-muted);word-break:break-all;">${esc(f.url)}</span>
+      </div>
+      ${f.type === 'download'
+        ? `<a href="${esc(f.url)}" class="btn btn-dark btn-sm" style="white-space:nowrap;">Download CSV</a>`
+        : `<button type="button" class="btn btn-outline btn-sm" style="white-space:nowrap;" onclick="copyFeedUrl('${esc(f.url)}')">Copy Live URL</button>`
+      }
+    </div>
+  `).join('');
+
+  // Forensic Audit 4-Phase Direct Punch List Labels
+  const checklistLabels = {
+    phase1_urgent_unblocks: 'Phase 1 (Today — 45m): WA AG Meta Unblock, eBay AABCAS Hold & 8 Part-Out Ads',
+    phase2_shopify_catalog_heal: 'Phase 2 (Day 1 — 60m): Fresh Backup + Upload 1,437-Row Sanitized Shopify CSV',
+    phase3_ebay_aabcas_reconciliation: 'Phase 3 (Day 2): Reconcile 418 Gen-1 eBay SKUs & Launch Shopify Marketplace Connect',
+    phase4_stranded_recovery_and_daily_ops: 'Phase 4 (Day 3+): Recover ~546 4Runner CDN Parts, 26 Tundra & Y813BT Daily Drip',
+    google_and_meta_feeds: 'Google Business Profile, Google Merchant XML & Restored Personal FB Marketplace'
+  };
+
+  const cl = settings.platform_checklist || {};
+  document.getElementById('platform-checklist-container').innerHTML = Object.entries(checklistLabels).map(([platKey, title]) => {
+    const steps = cl[platKey] || {};
+    const stepHtml = Object.entries(steps).map(([stepKey, checked]) => `
+      <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.8rem;cursor:pointer;">
+        <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleChecklistStep('${platKey}', '${stepKey}', this.checked)" />
+        <span>${esc(stepKey.replaceAll('_', ' '))}</span>
+      </label>
+    `).join('');
+    return `
+      <div style="padding:0.7rem 0.85rem;background:var(--bg-subtle);border-radius:6px;">
+        <strong style="font-size:0.84rem;display:block;margin-bottom:0.4rem;">${esc(title)}</strong>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:0.35rem;">${stepHtml}</div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('sync-logs-tbody').innerHTML = syncLogs.slice(0, 20).map((l) => `
+    <tr>
+      <td class="mono" style="font-size:0.74rem;">${esc((l.created_at || '').replace('T', ' ').slice(0, 19))}</td>
+      <td><span class="badge badge-dark">${esc(l.direction)}</span></td>
+      <td><strong>${esc(l.platform)}</strong></td>
+      <td class="mono" style="font-size:0.76rem;">${esc(l.action)}</td>
+      <td class="mono">${esc(l.sku || 'ALL')}</td>
+      <td style="font-size:0.8rem;">${esc(l.details)}</td>
+    </tr>
+  `).join('');
+}
+
+async function copyFeedUrl(url) {
+  await navigator.clipboard.writeText(url);
+  showToast('Live Feed / Webhook URL copied to clipboard!');
+}
+
+async function toggleChecklistStep(platKey, stepKey, val) {
+  const cl = structuredClone(state.data.settings.platform_checklist || {});
+  if (!cl[platKey]) cl[platKey] = {};
+  cl[platKey][stepKey] = val;
+  await api('/api/settings', { method: 'PUT', body: JSON.stringify({ platform_checklist: cl }) });
+  state.data.settings.platform_checklist = cl;
+  showToast('Platform readiness checklist saved!');
+}
+
+function selectStaffPolicy(key) {
+  state.activePolicyKey = key;
+  const text = state.data?.policies?.[key] || '';
+  const el = document.getElementById('staff-policy-editor');
+  if (el) el.value = text;
+}
+
+async function copyCurrentStaffPolicy() {
+  const el = document.getElementById('staff-policy-editor');
+  if (!el) return;
+  await navigator.clipboard.writeText(el.value);
+  showToast('Policy / HTML Template copied — ready to paste into Shopify, eBay, Meta or Google!');
+}
+
+function renderStaffApprovalsAndOrders() {
+  const { appointments, orders } = state.data;
+
+  document.getElementById('staff-appointments-tbody').innerHTML = appointments.map((a) => {
+    const badgeClass = a.status === 'approved' ? 'badge-ok' : a.status === 'pending_approval' ? 'badge-warn' : 'badge-dark';
+    return `
+      <tr>
+        <td class="mono">
+          <strong>${esc(a.booking_code)}</strong><br/>
+          <span style="font-size:0.73rem;color:var(--text-muted);">${esc(a.booking_mode)}</span>
+        </td>
+        <td>
+          <strong>${esc(a.customer_name)}</strong><br/>
+          <span style="font-size:0.77rem;">${esc(a.customer_phone)}</span>
+        </td>
+        <td style="font-size:0.81rem;">
+          <strong>${esc(a.service_category)}</strong><br/>
+          Vehicle: ${esc(a.vehicle_ymm || 'N/A')} ${a.linked_sku ? `• SKU: <span class="mono">${esc(a.linked_sku)}</span>` : ''}
+          ${a.customer_notes ? `<div style="color:var(--text-muted);font-size:0.76rem;margin-top:2px;">"${esc(a.customer_notes)}"</div>` : ''}
+        </td>
+        <td class="mono" style="font-size:0.8rem;">
+          ${esc(a.preferred_date)}<br/>${esc(a.preferred_time)}
+        </td>
+        <td>
+          <span class="badge ${badgeClass}">${esc(a.status)}</span><br/>
+          <span style="font-size:0.76rem;">${esc(a.assigned_bay)}</span>
+        </td>
+        <td>
+          <div style="display:flex;flex-wrap:wrap;gap:0.35rem;">
+            ${a.status !== 'approved' ? `<button type="button" class="btn btn-primary btn-sm" onclick="updateAppointmentStatus(${a.id}, 'approved', 'Bay 2 / Yard Verified')">Approve Slot</button>` : ''}
+            ${a.status !== 'declined' ? `<button type="button" class="btn btn-outline btn-sm" onclick="updateAppointmentStatus(${a.id}, 'declined', 'Slot Unavailable')">Decline</button>` : ''}
+            <a href="${esc(a.gcal_url)}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">GCal ↗</a>
+            <a href="${esc(a.ics_url)}" class="btn btn-outline btn-sm">.ics</a>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  document.getElementById('staff-orders-tbody').innerHTML = orders.length
+    ? orders.map((o) => `
+      <tr>
+        <td class="mono"><strong>${esc(o.order_number)}</strong></td>
+        <td>${esc(o.customer_name)}<br/><span style="font-size:0.76rem;">${esc(o.customer_email)}</span></td>
+        <td><span class="badge badge-dark">${esc(o.fulfillment_mode)}</span></td>
+        <td class="mono" style="font-size:0.77rem;">${o.items.map((i) => `${esc(i.sku)} (x${i.qty})`).join(', ')}</td>
+        <td class="mono"><strong>$${Number(o.total).toFixed(2)}</strong><br/><span style="font-size:0.73rem;">Hdl: $${Number(o.handling_fee).toFixed(2)}</span></td>
+        <td>
+          <span class="badge ${o.approval_status === 'approved' ? 'badge-ok' : 'badge-warn'}">${esc(o.approval_status)}</span>
+          ${o.linked_booking_code ? `<div class="mono" style="font-size:0.75rem;margin-top:3px;">Appt: ${esc(o.linked_booking_code)}</div>` : ''}
+        </td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);">No storefront orders yet — test placing a Self-Pull, We-Pull, or Pull+Install order!</td></tr>';
+}
+
+async function updateAppointmentStatus(id, status, assigned_bay) {
+  await api(`/api/appointments/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ status, assigned_bay })
+  });
+  showToast(`Appointment updated to ${status}!`);
+  await loadBootstrap();
+}
+
+function renderStaffCrmAndInbox() {
+  const { inquiries, returnClaims, specials, customers } = state.data;
+
+  document.getElementById('staff-inquiries-list').innerHTML = inquiries.length
+    ? inquiries.map((inq) => `
+      <div style="padding:0.75rem;background:var(--bg-subtle);border-radius:6px;font-size:0.82rem;">
+        <div style="display:flex;justify-content:space-between;">
+          <strong>[${esc(inq.ticket_number)}] ${esc(inq.subject)}</strong>
+          <span class="badge ${inq.status === 'open' ? 'badge-warn' : 'badge-ok'}">${esc(inq.status)}</span>
+        </div>
+        <div style="color:var(--text-secondary);margin:0.25rem 0;">From: ${esc(inq.customer_name)} (${esc(inq.pillar)}) ${inq.vehicle_vin ? `• VIN: ${esc(inq.vehicle_vin)}` : ''}</div>
+        <p style="margin:0.3rem 0 0.5rem;">${esc(inq.message)}</p>
+        ${inq.status === 'open'
+          ? `<button type="button" class="btn btn-dark btn-sm" onclick="markInquiryReplied(${inq.id})">Mark Replied &amp; Resolved</button>`
+          : `<span style="font-size:0.76rem;color:var(--status-ok-fg);">✓ Resolved</span>`
+        }
+      </div>
+    `).join('')
+    : '<p style="color:var(--text-muted);font-size:0.84rem;">No open customer inquiries.</p>';
+
+  document.getElementById('staff-rma-list').innerHTML = returnClaims.length
+    ? returnClaims.map((r) => `
+      <div style="padding:0.75rem;background:var(--bg-subtle);border-radius:6px;font-size:0.82rem;">
+        <div style="display:flex;justify-content:space-between;">
+          <strong class="mono">${esc(r.rma_number)} • Order ${esc(r.order_number)} (${esc(r.sku)})</strong>
+          <span class="badge ${r.status.includes('rejected') ? 'badge-err' : r.status.includes('approved') ? 'badge-ok' : 'badge-warn'}">${esc(r.status)}</span>
+        </div>
+        <div style="margin:0.25rem 0;">Reason: <strong>${esc(r.claim_reason)}</strong> | OBD/Test: <span class="mono">${esc(r.diagnostic_codes)}</span> | Security Mark Intact: ${r.security_mark_intact ? 'YES' : 'NO'}</div>
+        <p style="margin:0.25rem 0 0.5rem;">${esc(r.evidence_summary)}</p>
+        <div style="display:flex;gap:0.4rem;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="decideRma(${r.id}, 'approved_buyer_ships_back')">Approve RMA (Buyer Pays Return Ship)</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="decideRma(${r.id}, 'rejected_policy_ineligible')">Reject Claim</button>
+        </div>
+      </div>
+    `).join('')
+    : '<p style="color:var(--text-muted);font-size:0.84rem;">No return evidence claims submitted.</p>';
+
+  document.getElementById('staff-specials-manage').innerHTML = specials.map((sp) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0.7rem;background:var(--bg-subtle);border-radius:6px;font-size:0.8rem;">
+      <span><strong>${esc(sp.promo_code)}</strong> — ${esc(sp.title)} (${sp.share_count} shares)</span>
+      <button type="button" class="btn btn-dark btn-sm" onclick="broadcastSpecialPush(${sp.id})">Push / Blast (${sp.broadcast_count || 0})</button>
+    </div>
+  `).join('');
+
+  document.getElementById('staff-crm-tbody').innerHTML = customers.map((c) => `
+    <tr>
+      <td><strong>${esc(c.name)}</strong><br/><span style="font-size:0.75rem;color:var(--text-muted);">${esc(c.email)} ${esc(c.phone)}</span></td>
+      <td style="font-size:0.76rem;">
+        ${esc(c.source_pillar)}<br/>
+        ${c.email_opt_in ? '<span class="badge badge-ok">Email</span> ' : ''}
+        ${c.sms_opt_in ? '<span class="badge badge-ok">SMS</span> ' : ''}
+        ${c.push_subscribed ? '<span class="badge badge-dark">Push</span>' : ''}
+      </td>
+      <td class="mono" style="font-size:0.78rem;">${esc(c.referral_code)}</td>
+      <td class="mono">$${Number(c.total_spent || 0).toFixed(2)}</td>
+    </tr>
+  `).join('');
+}
+
+async function markInquiryReplied(id) {
+  await api(`/api/inquiries/${id}`, { method: 'PUT', body: JSON.stringify({ status: 'replied' }) });
+  showToast('Inquiry marked replied!');
+  await loadBootstrap();
+}
+
+async function decideRma(id, status) {
+  await api(`/api/returns/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+  showToast(`RMA claim updated: ${status}`);
+  await loadBootstrap();
+}
+
+async function broadcastSpecialPush(id) {
+  const res = await api(`/api/specials/${id}/broadcast`, { method: 'POST' });
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(`${state.data.settings.business_name} Special!`, {
+      body: `${res.special.discount_text} — Code: ${res.special.promo_code}`,
+      icon: state.data.settings.logo_url || '/assets/aldridge-crest.jpg'
+    });
+  }
+  showToast(`Broadcasted ${res.special.promo_code} across Web Push, Email & SMS subscriber lists!`);
+  await loadBootstrap();
+}
+
+function populateSettingsVaultForm(s) {
+  document.getElementById('set-name').value = s.business_name || '';
+  document.getElementById('set-tagline').value = s.tagline || '';
+  const themeEl = document.getElementById('set-theme-preset');
+  if (themeEl) themeEl.value = s.theme_preset || 'pnw_navy_orange';
+  document.getElementById('set-phone').value = s.phone || '';
+  const uhaulPhEl = document.getElementById('set-uhaul-phone');
+  if (uhaulPhEl) uhaulPhEl.value = s.uhaul_phone || '(253) 948-3487';
+  document.getElementById('set-email').value = s.email || '';
+  document.getElementById('set-street').value = s.street_address || '';
+  document.getElementById('set-city').value = s.city_display || s.city || '';
+  document.getElementById('set-state').value = s.state || '';
+  document.getElementById('set-zip').value = s.zip || '';
+  document.getElementById('set-hours-wk').value = s.hours_weekday || '';
+  document.getElementById('set-hours-we').value = s.hours_weekend || '';
+  document.getElementById('set-handling-fee').value = s.handling_fee_default ?? 10;
+  document.getElementById('set-handling-days').value = s.handling_days_default ?? 3;
+  document.getElementById('set-labor-rate').value = s.labor_rate_hourly ?? 135;
+  document.getElementById('set-fb').value = s.social_links?.facebook || '';
+  document.getElementById('set-ebay').value = s.social_links?.ebay_store || '';
+  document.getElementById('set-shopify-domain').value = s.shopify_domain || '';
+  document.getElementById('set-shopify-token').value = s.shopify_admin_token || '';
+  document.getElementById('set-uhaul-url').value = s.uhaul_dealer_url || '';
+  document.getElementById('set-gemini-key').value = s.gemini_api_key || '';
+}
+
+/* ==================== CAMERA & ON-HAND PHOTO FOLDER INTAKE WORKFLOW ==================== */
+function readImageFileCompressed(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.onload = () => {
+      const rawDataUrl = String(reader.result || '');
+      const img = new Image();
+      img.onerror = () => resolve(rawDataUrl);
+      img.onload = () => {
+        const maxDim = 1400;
+        let w = img.naturalWidth || img.width || 800;
+        let h = img.naturalHeight || img.height || 600;
+        if (w > maxDim || h > maxDim) {
+          if (w >= h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function derivePartGroupAndHint(file) {
+  const rel = String(file.webkitRelativePath || file.relativePath || '').replace(/\\/g, '/');
+  const parts = rel.split('/').filter(Boolean);
+  const rawBase = String(file.name || 'part').replace(/\.[^.]+$/, '');
+  const isGenericCameraName = /^(IMG|DSC|PXL|MVIMG|DCIM|PHOTO|IMAGE|PIC|SCREENSHOT)[_\-\s]?\d+/i.test(rawBase);
+
+  // If organized into per-part subfolders (RootFolder/PartSubfolder/photo1.jpg), group by subfolder
+  if (parts.length >= 3) {
+    const subFolder = parts[parts.length - 2];
+    const cleanHint = subFolder.replace(/[_\-]+/g, ' ').trim();
+    return { groupKey: `dir:${parts.slice(0, -1).join('/').toLowerCase()}`, label: cleanHint, autoHint: cleanHint };
+  }
+
+  // Strip dot-notation or trailing angle numbers on descriptive filenames (e.g. tundra_alternator.1 -> tundra_alternator)
+  if (!isGenericCameraName) {
+    const stripped = rawBase.replace(/(?:\.\d+|[_\-\s]+(?:angle\s*)?\d+|\s*\(\d+\))$/i, '').trim() || rawBase;
+    const cleanHint = stripped.replace(/[_\-]+/g, ' ').trim();
+    return {
+      groupKey: `stem:${stripped.toLowerCase()}`,
+      label: cleanHint,
+      autoHint: /^ALD-/i.test(stripped) ? '' : cleanHint
+    };
+  }
+
+  // Generic phone photo names (IMG_4012.JPG) stay 1 part per photo unless user clicks "+ Add Angle Photo" or "Merge Next"
+  return { groupKey: `single:${rel || file.name}:${file.size}:${file.lastModified}`, label: rawBase, autoHint: '' };
+}
+
+function syncCurrentPhotosUI() {
+  state.capturedImageBase64 = state.currentPartPhotos[0] || '';
+  const preview = document.getElementById('camera-captured-preview');
+  const idle = document.getElementById('camera-idle-prompt');
+  const resetBtn = document.getElementById('btn-reset-photo');
+  const addAngleWrap = document.getElementById('btn-add-angle-wrap');
+  const strip = document.getElementById('intake-angle-strip');
+  const queueBox = document.getElementById('intake-folder-queue');
+
+  if (state.currentPartPhotos.length > 0) {
+    preview.src = state.currentPartPhotos[0];
+    preview.style.display = 'block';
+    idle.style.display = 'none';
+    resetBtn.style.display = 'inline-flex';
+    if (addAngleWrap) addAngleWrap.style.display = 'inline-flex';
+    if (strip) {
+      strip.style.display = 'flex';
+      strip.innerHTML = state.currentPartPhotos.map((src, idx) => `
+        <div style="position:relative;width:64px;height:64px;border-radius:6px;overflow:hidden;border:2px solid ${idx === 0 ? 'var(--brand-amber)' : 'var(--border-strong)'};cursor:pointer;" onclick="selectActiveAnglePreview(${idx})" title="Angle .${idx + 1}.jpg">
+          <img src="${esc(src)}" alt="Angle ${idx + 1}" style="width:100%;height:100%;object-fit:cover;" />
+          <span class="mono" style="position:absolute;bottom:2px;left:2px;background:rgba(15,23,42,0.82);color:#fff;font-size:0.65rem;padding:0 4px;border-radius:3px;">.${idx + 1}</span>
+          <button type="button" onclick="event.stopPropagation();removeAnglePhoto(${idx})" style="position:absolute;top:1px;right:1px;background:rgba(185,28,28,0.9);color:#fff;border:none;border-radius:3px;font-size:0.65rem;line-height:1;padding:2px 4px;cursor:pointer;">✕</button>
+        </div>
+      `).join('');
+    }
+  } else {
+    preview.style.display = 'none';
+    if (!state.cameraStream) idle.style.display = 'block';
+    resetBtn.style.display = 'none';
+    if (addAngleWrap) addAngleWrap.style.display = 'none';
+    if (strip) {
+      strip.style.display = 'none';
+      strip.innerHTML = '';
+    }
+  }
+
+  if (queueBox) {
+    if (state.folderQueue.length > 0) {
+      queueBox.style.display = 'block';
+      queueBox.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.45rem;flex-wrap:wrap;">
+          <strong style="font-size:0.8rem;">📁 On-Hand Folder Queue: ${state.folderQueue.length} part${state.folderQueue.length === 1 ? '' : 's'} waiting</strong>
+          <div style="display:flex;gap:0.35rem;">
+            ${state.currentPartPhotos.length > 0 ? '<button type="button" class="btn btn-outline btn-sm" style="padding:0.2rem 0.5rem;font-size:0.74rem;" onclick="mergeNextQueuedIntoCurrent()">+ Merge Next as Angle</button>' : ''}
+            <button type="button" class="btn btn-outline btn-sm" style="padding:0.2rem 0.5rem;font-size:0.74rem;" onclick="clearFolderQueue()">Clear Queue</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:0.4rem;overflow-x:auto;padding-bottom:0.2rem;">
+          ${state.folderQueue.slice(0, 24).map((q, idx) => `
+            <button type="button" class="btn btn-outline btn-sm" style="padding:0.25rem 0.5rem;font-size:0.74rem;white-space:nowrap;" onclick="loadQueuedFolderPart(${idx})">
+              ${esc(q.label)} (${q.photos.length}📷)
+            </button>
+          `).join('')}
+        </div>
+      `;
+    } else {
+      queueBox.style.display = 'none';
+      queueBox.innerHTML = '';
+    }
+  }
+}
+
+function selectActiveAnglePreview(idx) {
+  const src = state.currentPartPhotos[idx];
+  if (!src) return;
+  document.getElementById('camera-captured-preview').src = src;
+}
+
+function removeAnglePhoto(idx) {
+  state.currentPartPhotos.splice(idx, 1);
+  syncCurrentPhotosUI();
+}
+
+function loadQueuedFolderPart(idx = 0) {
+  if (!state.folderQueue[idx]) return;
+  const [picked] = state.folderQueue.splice(idx, 1);
+  stopCamera();
+  state.currentPartPhotos = picked.photos.slice(0, 12);
+  if (picked.autoHint) {
+    document.getElementById('intake-hint').value = picked.autoHint;
+  }
+  syncCurrentPhotosUI();
+  showToast(`Loaded "${picked.label}" (${state.currentPartPhotos.length} angle photo${state.currentPartPhotos.length === 1 ? '' : 's'}) — click Identify Part!`);
+}
+
+function mergeNextQueuedIntoCurrent() {
+  if (!state.folderQueue.length) return;
+  const next = state.folderQueue.shift();
+  state.currentPartPhotos.push(...next.photos);
+  state.currentPartPhotos = state.currentPartPhotos.slice(0, 12);
+  syncCurrentPhotosUI();
+  showToast(`Merged ${next.photos.length} angle photo(s) into current part (.1–.${state.currentPartPhotos.length})!`);
+}
+
+function clearFolderQueue() {
+  state.folderQueue = [];
+  syncCurrentPhotosUI();
+}
+
+async function ingestPhotoFileList(rawFiles, appendToCurrent = false) {
+  const imageFiles = Array.from(rawFiles || [])
+    .filter((f) => f && (String(f.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(f.name)))
+    .sort((a, b) => String(a.webkitRelativePath || a.name).localeCompare(String(b.webkitRelativePath || b.name), undefined, { numeric: true }));
+
+  if (!imageFiles.length) {
+    showToast('No supported image files (.jpg, .png, .webp) found in selection.');
+    return;
+  }
+
+  stopCamera();
+
+  if (appendToCurrent) {
+    const encoded = [];
+    for (const f of imageFiles.slice(0, 12)) {
+      encoded.push(await readImageFileCompressed(f));
+    }
+    state.currentPartPhotos.push(...encoded);
+    state.currentPartPhotos = state.currentPartPhotos.slice(0, 12);
+    syncCurrentPhotosUI();
+    showToast(`Added ${encoded.length} angle photo(s) to current part!`);
+    return;
+  }
+
+  // Group files into parts
+  const groupsMap = new Map();
+  for (const f of imageFiles) {
+    const meta = derivePartGroupAndHint(f);
+    if (!groupsMap.has(meta.groupKey)) {
+      groupsMap.set(meta.groupKey, { label: meta.label, autoHint: meta.autoHint, files: [] });
+    }
+    groupsMap.get(meta.groupKey).files.push(f);
+  }
+
+  const groups = [];
+  for (const g of groupsMap.values()) {
+    const photos = [];
+    for (const f of g.files.slice(0, 12)) {
+      photos.push(await readImageFileCompressed(f));
+    }
+    groups.push({ label: g.label, autoHint: g.autoHint, photos });
+  }
+
+  const first = groups.shift();
+  state.currentPartPhotos = first.photos;
+  if (first.autoHint && !document.getElementById('intake-hint').value) {
+    document.getElementById('intake-hint').value = first.autoHint;
+  }
+  if (groups.length > 0) {
+    state.folderQueue.push(...groups);
+  }
+  syncCurrentPhotosUI();
+  showToast(
+    groups.length > 0
+      ? `Loaded ${groups.length + 1} on-hand parts from folder! Part 1 ready (${first.photos.length} photo${first.photos.length === 1 ? '' : 's'}).`
+      : `Loaded ${first.photos.length} angle photo${first.photos.length === 1 ? '' : 's'} — click Identify Part below!`
+  );
+}
+
+async function extractDroppedFiles(dataTransfer) {
+  const items = Array.from(dataTransfer?.items || []);
+  const collected = [];
+
+  async function walkEntry(entry, prefix = '') {
+    if (!entry) return;
+    if (entry.isFile) {
+      const file = await new Promise((res) => entry.file(res, () => res(null)));
+      if (file) {
+        file.relativePath = prefix + file.name;
+        collected.push(file);
+      }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch = [];
+      do {
+        batch = await new Promise((res) => reader.readEntries(res, () => res([])));
+        for (const child of batch) {
+          await walkEntry(child, `${prefix}${entry.name}/`);
+        }
+      } while (batch.length > 0);
+    }
+  }
+
+  const entries = items.map((it) => (typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null)).filter(Boolean);
+  if (entries.length > 0) {
+    for (const entry of entries) {
+      await walkEntry(entry, '');
+    }
+    if (collected.length > 0) return collected;
+  }
+  return Array.from(dataTransfer?.files || []);
+}
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false
+    });
+    state.cameraStream = stream;
+    const video = document.getElementById('camera-video');
+    video.srcObject = stream;
+    video.style.display = 'block';
+    document.getElementById('camera-idle-prompt').style.display = 'none';
+    document.getElementById('camera-captured-preview').style.display = 'none';
+    document.getElementById('btn-snap-frame').style.display = 'inline-flex';
+    document.getElementById('btn-stop-camera').style.display = 'inline-flex';
+  } catch (err) {
+    showToast('Live camera unavailable on this browser — drop your photo folder or click "Upload Photo(s)"!');
+  }
+}
+
+function stopCamera() {
+  if (state.cameraStream) {
+    state.cameraStream.getTracks().forEach((t) => t.stop());
+    state.cameraStream = null;
+  }
+  document.getElementById('camera-video').style.display = 'none';
+  document.getElementById('btn-snap-frame').style.display = 'none';
+  document.getElementById('btn-stop-camera').style.display = 'none';
+  if (!state.currentPartPhotos.length) {
+    document.getElementById('camera-idle-prompt').style.display = 'block';
+  }
+}
+
+function snapCameraFrame() {
+  const video = document.getElementById('camera-video');
+  const canvas = document.getElementById('camera-canvas');
+  canvas.width = video.videoWidth || 800;
+  canvas.height = video.videoHeight || 600;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const frameUrl = canvas.toDataURL('image/jpeg', 0.85);
+  state.currentPartPhotos.push(frameUrl);
+  stopCamera();
+  syncCurrentPhotosUI();
+  showToast(`Captured angle .${state.currentPartPhotos.length}.jpg — snap/upload another angle or click Identify Part!`);
+}
+
+/* ==================== STAFF TAB 7: LAUNCH CENTER (ADS, SOCIAL, SEO & 8 PLATFORMS) ==================== */
+const LAUNCH_SOCIAL_POSTS = [
+  {
+    id: 'social-fb-ig-launch',
+    channel: 'Facebook Business Page (Pinned) + Instagram Feed',
+    title: 'Official Launch: New Aldridge Auto\'s Website, Mobile App & 962 Live OEM Parts!',
+    copy: `🔧🚀 UNIVERSITY PLACE & TACOMA — OUR NEW WEBSITE & MOBILE APP ARE OFFICIALLY LIVE!
+
+Welcome to the upgraded Aldridge Auto's at 5115 66th St W, Bldg B (University Place / Tacoma, WA 98467)!
+
+Whether you need a hard-to-find factory OEM part, a 5.0★ rated mechanic you can actually trust, or a neighborhood U-Haul rental — you can now do it all from your phone in seconds:
+✅ Browse 962+ Tested Used OEM Auto Parts Live (with multi-angle photos & verified fitment)
+✅ Choose Your Way: Nationwide Parcel Shipping, FREE Bldg B Counter Pickup, or Turnkey Shop Bay Installation by our 5.0★ Techs!
+✅ Book Auto Repair, Electrical, Cooling & OBD-II Diagnostics Online (87 Five-Star Google Reviews!)
+✅ Install Our Free Mobile App in 1 Tap ("Install App" / "Add to Home Screen") for instant VIP coupons & order updates
+✅ Authorized U-Haul Neighborhood Dealer #046117 (24/7 Truck Share® & 24-Hr Drop-Off — Direct U-Haul Line: 253-948-3487)
+
+🎁 LAUNCH WEEK VIP SPECIAL: Mention code PULLINSTALL15 for 15% OFF Installation Labor when you buy any stocked OEM part, or code DIAG25 for $25 OFF Full Check-Engine / Electrical Diagnostics!
+
+📍 5115 66th St W, Bldg B, University Place, WA 98467
+🕒 Mon–Fri: 12:00 PM – 7:00 PM
+📞 Shop & Parts: (253) 245-4206 | 🌐 https://aldridgesales.myshopify.com`
+  },
+  {
+    id: 'social-turnkey-install',
+    channel: 'Facebook / Instagram / Google Business Profile Post #2',
+    title: 'Why Buy a Used OEM Part Online From a Stranger When Our 5.0★ Shop Can Pull AND Install It?',
+    copy: `💡 Tired of gambling on mystery auto parts online — or paying dealership markups?
+
+At Aldridge Auto's in University Place (Bldg B), we do something online-only salvage sellers can't: SINGLE-ROOF ACCOUNTABILITY.
+1️⃣ Pick your exact VIN-matched Used OEM Alternator, Starter, Radiator, Strut, Door, Mirror, or Powertrain assembly from our 962-part live catalog.
+2️⃣ Select "We Pull + Certified Shop Installation" right at checkout (or grab it at our counter / ship it nationwide!).
+3️⃣ Our 5.0★ Google-rated technicians install and test it right here in our University Place bays.
+
+Message us your 17-digit VIN anytime for a fast fitment check!
+📍 5115 66th St W, Bldg B, University Place, WA 98467 | 📞 (253) 245-4206
+🔗 Shop Live Inventory: https://aldridgesales.myshopify.com`
+  },
+  {
+    id: 'social-reel-tiktok',
+    channel: 'Instagram Reels / TikTok / YouTube Shorts (30-Sec Script)',
+    title: '30-Second Shop Walkthrough Reel: QR Bins + Mobile App + Bay Install',
+    copy: `[0:00–0:05 | Hook — Stand in front of Bldg B bay / parts rack]
+"Stop paying dealership prices for OEM auto parts in Tacoma & University Place!"
+
+[0:05–0:13 | Show shelved OEM parts + Y813BT QR bin tags]
+"At Aldridge Auto's on 66th St W, we just put over 960 inspected factory OEM parts live on our new website and installable mobile app — every single part tagged, weighed, and photographed."
+
+[0:13–0:22 | Show phone screen tapping 'We Pull + Shop Install']
+"Need it shipped? Calculated carrier rates nationwide. Local to the 253? Pick it up FREE at Bldg B — or tap 'We Pull + Shop Install' and let our 5.0-star rated techs put it in for you!"
+
+[0:22–0:30 | CTA — Shop sign + phone number overlay]
+"Tap the link in bio to search by Year, Make & Model, install our free app, and use code PULLINSTALL15 for 15% off install labor!"`
+  },
+  {
+    id: 'social-nextdoor',
+    channel: 'Nextdoor (University Place, Fircrest, West Tacoma, Lakewood, Steilacoom)',
+    title: 'Neighbor Introduction + $25 Diagnostic / 15% Part-Install Neighbor Perk',
+    copy: `Hi University Place, Fircrest & Tacoma neighbors! 👋
+
+Chris here from Aldridge Auto's over at 5115 66th St W, Bldg B (right here in UP, 98467). Thank you to everyone in the neighborhood who has helped us earn 87 five-star reviews on Google!
+
+I wanted to share that our brand-new online OEM Auto Parts catalog & mobile booking app are now live:
+• 5.0★ Auto Repair & Diagnostics (Electrical, Alternators/Starters, Radiators & Cooling, Brakes, Suspension & Powertrain)
+• 962 Stocked Used OEM Auto Parts — buy at the counter, ship nationwide, or book turnkey installation in our bays
+• Official U-Haul Neighborhood Dealer #046117 for quick local truck/trailer pickups & 24-hr drop-offs (U-Haul line: 253-948-3487; note: tow vehicles must already have a hitch & wiring as we don't install hitches on-site)
+
+Mention "NEXTDOOR" or code DIAG25 this month for $25 OFF Check-Engine/Electrical Diagnostics, or PULLINSTALL15 for 15% OFF labor when we install any in-stock OEM part!
+— Chris Aldridge | (253) 245-4206 | https://aldridgesales.myshopify.com`
+  },
+  {
+    id: 'social-vip-sms',
+    channel: 'VIP SMS & Email Customer Blast (TCPA Compliant)',
+    title: '160-Char SMS + VIP Email Launch Alert',
+    copy: `Aldridge Auto's (UP/Tacoma): Our new OEM Parts Store & Booking App is LIVE! 962 parts + 5.0★ Repair. Use PULLINSTALL15 for 15% off install labor: https://aldridgesales.myshopify.com (253)245-4206 Reply STOP to opt out`
+  }
+];
+
+const LAUNCH_AD_CAMPAIGNS = [
+  {
+    id: 'ad-google-repair',
+    channel: 'Google Search Campaign #1 — 12-Mile Radius Around 98467 ($15–$25/day)',
+    title: '5.0★ Auto Repair, Electrical & Cooling Diagnostics (University Place / Tacoma)',
+    copy: `FINAL URL: https://aldridgesales.myshopify.com/#repair
+LOCATION TARGET: 12-mi radius around 5115 66th St W, University Place, WA 98467 (Presence ONLY)
+CALL EXTENSION: (253) 245-4206 (Mon–Fri 12:00 PM – 7:00 PM)
+
+HEADLINES (<=30 chars):
+1. Aldridge Auto's — 5.0★ Rated
+2. Auto Repair University Place
+3. Tacoma Electrical & Cooling
+4. $25 Off OBD-II Diagnostics
+5. Alternator & Radiator Pros
+6. 87 Five-Star Google Reviews
+7. OEM Parts + Bay Installation
+8. Book Mon–Fri 12PM–7PM Slots
+
+DESCRIPTIONS (<=90 chars):
+1. 5.0★ Google-rated auto repair at 5115 66th St W Bldg B, University Place. Call 253-245-4206!
+2. Electrical, alternators, radiators, brakes & engine swaps. Use code DIAG25 for $25 off diag!
+3. Save 30-50% vs dealer prices: we stock tested OEM parts & install them under one roof.
+
+MANDATORY NEGATIVE KEYWORDS:
+-airbag -srs -clockspring -"catalytic converter" -"junk car removal" -"cash for clunkers" -"car dealership" -"used cars for sale" -"hitch installation" -"uhaul hitch"`
+  },
+  {
+    id: 'ad-google-parts',
+    channel: 'Google Search + Free Merchant Listings Campaign #2 — OEM Auto Parts',
+    title: 'Tested Used OEM Auto Parts (Local 253 Pickup + Nationwide Shipping)',
+    copy: `FINAL URL: https://aldridgesales.myshopify.com/
+FEED SOURCE: /api/feeds/google-merchant.xml (962 SKUs w/ Verified Weight & L×W×H Dimensions)
+
+HEADLINES (<=30 chars):
+1. Tested Used OEM Auto Parts
+2. 962+ Factory Parts In Stock
+3. Ship Nationwide or Pickup UP
+4. Verify Fitment By 17-Digit VIN
+5. Tacoma & Pierce County Parts
+6. Optional 5.0★ Shop Install
+
+DESCRIPTIONS (<=90 chars):
+1. Genuine factory OEM auto parts inspected & security-marked in University Place, WA 98467.
+2. Fast calculated UPS/USPS parcel shipping under 70 lbs or FREE local pickup at 5115 66th St W!
+3. Local to Tacoma? Bundle any OEM part with certified installation in our 5.0★ service bays.`
+  },
+  {
+    id: 'ad-meta-local',
+    channel: 'Meta Ads Manager (Facebook & Instagram) — 15-Mile Geo-Radius Around 98467 ($10–$15/day)',
+    title: 'Local Pierce County Repair + Turnkey OEM Part Install Lead Ad',
+    copy: `PRIMARY TEXT:
+Check engine light on? Overheating radiator, weak alternator, or quoted $1,800+ at the dealership? 🛠️
+Come see why Tacoma, University Place & Lakewood drivers give Aldridge Auto's a 5.0★ rating (87 Google Reviews)! We stock 962+ tested factory OEM parts right on-site at Bldg B AND install them in our service bays — saving you 30%–50% without cheap aftermarket failures.
+📍 5115 66th St W, Bldg B, University Place, WA 98467
+📞 Call/Text (253) 245-4206 or tap "Learn More" to search parts & claim $25 OFF Diagnostics (Code: DIAG25)!
+
+HEADLINE: 5.0★ Auto Repair & 962 OEM Parts — University Place
+DESCRIPTION: Mon–Fri 12–7 PM • Free Counter Pickup or Turnkey Bay Install
+CTA BUTTON: Book Now / Shop Now -> https://aldridgesales.myshopify.com`
+  },
+  {
+    id: 'ad-craigslist-partout',
+    channel: 'Craigslist Seattle-Tacoma (Tacoma > Auto Parts) + OfferUp Local Anchor Ad',
+    title: '962+ Tested OEM Auto Parts + 318 Local-Pickup Engines/Body/Wheels (University Place 98467)',
+    copy: `TITLE: TESTED USED OEM AUTO PARTS — Toyota Honda Ford Subaru Chevy BMW Dodge (University Place 98467)
+
+BODY:
+ALDRIDGE AUTO'S — 5115 66th St W, Bldg B, University Place / Tacoma, WA 98467
+Shop & Parts Desk: (253) 245-4206 | Hours: Mon–Fri 12:00 PM – 7:00 PM
+5.0★ Google-Rated Auto Repair & Tested OEM Auto Parts!
+
+Over 960+ inspected, photographed & shelved factory OEM parts ready for immediate counter pickup in University Place (98467) — PLUS certified installation available right in our shop bays!
+
+POPULAR IN-STOCK OEM ASSEMBLIES RIGHT NOW:
+• 2016–2023 Toyota Tacoma TRD Off-Road 16" OEM Wheels & 265/70R16 Tires Set of 4 ($899.99)
+• Toyota Tundra / 4Runner / Camry / Prius / Sienna OEM Alternators, Starters, Radiators, Headlights, Mirrors, Doors, Bumpers & Struts
+• Honda Odyssey / CR-V / Civic / Accord OEM Body, Electrical, Cooling & Suspension Parts
+• Ford F-150 / Explorer / Escape / Mustang, Subaru Outback / Forester, Chevy Silverado / Tahoe, Ram & BMW E46/E90 OEM Parts
+
+HOW TO ORDER OR CHECK FITMENT:
+1) Browse live photos & prices: https://aldridgesales.myshopify.com
+2) Call or text (253) 245-4206 with your 17-digit VIN or OEM Part Number for an instant stock check.
+3) Pick up at Bldg B (98467), ship parcel nationwide (<70 lbs), or schedule turnkey bay installation!
+(Note: No SRS airbags or catalytic converters sold. All parts carry serialized UV/Paint security marks; Defect-Only return policy.)`
+  }
+];
+
+const PLATFORM_SETTINGS_MATRIX = [
+  {
+    platform: '1. Shopify (aldridgesales.myshopify.com)',
+    badge: '57 Live + 905 Staged = 962 SKUs',
+    rules: '• Shipping Profile 1 (<70 lb, 644 SKUs): Calculated UPS Ground / USPS Ground Advantage + $10.00 flat handling fee (origin: 5115 66th St W Bldg B, 98467).\n• Shipping Profile 2 (70+ lb / Oversize, 318 SKUs): Variant Requires Shipping = false + Local Pickup Enabled at University Place, WA 98467 (Ready in 24–48 hrs).\n• Legal / Checkout Policies: Paste Master Defect-Only Return Policy (Returns Not Accepted for remorse/fitment; intact SEC-XXXXXX required; buyer pays return shipping).\n• Taxes: Collect WA Destination Sales Tax (10.1% at 98467).'
+  },
+  {
+    platform: '2. eBay Motors (Account: AABCAS)',
+    badge: 'Safe 25–50 SKU Drip',
+    rules: '• Business Policy — Shipping #1 (Parcel <70 lb): Calculated UPS Ground + $10.00 Packaging/Handling + Free Local Pickup (98467), 3-Day Dispatch.\n• Business Policy — Shipping #2 (Heavy 70+ lb): Flat / Local Pickup Only (University Place, WA 98467) — NO parcel service enabled.\n• Business Policy — Returns: ReturnsNotAccepted (Used Condition ID 3000; Defect-Only w/ SEC-XXXXXX mark).\n• Rollout: Verify SR# 1-509601062469 cleared -> Reconcile 418 Gen-1 SKUs -> Upload ebay_aabcas_safe_batch_1_50_skus.csv (50 parcel SKUs every 48h).'
+  },
+  {
+    platform: '3. Vendoo',
+    badge: '644 Parcel SKUs Ready',
+    rules: '• Import File: Use aldridge_parcel_644_vendoo.csv (644 verified <70 lb SKUs w/ exact Weight_lb & L×W×H dimensions) or aldridge_combined_962_vendoo.csv.\n• Default Template: Condition = Used, Brand = OEM, MPN = Does Not Apply when blank, Zip = 98467, Handling = +$10.00, Auto-Delist on Sale = ON.\n• Channel Scope: Secondary parcel channels only — let Shopify Marketplace Connect manage eBay Motors directly so fitment & two-tier sync stay clean.'
+  },
+  {
+    platform: '4. Crosslist (Safety Guardrail Config)',
+    badge: 'NEVER Link to eBay Motors',
+    rules: '• Audit Warning: Crosslist\'s apparel schema previously miscategorized 574/807 auto parts as whole vehicles on eBay. Recommended: cancel ($34.99–$44.99/mo savings) in favor of Shopify Marketplace Connect + Vendoo.\n• If Kept Active Temporarily: Disconnect eBay integration immediately; use ONLY for manual local classifieds via aldridge_combined_962_crosslist_safe_export.csv with Category hard-locked to Auto Parts & Accessories (never Vehicles).'
+  },
+  {
+    platform: '5. OfferUp (University Place, WA 98467)',
+    badge: '318 Heavy + 57 Counter SKUs',
+    rules: '• Profile: Aldridge Auto\'s (TruYou Verified, Location: University Place, WA 98467, Hours: Mon–Fri 12–7 PM).\n• Shipping Toggle: Turn "Nationwide Shipping" OFF on every item over 20 lbs (OfferUp max label cap) and ALL 318 heavy assemblies — set strictly to Local Pickup in 98467.\n• Daily Drip: Copy 10–15 ads/day from local_pickup_98467_offerup_craigslist_ads.csv (includes Turnkey Bay Install upsell price!).'
+  },
+  {
+    platform: '6. Craigslist (Seattle-Tacoma > Tacoma > Auto Parts)',
+    badge: 'By Owner/Shop • $0 Fee',
+    rules: '• Category: seattle.craigslist.org -> Tacoma -> For Sale -> Auto Parts (pts).\n• Map & Contact: Postal Code 98467, Street "5115 66th St W Bldg B", Phone/Text (253) 245-4206, Show "More Ads By This User" = ON.\n• Cadence: Publish the 8 Donor Part-Out Anchor Ads + Top 15 high-ticket wheel/bumper/door/suspension ads from local_pickup_98467_offerup_craigslist_ads.csv; renew every 48 hrs.'
+  },
+  {
+    platform: '7. Facebook Business Page & FB Marketplace',
+    badge: '962-SKU Meta Catalog Ready',
+    rules: '• Business Page Name: Aldridge Auto\'s | Categories: Auto Repair Shop • Auto Parts Store • Truck Rental Agency.\n• Meta Commerce Manager: Add Data Feed -> Scheduled URL -> paste /api/feeds/meta-catalog.csv (or upload aldridge_combined_962_meta_catalog.csv).\n• Personal Marketplace Unblock: Send the pre-written WA AG File #730525 / Meta C#26046204 email in Tab 3 with paloozabooking@gmail.com + fresh unlinked email + profile URL.'
+  },
+  {
+    platform: '8. Google Business Profile, Merchant Center & SEO',
+    badge: '5.0★ (87 Reviews) + XML Live',
+    rules: '• GBP NAP: Aldridge Auto\'s | 5115 66th St W, Bldg B, University Place, WA 98467 | (253) 245-4206 | Mon–Fri 12:00 PM – 7:00 PM | Website: https://aldridgesales.myshopify.com.\n• GBP Primary Category: Auto Repair Shop | Additional: Auto Parts Store, Auto Electrical Service, Auto Radiator Repair Service, Truck Rental Agency.\n• Google Merchant Center: Enable "Free Product Listings" + "Local Inventory" -> Add Scheduled XML Feed /api/feeds/google-merchant.xml (includes g:shipping_weight + g:shipping_length/width/height).\n• Google Search Console: Submit https://aldridgesales.myshopify.com/sitemap.xml.'
+  }
+];
+
+function renderLaunchCenter() {
+  const socialBox = document.getElementById('launch-social-cards');
+  const adsBox = document.getElementById('launch-ads-cards');
+  const platBox = document.getElementById('launch-platform-settings-grid');
+  const quickTok = document.getElementById('quick-shopify-token');
+  if (quickTok && state.data?.settings?.shopify_admin_token && !quickTok.value) {
+    quickTok.value = state.data.settings.shopify_admin_token;
+  }
+
+  if (socialBox) {
+    socialBox.innerHTML = LAUNCH_SOCIAL_POSTS.map((p, idx) => `
+      <div style="padding:0.75rem 0.85rem;background:var(--bg-subtle);border-radius:6px;border:1px solid var(--border-light);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.35rem;flex-wrap:wrap;">
+          <span class="badge badge-dark">${esc(p.channel)}</span>
+          <button type="button" class="btn btn-primary btn-sm" onclick="copyLaunchItem('social', ${idx})">Copy Post</button>
+        </div>
+        <strong style="font-size:0.85rem;display:block;margin-bottom:0.35rem;">${esc(p.title)}</strong>
+        <pre style="margin:0;white-space:pre-wrap;font-family:var(--font-sans);font-size:0.78rem;color:var(--text-secondary);max-height:110px;overflow-y:auto;">${esc(p.copy)}</pre>
+      </div>
+    `).join('');
+  }
+
+  if (adsBox) {
+    adsBox.innerHTML = LAUNCH_AD_CAMPAIGNS.map((a, idx) => `
+      <div style="padding:0.75rem 0.85rem;background:var(--bg-subtle);border-radius:6px;border:1px solid var(--border-light);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.35rem;flex-wrap:wrap;">
+          <span class="badge badge-warn">${esc(a.channel)}</span>
+          <button type="button" class="btn btn-dark btn-sm" onclick="copyLaunchItem('ad', ${idx})">Copy Ad Spec</button>
+        </div>
+        <strong style="font-size:0.85rem;display:block;margin-bottom:0.35rem;">${esc(a.title)}</strong>
+        <pre style="margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.74rem;color:var(--text-secondary);max-height:110px;overflow-y:auto;">${esc(a.copy)}</pre>
+      </div>
+    `).join('');
+  }
+
+  if (platBox) {
+    platBox.innerHTML = PLATFORM_SETTINGS_MATRIX.map((m, idx) => `
+      <div style="padding:0.85rem;background:var(--bg-subtle);border-radius:6px;border:1px solid var(--border-light);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.4rem;flex-wrap:wrap;">
+          <strong style="font-size:0.88rem;">${esc(m.platform)}</strong>
+          <div style="display:flex;gap:0.35rem;align-items:center;">
+            <span class="badge badge-ok">${esc(m.badge)}</span>
+            <button type="button" class="btn btn-outline btn-sm" style="padding:0.18rem 0.5rem;font-size:0.73rem;" onclick="copyLaunchItem('platform', ${idx})">Copy</button>
+          </div>
+        </div>
+        <pre style="margin:0;white-space:pre-wrap;font-family:var(--font-sans);font-size:0.79rem;color:var(--text-secondary);line-height:1.45;">${esc(m.rules)}</pre>
+      </div>
+    `).join('');
+  }
+}
+
+async function copyLaunchItem(kind, idx) {
+  const src = kind === 'social' ? LAUNCH_SOCIAL_POSTS[idx] : kind === 'ad' ? LAUNCH_AD_CAMPAIGNS[idx] : PLATFORM_SETTINGS_MATRIX[idx];
+  if (!src) return;
+  const text = src.copy || `${src.platform}\n${src.rules}`;
+  await navigator.clipboard.writeText(text);
+  showToast(`Copied "${src.title || src.platform}" to clipboard!`);
+}
+
+/* ==================== EVENT LISTENERS ==================== */
+document.addEventListener('DOMContentLoaded', async () => {
+  // Register PWA Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    state.deferredInstallPrompt = e;
+    document.getElementById('btn-install-pwa').style.display = 'inline-flex';
+  });
+
+  document.getElementById('btn-install-pwa').addEventListener('click', async () => {
+    if (!state.deferredInstallPrompt) return;
+    state.deferredInstallPrompt.prompt();
+    state.deferredInstallPrompt = null;
+    document.getElementById('btn-install-pwa').style.display = 'none';
+  });
+
+  document.getElementById('btn-enable-push').addEventListener('click', async () => {
+    if (!('Notification' in window)) {
+      showToast('Push notifications require a modern mobile/desktop browser.');
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm === 'granted') {
+      new Notification("Aldridge Auto's Push Alerts Active!", {
+        body: 'You will receive instant order, appointment & shop special updates.',
+        icon: state.data?.settings?.logo_url || '/assets/aldridge-crest.jpg'
+      });
+      showToast('Web Push Notifications enabled!');
+    } else {
+      showToast('Notification permission was not granted.');
+    }
+  });
+
+  // Header & Mode Switchers
+  document.querySelectorAll('#customer-nav .nav-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchCustomerView(btn.dataset.view));
+  });
+  document.getElementById('brand-home-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    switchCustomerView('view-home');
+  });
+  document.getElementById('mode-customer-btn').addEventListener('click', () => switchCustomerView('view-home'));
+  document.getElementById('mode-staff-btn').addEventListener('click', () => activateStaffMode('staff-intake'));
+  document.querySelectorAll('.staff-tab').forEach((tab) => {
+    tab.addEventListener('click', () => switchStaffTab(tab.dataset.staff));
+  });
+  document.getElementById('btn-open-cart').addEventListener('click', openCartModal);
+
+  // Catalog Filters
+  ['parts-search-input', 'parts-category-filter', 'parts-mode-filter'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', renderCatalogFiltered);
+    document.getElementById(id).addEventListener('change', renderCatalogFiltered);
+  });
+  document.getElementById('btn-reset-filters').addEventListener('click', () => {
+    document.getElementById('parts-search-input').value = '';
+    document.getElementById('parts-category-filter').value = '';
+    document.getElementById('parts-mode-filter').value = '';
+    renderCatalogFiltered();
+  });
+  document.getElementById('staff-inv-search').addEventListener('input', renderStaffInventoryTable);
+
+  // Default booking date
+  document.getElementById('book-date').value = new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0];
+
+  // Booking VIN Decode
+  document.getElementById('btn-decode-booking-vin').addEventListener('click', async () => {
+    const vin = document.getElementById('book-vin').value;
+    try {
+      const d = await api(`/api/vin-decode/${encodeURIComponent(vin)}`);
+      document.getElementById('book-ymm').value = `${d.year} ${d.make} ${d.model} ${d.engine}`.trim();
+      showToast(`Decoded VIN: ${d.year} ${d.make} ${d.model}`);
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Auto Repair & Part Pull Appointment Submit
+  document.getElementById('repair-booking-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api('/api/appointments', {
+        method: 'POST',
+        body: JSON.stringify({
+          customer_name: document.getElementById('book-name').value,
+          customer_phone: document.getElementById('book-phone').value,
+          customer_email: document.getElementById('book-email').value,
+          booking_mode: document.getElementById('book-mode').value,
+          appointment_type: document.getElementById('book-type').value,
+          service_category: document.getElementById('book-service').value,
+          vehicle_vin: document.getElementById('book-vin').value,
+          vehicle_ymm: document.getElementById('book-ymm').value,
+          linked_sku: document.getElementById('book-sku').value,
+          preferred_date: document.getElementById('book-date').value,
+          preferred_time: document.getElementById('book-time').value,
+          customer_notes: document.getElementById('book-notes').value,
+          sms_opt_in: document.getElementById('book-sms-optin').checked,
+          email_opt_in: document.getElementById('book-sms-optin').checked
+        })
+      });
+      const box = document.getElementById('booking-confirmation-box');
+      box.style.display = 'block';
+      box.innerHTML = `
+        <strong>Booking ${esc(res.booking_code)} (${esc(res.status.replace('_', ' '))})!</strong><br/>
+        ${res.status === 'pending_approval' ? 'Routed to our Shop Staff Approval Queue — you will receive confirmation shortly.' : 'Express Diagnostic Slot confirmed!'}
+        <div style="margin-top:0.55rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <a href="${esc(res.gcal_url)}" target="_blank" rel="noopener" class="btn btn-dark btn-sm">Add to Google Calendar ↗</a>
+          <a href="${esc(res.ics_url)}" class="btn btn-outline btn-sm">Download .ics Calendar Pass</a>
+        </div>
+      `;
+      e.target.reset();
+      await loadBootstrap();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Checkout Submit
+  document.getElementById('checkout-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api('/api/orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: state.cart,
+          fulfillment_mode: document.getElementById('chk-mode').value,
+          customer_name: document.getElementById('chk-name').value,
+          customer_phone: document.getElementById('chk-phone').value,
+          customer_email: document.getElementById('chk-email').value,
+          shipping_address: document.getElementById('chk-address').value,
+          preferred_date: document.getElementById('chk-date').value,
+          preferred_time: document.getElementById('chk-time').value,
+          vehicle_ymm: document.getElementById('chk-ymm').value,
+          waiver_accepted: document.getElementById('chk-waiver').checked,
+          policy_accepted: document.getElementById('chk-policy').checked,
+          sms_opt_in: true,
+          email_opt_in: true
+        })
+      });
+
+      state.cart = [];
+      updateCartBadge();
+      document.getElementById('checkout-form').style.display = 'none';
+      const sBox = document.getElementById('checkout-success-box');
+      sBox.style.display = 'block';
+      sBox.innerHTML = `
+        <strong>Order ${esc(res.order_number)} Confirmed ($${Number(res.total).toFixed(2)})!</strong><br/>
+        Inventory has been automatically decremented/reserved across Shopify &amp; Marketplace Feeds.<br/>
+        ${res.linked_booking_code ? `Linked Staff-Approval Appointment: <strong class="mono">${esc(res.linked_booking_code)}</strong>
+          <div style="margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <a href="${esc(res.gcal_url)}" target="_blank" rel="noopener" class="btn btn-dark btn-sm">Add Appointment to Google Calendar ↗</a>
+            <a href="${esc(res.ics_url)}" class="btn btn-outline btn-sm">Download .ics</a>
+          </div>` : 'Ships within 2–3 business days following final bench test & security mark verification.'}
+      `;
+      await loadBootstrap();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // U-Haul Renter VIP Form
+  document.getElementById('uhaul-vip-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await api('/api/subscribers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('uhaul-vip-name').value,
+        phone: document.getElementById('uhaul-vip-phone').value,
+        pillar_interest: 'uhaul',
+        sms_opt_in: true
+      })
+    });
+    e.target.reset();
+    showToast(`U-Haul VIP Coupon Unlocked! Code: ${res.welcome_promo} • Share Code: ${res.referral_code}`);
+    await loadBootstrap();
+  });
+
+  // Customer Inquiry Form
+  document.getElementById('customer-inquiry-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await api('/api/inquiries', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_name: document.getElementById('inq-name').value,
+        pillar: document.getElementById('inq-pillar').value,
+        customer_email: document.getElementById('inq-email').value,
+        customer_phone: document.getElementById('inq-phone').value,
+        vehicle_vin: document.getElementById('inq-vin').value,
+        related_sku: document.getElementById('inq-sku').value,
+        subject: document.getElementById('inq-subject').value,
+        message: document.getElementById('inq-message').value,
+        email_opt_in: true
+      })
+    });
+    e.target.reset();
+    showToast(`Ticket ${res.ticket_number} submitted to our Unified Shop Inbox!`);
+    await loadBootstrap();
+  });
+
+  // Strict RMA Evidence Portal Form
+  document.getElementById('rma-claim-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const fileInput = document.getElementById('rma-photo');
+      let photoData = '';
+      if (fileInput.files?.[0]) {
+        photoData = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.readAsDataURL(fileInput.files[0]);
+        });
+      }
+      const res = await api('/api/returns', {
+        method: 'POST',
+        body: JSON.stringify({
+          order_number: document.getElementById('rma-order').value,
+          sku: document.getElementById('rma-sku').value,
+          customer_name: document.getElementById('rma-name').value,
+          customer_email: document.getElementById('rma-email').value,
+          claim_reason: document.getElementById('rma-reason').value,
+          diagnostic_codes: document.getElementById('rma-codes').value,
+          buyer_vin: document.getElementById('rma-vin').value,
+          evidence_summary: document.getElementById('rma-summary').value,
+          security_mark_intact: document.getElementById('rma-mark-intact').checked,
+          buyer_accepts_return_shipping: document.getElementById('rma-buyer-ships').checked,
+          evidence_photo_data: photoData
+        })
+      });
+      const rBox = document.getElementById('rma-result-box');
+      rBox.style.display = 'block';
+      rBox.style.background = res.status.includes('rejected') ? 'var(--status-err-bg)' : 'var(--status-warn-bg)';
+      rBox.style.color = res.status.includes('rejected') ? 'var(--status-err-fg)' : 'var(--status-warn-fg)';
+      rBox.innerHTML = `<strong>${esc(res.rma_number)} (${esc(res.status)}):</strong> ${esc(res.policy_notice)}`;
+      e.target.reset();
+      await loadBootstrap();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // VIP Signup & Referral Code
+  document.getElementById('vip-signup-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await api('/api/subscribers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('vip-name').value,
+        pillar_interest: document.getElementById('vip-interest').value,
+        email: document.getElementById('vip-email').value,
+        phone: document.getElementById('vip-phone').value,
+        email_opt_in: true,
+        sms_opt_in: Boolean(document.getElementById('vip-phone').value),
+        push_opt_in: Notification?.permission === 'granted'
+      })
+    });
+    const out = document.getElementById('vip-referral-output');
+    out.style.display = 'block';
+    const refLink = `${window.location.origin}/?ref=${encodeURIComponent(res.referral_code)}`;
+    out.innerHTML = `
+      <strong>VIP Perks Active!</strong> Use Welcome Code <span class="mono">${esc(res.welcome_promo)}</span>.<br/>
+      Your Share-to-Friend Referral Link: <span class="mono">${esc(refLink)}</span>
+    `;
+    await loadBootstrap();
+  });
+
+  // Camera & On-Hand Folder Photo Intake Controls
+  document.getElementById('btn-start-camera').addEventListener('click', startCamera);
+  document.getElementById('btn-stop-camera').addEventListener('click', stopCamera);
+  document.getElementById('btn-snap-frame').addEventListener('click', snapCameraFrame);
+  document.getElementById('btn-reset-photo').addEventListener('click', () => {
+    state.currentPartPhotos = [];
+    syncCurrentPhotosUI();
+  });
+
+  const folderInput = document.getElementById('intake-folder-input');
+  if (folderInput) {
+    folderInput.addEventListener('change', async (e) => {
+      await ingestPhotoFileList(e.target.files, false);
+      e.target.value = '';
+    });
+  }
+
+  const mobileCamInput = document.getElementById('intake-mobile-camera-input');
+  if (mobileCamInput) {
+    mobileCamInput.addEventListener('change', async (e) => {
+      await ingestPhotoFileList(e.target.files, state.currentPartPhotos.length > 0);
+      e.target.value = '';
+    });
+  }
+
+  document.getElementById('intake-file-input').addEventListener('change', async (e) => {
+    await ingestPhotoFileList(e.target.files, false);
+    e.target.value = '';
+  });
+
+  const addAngleInput = document.getElementById('intake-add-angle-input');
+  if (addAngleInput) {
+    addAngleInput.addEventListener('change', async (e) => {
+      await ingestPhotoFileList(e.target.files, true);
+      e.target.value = '';
+    });
+  }
+
+  const cameraStage = document.getElementById('camera-stage');
+  if (cameraStage) {
+    cameraStage.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      cameraStage.style.borderColor = 'var(--brand-amber)';
+      cameraStage.style.background = 'rgba(217, 119, 6, 0.08)';
+    });
+    cameraStage.addEventListener('dragleave', () => {
+      cameraStage.style.borderColor = 'var(--border-strong)';
+      cameraStage.style.background = '';
+    });
+    cameraStage.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      cameraStage.style.borderColor = 'var(--border-strong)';
+      cameraStage.style.background = '';
+      const droppedFiles = await extractDroppedFiles(e.dataTransfer);
+      await ingestPhotoFileList(droppedFiles, false);
+    });
+  }
+
+  // Auto-enforce 70+ lb -> Local Pickup Only (University Place, WA 98467)
+  document.getElementById('pub-weight').addEventListener('input', (e) => {
+    const w = Number(e.target.value || 0);
+    document.getElementById('pub-ship-class').value = w >= 70 ? 'local_pickup_only' : 'parcel_calculated';
+  });
+
+  const snapPublishBtn = document.getElementById('btn-snap-and-publish-shopify');
+  if (snapPublishBtn) {
+    snapPublishBtn.addEventListener('click', async () => {
+      try {
+        const photosPayload = state.currentPartPhotos.length
+          ? state.currentPartPhotos
+          : (state.capturedImageBase64 ? [state.capturedImageBase64] : []);
+        if (!photosPayload.length && !document.getElementById('intake-hint').value.trim()) {
+          showToast('Snap or select at least 1 part photo (or enter a quick part note) first!');
+          return;
+        }
+        snapPublishBtn.disabled = true;
+        snapPublishBtn.textContent = '⏳ Identifying Part & Publishing to Shopify...';
+        const created = await api('/api/intake/snap-and-publish', {
+          method: 'POST',
+          body: JSON.stringify({
+            photos: photosPayload,
+            donorVehicleId: document.getElementById('intake-donor-select').value || null,
+            pullStatus: document.getElementById('intake-pull-status').value,
+            condition: document.getElementById('intake-condition').value,
+            technicianHint: document.getElementById('intake-hint').value,
+            stampedNumber: document.getElementById('intake-stamped').value
+          })
+        });
+        document.getElementById('intake-hint').value = '';
+        document.getElementById('intake-stamped').value = '';
+        state.currentPartPhotos = [];
+        syncCurrentPhotosUI();
+        await loadBootstrap();
+        const shopMsg = created.shopify_live_sync?.pushed
+          ? `LIVE on ${created.shopify_live_sync.shopify_domain} + Queued for eBay!`
+          : `Saved (${created.sku}) & Queued for ${created.shopify_live_sync?.shopify_domain || 'aldridgesales.myshopify.com'} + eBay!`;
+        if (state.folderQueue.length > 0) {
+          loadQueuedFolderPart(0);
+          showToast(`⚡ ${created.sku}: ${shopMsg} Next part loaded (${state.folderQueue.length} left).`);
+        } else {
+          showToast(`⚡ ${created.sku} (${created.title}): ${shopMsg}`);
+        }
+      } catch (err) {
+        showToast(err.message);
+      } finally {
+        snapPublishBtn.disabled = false;
+        snapPublishBtn.textContent = '⚡ 1-Tap Auto-Identify & Publish Straight to Shopify (+ eBay Queue)';
+      }
+    });
+  }
+
+  document.getElementById('btn-run-ai-intake').addEventListener('click', async () => {
+    try {
+      const proposal = await api('/api/intake/analyze', {
+        method: 'POST',
+        body: JSON.stringify({
+          imageBase64: state.currentPartPhotos[0] || state.capturedImageBase64,
+          imagesBase64: state.currentPartPhotos.length ? state.currentPartPhotos : (state.capturedImageBase64 ? [state.capturedImageBase64] : []),
+          donorVehicleId: document.getElementById('intake-donor-select').value || null,
+          pullStatus: document.getElementById('intake-pull-status').value,
+          condition: document.getElementById('intake-condition').value,
+          technicianHint: document.getElementById('intake-hint').value,
+          stampedNumber: document.getElementById('intake-stamped').value
+        })
+      });
+
+      document.getElementById('pub-sku').value = proposal.sku;
+      document.getElementById('pub-sec-code').value = proposal.security_mark_code;
+      document.getElementById('pub-title').value = proposal.title;
+      document.getElementById('pub-oem').value = proposal.oem_part_number;
+      document.getElementById('pub-hollander').value = proposal.hollander_number;
+      document.getElementById('pub-bin').value = proposal.bin_location;
+      document.getElementById('pub-price-self').value = proposal.price_self_pull;
+      document.getElementById('pub-price-wepull').value = proposal.price_we_pull;
+      document.getElementById('pub-price-install').value = proposal.price_pull_install;
+      document.getElementById('pub-weight').value = proposal.weight_lbs;
+      document.getElementById('pub-len').value = proposal.length_in;
+      document.getElementById('pub-wid').value = proposal.width_in;
+      document.getElementById('pub-hgt').value = proposal.height_in;
+      document.getElementById('pub-ship-class').value =
+        Number(proposal.weight_lbs || 0) >= 70 ? 'local_pickup_only' : 'parcel_calculated';
+      document.getElementById('pub-desc').value = proposal.description;
+
+      // Stash donor/fitment fields on form dataset for publishing
+      const form = document.getElementById('intake-publish-form');
+      form.dataset.category = proposal.category;
+      form.dataset.brand = proposal.brand;
+      form.dataset.fitYears = proposal.fitment_years;
+      form.dataset.fitMake = proposal.fitment_make;
+      form.dataset.fitModel = proposal.fitment_model;
+      form.dataset.fitEngine = proposal.fitment_engine;
+      form.dataset.fitNotes = proposal.fitment_notes;
+      form.dataset.defect = proposal.defect_disclosure;
+
+      showToast(`Identified part & locked cross-platform settings (${proposal.provider})!`);
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  document.getElementById('intake-publish-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const f = e.target;
+      const priceInstall = Number(document.getElementById('pub-price-install').value || 0);
+      const weightLbs = Number(document.getElementById('pub-weight').value || 10);
+      const photosPayload = state.currentPartPhotos.length
+        ? state.currentPartPhotos
+        : (state.capturedImageBase64 ? [state.capturedImageBase64] : []);
+
+      if (!photosPayload.length) {
+        showToast('Clean Catalog Policy: Snap or upload at least 1 real photo of the part before publishing.');
+        return;
+      }
+
+      const created = await api('/api/inventory', {
+        method: 'POST',
+        body: JSON.stringify({
+          sku: document.getElementById('pub-sku').value,
+          security_mark_code: document.getElementById('pub-sec-code').value,
+          security_mark_verified: document.getElementById('pub-sec-verified').checked,
+          title: document.getElementById('pub-title').value,
+          category: f.dataset.category || 'OEM Auto Parts',
+          condition: document.getElementById('intake-condition').value,
+          brand: f.dataset.brand || 'OEM',
+          oem_part_number: document.getElementById('pub-oem').value,
+          hollander_number: document.getElementById('pub-hollander').value,
+          interchange_number: document.getElementById('pub-hollander').value,
+          donor_vehicle_id: document.getElementById('intake-donor-select').value || null,
+          fitment_years: f.dataset.fitYears || '',
+          fitment_make: f.dataset.fitMake || '',
+          fitment_model: f.dataset.fitModel || '',
+          fitment_engine: f.dataset.fitEngine || '',
+          fitment_notes: f.dataset.fitNotes || '',
+          description: document.getElementById('pub-desc').value,
+          defect_disclosure: f.dataset.defect || 'Inspected & verified on-hand OEM part.',
+          bin_location: document.getElementById('pub-bin').value,
+          pull_status: 'pulled_shelved',
+          allow_self_pull: 0,
+          price_self_pull: 0,
+          price_we_pull: Number(document.getElementById('pub-price-wepull').value || 0),
+          allow_pull_install: 1,
+          price_pull_install: priceInstall,
+          weight_lbs: weightLbs,
+          length_in: Number(document.getElementById('pub-len').value || 14),
+          width_in: Number(document.getElementById('pub-wid').value || 10),
+          height_in: Number(document.getElementById('pub-hgt').value || 8),
+          shipping_class: weightLbs >= 70 ? 'local_pickup_only' : document.getElementById('pub-ship-class').value,
+          quantity: Math.max(1, Number(document.getElementById('pub-qty').value || 1)),
+          photos: photosPayload
+        })
+      });
+
+      f.reset();
+      document.getElementById('intake-hint').value = '';
+      document.getElementById('intake-stamped').value = '';
+      state.currentPartPhotos = [];
+      syncCurrentPhotosUI();
+      await loadBootstrap();
+
+      const liveNote = created.shopify_live_sync?.pushed
+        ? `LIVE on ${created.shopify_live_sync.shopify_domain} + eBay Queue`
+        : `Saved & Queued for ${created.shopify_live_sync?.shopify_domain || 'aldridgesales.myshopify.com'} + eBay`;
+      if (state.folderQueue.length > 0) {
+        loadQueuedFolderPart(0);
+        showToast(`Published ${created.sku} (${liveNote}) — auto-loaded next part (${state.folderQueue.length} remaining)!`);
+      } else {
+        showToast(`Published ${created.sku} (${created.photos.length} photo(s)) — ${liveNote}!`);
+      }
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Step 4 Fresh Shopify Backup -> Photo-Preserving Audit Sanitizer Handler
+  const auditSanitizeInput = document.getElementById('audit-sanitize-file');
+  if (auditSanitizeInput) {
+    auditSanitizeInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const csvText = await file.text();
+        const res = await api('/api/audit/sanitize-csv', {
+          method: 'POST',
+          body: JSON.stringify({ csvText })
+        });
+        const st = res.stats;
+        document.getElementById('audit-sanitize-status').innerHTML =
+          `<strong>Sanitized ${st.input_total_rows} -> ${st.output_total_rows} rows!</strong> ${st.surviving_active_products} clean active SKUs, ${st.counterfeit_mpns_wiped} fake MPNs wiped, ${st.merged_angle_photos_saved} duplicate angle photos rescued. <a href="${esc(res.download_url)}" class="btn btn-primary btn-sm" style="margin-left:0.5rem;">Download Sanitized CSV</a>`;
+        showToast('Fresh Shopify CSV sanitized with 100% secondary CDN photos preserved!');
+        await loadBootstrap();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  }
+
+  // Bulk CSV Import Handler
+  document.getElementById('csv-import-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const csvText = await file.text();
+    const res = await api('/api/inventory/import-csv', {
+      method: 'POST',
+      body: JSON.stringify({ csvText })
+    });
+    document.getElementById('csv-import-status').innerHTML =
+      `<strong>Import Complete:</strong> ${res.inserted} new SKUs added, ${res.updated} updated, ${res.secondary_photos_merged || 0} secondary CDN angle photos preserved (${res.errors.length} compliance/link notices).`;
+    showToast(`Imported ${res.inserted + res.updated} SKUs into Co-Master Inventory!`);
+    await loadBootstrap();
+  });
+
+  // Donor Vehicle Add Handler
+  document.getElementById('donor-add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const vin = document.getElementById('donor-vin-input').value;
+      const decoded = await api(`/api/vin-decode/${encodeURIComponent(vin)}`);
+      await api('/api/donors', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...decoded,
+          mileage: Number(document.getElementById('donor-mileage-input').value || 75000),
+          yard_row: document.getElementById('donor-row-input').value || 'Row C • Stall 01'
+        })
+      });
+      e.target.reset();
+      showToast(`Added Donor ${decoded.year} ${decoded.make} ${decoded.model} to Garage!`);
+      await loadBootstrap();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Internal Repair Work-Order Part Pull
+  document.getElementById('shop-wo-pull-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const sku = document.getElementById('wo-sku-select').value;
+      if (!sku) return;
+      const wo = await api('/api/work-orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          pull_sku: sku,
+          vehicle_ymm: document.getElementById('wo-vehicle-input').value,
+          service_summary: `Internal Shop Bay Installation (${sku})`
+        })
+      });
+      e.target.reset();
+      showToast(`Work Order ${wo.wo_number} pulled ${sku} — automatically removed from Shopify & Marketplaces!`);
+      await loadBootstrap();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Staff Create Special
+  document.getElementById('staff-special-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await api('/api/specials', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: document.getElementById('sp-title').value,
+        discount_text: document.getElementById('sp-discount').value,
+        promo_code: document.getElementById('sp-code').value,
+        pillar: document.getElementById('sp-pillar').value,
+        valid_until: document.getElementById('sp-exp').value,
+        description: document.getElementById('sp-desc').value
+      })
+    });
+    e.target.reset();
+    showToast('New Special published on Website & Share-to-Friend enabled!');
+    await loadBootstrap();
+  });
+
+  // Trigger Shopify Co-Master Sync
+  document.getElementById('btn-trigger-shopify-sync').addEventListener('click', async () => {
+    const res = await api('/api/sync/shopify', { method: 'POST' });
+    showToast(res.message || `Synced ${res.synced_count} products with Shopify Co-Master!`);
+    await loadBootstrap();
+  });
+
+  // 1-Click Retroactive Batch QR Info & App Card Generator for All 57 On-Hand SKUs
+  const batchQrBtn = document.getElementById('btn-batch-generate-qr-cards');
+  if (batchQrBtn) {
+    batchQrBtn.addEventListener('click', async () => {
+      const statusBox = document.getElementById('qr-batch-status');
+      const origLabel = batchQrBtn.textContent;
+      batchQrBtn.disabled = true;
+      batchQrBtn.textContent = 'Generating Scannable QR App Cards for All Active SKUs...';
+      try {
+        const res = await api('/api/inventory/batch-generate-qr-cards', { method: 'POST' });
+        if (statusBox) {
+          statusBox.style.display = 'block';
+          statusBox.innerHTML = `
+            <div style="display:flex;gap:0.85rem;align-items:center;flex-wrap:wrap;">
+              <img src="${esc(res.sample_qr_card_url)}?t=${Date.now()}" alt="Sample QR Info Card" style="width:88px;height:88px;border-radius:6px;border:1px solid var(--border-light);background:#fff;" />
+              <div style="flex:1;min-width:220px;">
+                <strong>✓ Generated &amp; Staged ${res.generated_count} Scannable QR Info &amp; App Cards!</strong><br/>
+                • <strong>Shopify (<code>aldridgesales.myshopify.com</code>):</strong> Attached as final gallery image (<code>&lt;SKU&gt;.qr.png</code>) + printable Packing Slips.<br/>
+                • <strong>eBay Motors (<code>AABCAS</code>) &amp; Google Merchant:</strong> Primary photos kept <strong>100% clean (0 QR overlays)</strong>.<br/>
+                • <strong>Tracked HTTPS Target:</strong> <code>${esc(res.target_base_url)}</code> (<a href="${esc(res.sample_qr_card_url)}" target="_blank" style="text-decoration:underline;">Open Sample PNG</a> • <a href="${esc(res.sample_packing_slip_url)}" target="_blank" style="text-decoration:underline;">Open Packing Slip</a>)
+              </div>
+            </div>
+          `;
+        }
+        showToast(`Generated & attached ${res.generated_count} QR App Cards (Shopify final image + Packing Slips; eBay/Google kept 100% clean)!`);
+        await loadBootstrap();
+      } catch (err) {
+        showToast(err.message);
+      } finally {
+        batchQrBtn.disabled = false;
+        batchQrBtn.textContent = origLabel;
+      }
+    });
+  }
+
+  // Option A: 1-Click Live Shopify 905-SKU Push (Protects all 57 ALD-OH-* SKUs)
+  const optABtn = document.getElementById('btn-launch-option-a-push');
+  if (optABtn) {
+    optABtn.addEventListener('click', async () => {
+      const tokInput = document.getElementById('quick-shopify-token');
+      const resBox = document.getElementById('option-a-push-result');
+      const token = (tokInput?.value || '').trim();
+      if (!token) {
+        showToast('Paste your Shopify Admin API token (shpat_...) first, or download the 905-SKU CSV on the right!');
+        tokInput?.focus();
+        return;
+      }
+      optABtn.disabled = true;
+      optABtn.textContent = 'Pushing 905 SKUs to aldridgesales.myshopify.com (Protecting 57 ALD-OH-*)...';
+      if (resBox) {
+        resBox.style.display = 'block';
+        resBox.style.background = 'var(--status-warn-bg)';
+        resBox.style.color = 'var(--status-warn-fg)';
+        resBox.textContent = 'Running non-overwrite Admin API push (~2 req/sec Shopify bucket) — keep this tab open until complete...';
+      }
+      try {
+        const res = await api('/api/sync/shopify', {
+          method: 'POST',
+          body: JSON.stringify({ shopify_domain: 'aldridgesales.myshopify.com', shopify_admin_token: token })
+        });
+        if (resBox) {
+          resBox.style.background = 'var(--status-ok-bg)';
+          resBox.style.color = 'var(--status-ok-fg)';
+          resBox.innerHTML = `<strong>✓ Option A Push Complete:</strong> Created <strong>${res.synced_count}</strong> legacy products on <code>aldridgesales.myshopify.com</code> • Protected/Skipped <strong>${res.skipped_protected ?? 57}</strong> existing SKUs • Final Live Storefront Count: <strong>${res.total_live_shopify_products ?? (57 + res.synced_count)}</strong>!`;
+        }
+        showToast(`Pushed ${res.synced_count} SKUs to aldridgesales.myshopify.com!`);
+        await loadBootstrap();
+      } catch (err) {
+        if (resBox) {
+          resBox.style.background = 'var(--status-err-bg, #fee2e2)';
+          resBox.style.color = 'var(--status-err-fg, #991b1b)';
+          resBox.textContent = `Push Error: ${err.message} (Check that your shpat_... token has read_products & write_products scopes on aldridgesales.myshopify.com).`;
+        }
+        showToast(err.message);
+      } finally {
+        optABtn.disabled = false;
+        optABtn.textContent = '🚀 Option A: Push 905 Legacy SKUs Live Now';
+      }
+    });
+  }
+
+  // Live Brand Theme Switcher & Custom Logo Upload
+  const themeSelect = document.getElementById('set-theme-preset');
+  if (themeSelect) {
+    themeSelect.addEventListener('change', () => {
+      document.body.dataset.theme = themeSelect.value;
+    });
+  }
+
+  const logoUpload = document.getElementById('set-logo-upload');
+  if (logoUpload) {
+    logoUpload.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        state.uploadedLogoDataUrl = String(reader.result || '');
+        const logoEl = document.getElementById('header-brand-logo');
+        if (logoEl && state.uploadedLogoDataUrl) logoEl.src = state.uploadedLogoDataUrl;
+        showToast('Custom logo previewed — click Save Business Identity to persist across site & templates!');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Save Business Settings Vault
+  document.getElementById('settings-vault-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      business_name: document.getElementById('set-name').value,
+      tagline: document.getElementById('set-tagline').value,
+      theme_preset: document.getElementById('set-theme-preset')?.value || 'pnw_navy_orange',
+      phone: document.getElementById('set-phone').value,
+      uhaul_phone: document.getElementById('set-uhaul-phone')?.value || '(253) 948-3487',
+      email: document.getElementById('set-email').value,
+      street_address: document.getElementById('set-street').value,
+      city_display: document.getElementById('set-city').value,
+      city: document.getElementById('set-city').value.toLowerCase(),
+      state: document.getElementById('set-state').value,
+      zip: document.getElementById('set-zip').value,
+      hours_weekday: document.getElementById('set-hours-wk').value,
+      hours_weekend: document.getElementById('set-hours-we').value,
+      handling_fee_default: Number(document.getElementById('set-handling-fee').value || 10),
+      handling_days_default: Number(document.getElementById('set-handling-days').value || 3),
+      labor_rate_hourly: Number(document.getElementById('set-labor-rate').value || 135),
+      social_links: {
+        facebook: document.getElementById('set-fb').value,
+        ebay_store: document.getElementById('set-ebay').value
+      }
+    };
+    if (state.uploadedLogoDataUrl) {
+      payload.logo_url = state.uploadedLogoDataUrl;
+    }
+    await api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+    showToast('Saved Aldridge Business Identity, Theme & Logo — regenerated all Platform Policies & Templates!');
+    await loadBootstrap();
+  });
+
+  document.getElementById('btn-save-api-vault').addEventListener('click', async () => {
+    await api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        shopify_domain: document.getElementById('set-shopify-domain').value,
+        shopify_admin_token: document.getElementById('set-shopify-token').value,
+        uhaul_dealer_url: document.getElementById('set-uhaul-url').value,
+        gemini_api_key: document.getElementById('set-gemini-key').value
+      })
+    });
+    showToast('Saved Shopify Co-Master, U-Haul #046117 URL & Vision AI Credentials!');
+    await loadBootstrap();
+  });
+
+  document.getElementById('btn-sync-uhaul').addEventListener('click', async () => {
+    const res = await api('/api/uhaul/sync', {
+      method: 'POST',
+      body: JSON.stringify({ uhaul_dealer_url: document.getElementById('set-uhaul-url').value })
+    });
+    showToast(`Synced U-Haul Dealer Profile: ${res.synced.dealer_title}`);
+    await loadBootstrap();
+  });
+
+  document.getElementById('btn-clear-demo-data').addEventListener('click', async () => {
+    await api('/api/system/clear-demo', { method: 'POST' });
+    showToast('Demo records cleared! System is clean and ready for your live inventory batch.');
+    await loadBootstrap();
+  });
+
+  await loadBootstrap();
+});

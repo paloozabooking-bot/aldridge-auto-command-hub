@@ -1,0 +1,20 @@
+{
+  "name": "auto-command-hub",
+  "version": "1.0.0",
+  "description": "Co-Master Automotive Operations, Multi-Marketplace Sync Engine, AI Camera Part Intake, Auto Repair, U-Haul & Direct Parts Storefront PWA",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "verify": "node src/verify.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "jsqr": "^1.4.0"
+  }
+}

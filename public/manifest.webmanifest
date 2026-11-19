@@ -1,0 +1,24 @@
+{
+  "name": "Aldridge Auto's — OEM Parts, Auto Repair & U-Haul #046117",
+  "short_name": "Aldridge Auto's",
+  "description": "Aldridge Auto's in University Place & Tacoma, WA: Tested OEM Parts Storefront, 5.0★ Auto Repair & Authorized U-Haul Neighborhood Dealer #046117",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1628",
+  "theme_color": "#ea580c",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/aldridge-crest.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/aldridge-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
