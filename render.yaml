@@ -12,5 +12,11 @@ services:
         value: https://aldridgeautosupply.com
       - key: PUBLIC_PWA_URL
         value: https://aldridgeautosupply.com
+      - key: SHOPIFY_SHOP_DOMAIN
+        value: aldridgesales.myshopify.com
       - key: SHOPIFY_DOMAIN
         value: aldridgesales.myshopify.com
+      - key: SHOPIFY_ADMIN_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

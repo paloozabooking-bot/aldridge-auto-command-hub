@@ -2,6 +2,12 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+
+const ENV_FILE_PATH = path.join(__dirname, '..', '.env');
+if (fs.existsSync(ENV_FILE_PATH) && typeof process.loadEnvFile === 'function') {
+  process.loadEnvFile(ENV_FILE_PATH);
+}
+
 const {
   db,
   DATA_DIR,
@@ -2073,9 +2079,42 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+async function autoSyncKeepItemsOnStartup() {
+  if (process.env.DISABLE_STARTUP_KEEP_SYNC === '1') return;
+  try {
+    const cfg = getSettings();
+    const keepCount = db.prepare("SELECT COUNT(*) c FROM photo_review_items WHERE review_status = 'keep'").get().c;
+    if (!keepCount) return;
+
+    const unsyncedShopifyCount = db.prepare(
+      "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
+    ).get().c;
+    const activeCount = db.prepare(
+      "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0"
+    ).get().c;
+    const hasShopifyToken = Boolean(cfg.shopify_admin_token && cfg.shopify_admin_token.trim());
+    const shouldPushShopify = hasShopifyToken && (activeCount === 0 || unsyncedShopifyCount > 0);
+
+    const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
+    const result = await runKeepBatchIntakeAndPublish({
+      pushShopify: shouldPushShopify,
+      baseUrl,
+      uploadsDir: UPLOADS_DIR
+    });
+    console.log(
+      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Active SKUs=${result.total_active_inventory_skus} (created=${result.skus_created}, updated=${result.skus_updated}, merged_angles=${result.multi_angle_photos_merged}, compliance_blocked=${result.compliance_blocked.length}) | QR=${result.qr_cards_generated} | Shopify=${result.shopify_sync?.mode || 'staged'} (${result.shopify_sync?.synced_count ?? 0})`
+    );
+  } catch (err) {
+    console.error('[Startup Auto-Sync Error]', err.message || err);
+  }
+}
+
 if (require.main === module) {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Auto Command Hub & Co-Master Sync Server running at http://localhost:${PORT}`);
+    setImmediate(() => {
+      autoSyncKeepItemsOnStartup();
+    });
   });
 }
 

@@ -397,14 +397,15 @@ const DEFAULT_SETTINGS = {
 };
 
 function applyEnvOverrides(cfg) {
-  if (process.env.SHOPIFY_DOMAIN) cfg.shopify_domain = process.env.SHOPIFY_DOMAIN.trim();
-  if (process.env.SHOPIFY_ADMIN_TOKEN && !cfg.shopify_admin_token) {
+  const envShopDomain = (process.env.SHOPIFY_SHOP_DOMAIN || process.env.SHOPIFY_DOMAIN || '').trim();
+  if (envShopDomain) cfg.shopify_domain = envShopDomain;
+  if (process.env.SHOPIFY_ADMIN_TOKEN && process.env.SHOPIFY_ADMIN_TOKEN.trim()) {
     cfg.shopify_admin_token = process.env.SHOPIFY_ADMIN_TOKEN.trim();
   }
-  if (process.env.SHOPIFY_WEBHOOK_SECRET && !cfg.shopify_webhook_secret) {
+  if (process.env.SHOPIFY_WEBHOOK_SECRET && process.env.SHOPIFY_WEBHOOK_SECRET.trim()) {
     cfg.shopify_webhook_secret = process.env.SHOPIFY_WEBHOOK_SECRET.trim();
   }
-  if (process.env.GEMINI_API_KEY && !cfg.gemini_api_key) {
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
     cfg.gemini_api_key = process.env.GEMINI_API_KEY.trim();
   }
   if (process.env.CANONICAL_DOMAIN) {
