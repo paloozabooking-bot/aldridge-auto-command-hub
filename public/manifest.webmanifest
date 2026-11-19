@@ -1,7 +1,7 @@
 {
-  "name": "Aldridge Auto's — OEM Parts, Auto Repair & U-Haul #046117",
+  "name": "Aldridge Auto's Service & Repair — OEM Parts, 5.0★ Repair & U-Haul #046117",
   "short_name": "Aldridge Auto's",
-  "description": "Aldridge Auto's in University Place & Tacoma, WA: Tested OEM Parts Storefront, 5.0★ Auto Repair & Authorized U-Haul Neighborhood Dealer #046117",
+  "description": "Aldridge Auto's Service & Repair in University Place & Tacoma, WA: Tested OEM Parts Storefront, 5.0★ Auto Repair & Authorized U-Haul Neighborhood Dealer #046117",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b1628",
@@ -9,16 +9,31 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/assets/aldridge-crest.jpg",
+      "src": "/assets/app-icon.jpg?v=11",
       "sizes": "512x512",
       "type": "image/jpeg",
       "purpose": "any maskable"
     },
     {
-      "src": "/assets/aldridge-logo.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/assets/aldridge-crest.jpg?v=11",
+      "sizes": "1024x1024",
+      "type": "image/jpeg",
       "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Visual Photo Review",
+      "short_name": "Photo Review",
+      "description": "Keep or Remove sorted automotive part photos",
+      "url": "/review",
+      "icons": [{ "src": "/assets/app-icon.jpg?v=11", "sizes": "512x512" }]
+    },
+    {
+      "name": "Book Auto Repair",
+      "short_name": "Book Repair",
+      "url": "/?view=repair",
+      "icons": [{ "src": "/assets/app-icon.jpg?v=11", "sizes": "512x512" }]
     }
   ]
 }

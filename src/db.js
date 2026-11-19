@@ -273,7 +273,7 @@ db.exec(`
 
 const DEFAULT_SETTINGS = {
   business_name: "Aldridge Auto's",
-  google_listing_name: "Aldridge Auto's",
+  google_listing_name: "Aldridge Auto's Service & Repair",
   owner_name: 'Chris Aldridge',
   google_rating_badge: '5.0 ★ (87 Google Reviews) • #1 Rated in University Place, WA',
   tagline: '5.0★ Auto Repair & Diagnostics • Tested OEM Parts • U-Haul Neighborhood Dealer #046117',
@@ -289,7 +289,7 @@ const DEFAULT_SETTINGS = {
   tax_rate: 0.101,
   hours_weekday: 'Mon–Fri: 12:00 PM – 7:00 PM (U-Haul: 12 PM – 6 PM)',
   hours_weekend: 'Sat: 12:00 PM – 6:00 PM • Sun: 1:00 PM – 4:00 PM (U-Haul Sat–Sun: 2–5 PM + 24hr Return)',
-  logo_url: '/assets/aldridge-crest.jpg',
+  logo_url: '/assets/aldridge-crest.jpg?v=11',
   theme_preset: 'pnw_navy_orange',
   labor_rate_hourly: 135.00,
   handling_fee_default: 10.00,
@@ -306,7 +306,7 @@ const DEFAULT_SETTINGS = {
   return_policy_mode: 'ReturnsNotAccepted_DefectOnly',
   self_pull_yard_fee: 5.00,
   shopify_domain: 'aldridgesales.myshopify.com',
-  shopify_storefront_url: 'https://aldridgesales.myshopify.com',
+  shopify_storefront_url: 'https://aldridgesales.myshopify.com/',
   shopify_cdn_id: '0779/2571/2103',
   shopify_admin_token: '',
   shopify_webhook_secret: '',
@@ -346,13 +346,15 @@ const DEFAULT_SETTINGS = {
   sms_webhook_url: '',
   email_webhook_url: '',
   social_links: {
-    facebook: 'https://www.facebook.com/',
-    instagram: 'https://www.instagram.com/',
+    facebook: 'https://www.facebook.com/AldridgeAutos',
+    instagram: 'https://www.instagram.com/aldridgeautos/',
     tiktok: 'https://www.tiktok.com/',
     youtube: 'https://www.youtube.com/',
     ebay_store: 'https://www.ebay.com/usr/aabcas',
-    offerup: 'https://offerup.com/',
-    google_maps: "https://www.google.com/maps/search/?api=1&query=Aldridge+Auto's+5115+66th+St+W+BLDG+B+University+Place+WA+98467"
+    offerup: 'https://offerup.com/search?q=Aldridge+Auto+Tacoma',
+    uhaul_dealer: 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
+    shopify_store: 'https://aldridgesales.myshopify.com/',
+    google_maps: 'https://www.google.com/maps/search/?api=1&query=Aldridge+Auto%27s+Service+%26+Repair+5115+66th+St+W+Bldg+B+University+Place+WA+98467'
   },
   primary_crosslister: 'shopify_co_master_plus_crosslist_offerup_fb_and_craigslist_autofill',
   ebay_routing_mode: 'standard_ebay_us_only_no_ebay_motors',
@@ -431,13 +433,34 @@ function getSettings() {
     return applyEnvOverrides(structuredClone(DEFAULT_SETTINGS));
   }
   const saved = JSON.parse(row.value_json);
+  const mergedSocial = { ...DEFAULT_SETTINGS.social_links, ...(saved.social_links || {}) };
+  if (!mergedSocial.facebook || mergedSocial.facebook === 'https://www.facebook.com/') {
+    mergedSocial.facebook = DEFAULT_SETTINGS.social_links.facebook;
+  }
+  if (!mergedSocial.instagram || mergedSocial.instagram === 'https://www.instagram.com/') {
+    mergedSocial.instagram = DEFAULT_SETTINGS.social_links.instagram;
+  }
+  if (!mergedSocial.offerup || mergedSocial.offerup === 'https://offerup.com/') {
+    mergedSocial.offerup = DEFAULT_SETTINGS.social_links.offerup;
+  }
+  if (!mergedSocial.google_maps || mergedSocial.google_maps.includes("Aldridge+Auto's+5115")) {
+    mergedSocial.google_maps = DEFAULT_SETTINGS.social_links.google_maps;
+  }
+  const mergedLogo = !saved.logo_url || saved.logo_url === '/assets/aldridge-crest.jpg'
+    ? DEFAULT_SETTINGS.logo_url
+    : saved.logo_url;
+  const mergedListingName = !saved.google_listing_name || saved.google_listing_name === "Aldridge Auto's"
+    ? DEFAULT_SETTINGS.google_listing_name
+    : saved.google_listing_name;
   return applyEnvOverrides({
     ...DEFAULT_SETTINGS,
     ...saved,
+    google_listing_name: mergedListingName,
+    logo_url: mergedLogo,
     single_variant_only: true,
     photos_required: true,
     uhaul_synced_data: { ...DEFAULT_SETTINGS.uhaul_synced_data, ...(saved.uhaul_synced_data || {}) },
-    social_links: { ...DEFAULT_SETTINGS.social_links, ...(saved.social_links || {}) },
+    social_links: mergedSocial,
     platform_checklist: { ...DEFAULT_SETTINGS.platform_checklist, ...(saved.platform_checklist || {}) }
   });
 }

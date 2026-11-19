@@ -1,14 +1,15 @@
-const CACHE_NAME = 'aldridge-autos-hub-v10';
+const CACHE_NAME = 'aldridge-autos-hub-v11';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css',
-  '/app.js',
+  '/styles.css?v=11',
+  '/app.js?v=11',
   '/manifest.webmanifest',
-  '/assets/aldridge-crest.jpg',
-  '/assets/aldridge-logo.svg',
-  '/assets/aldridge-shop-hero.jpg',
-  '/assets/aldridge-lot-uhaul.jpg',
+  '/assets/aldridge-crest.jpg?v=11',
+  '/assets/app-icon.jpg?v=11',
+  '/assets/aldridge-shop-hero.jpg?v=11',
+  '/assets/aldridge-lot-uhaul.jpg?v=11',
+  '/assets/og-banner.jpg?v=11',
   '/assets/oem-parts.jpg'
 ];
 
@@ -37,8 +38,15 @@ self.addEventListener('fetch', (event) => {
   ) {
     return;
   }
+  const isAppShell =
+    event.request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname === '/review' ||
+    url.pathname.endsWith('.html') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.css');
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request, isAppShell ? { cache: 'no-store' } : undefined).catch(() => caches.match(event.request))
   );
 });
 

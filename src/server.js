@@ -281,12 +281,23 @@ const server = http.createServer(async (req, res) => {
 
     if (method === 'GET' && pathname === '/sitemap.xml') {
       const canonicalBase = resolvePublicAppBaseUrl(getSettings());
+      const todayIso = new Date().toISOString().split('T')[0];
       const items = db.prepare("SELECT sku, updated_at FROM inventory_items WHERE status = 'active'").all();
-      const urls = [
-        `<url><loc>${canonicalBase}/</loc><priority>1.0</priority></url>`,
-        ...items.map((i) => `<url><loc>${canonicalBase}/?sku=${encodeURIComponent(i.sku)}</loc><lastmod>${(i.updated_at || '').split('T')[0]}</lastmod><priority>0.8</priority></url>`)
-      ].join('\n  ');
-      res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
+      const staticUrls = [
+        `<url><loc>${canonicalBase}/</loc><lastmod>${todayIso}</lastmod><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+        `<url><loc>${canonicalBase}/?view=parts</loc><lastmod>${todayIso}</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>`,
+        `<url><loc>${canonicalBase}/?view=repair</loc><lastmod>${todayIso}</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>`,
+        `<url><loc>${canonicalBase}/?view=uhaul</loc><lastmod>${todayIso}</lastmod><changefreq>weekly</changefreq><priority>0.85</priority></url>`,
+        `<url><loc>${canonicalBase}/?view=support</loc><lastmod>${todayIso}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>`
+      ];
+      const itemUrls = items.map(
+        (i) => `<url><loc>${canonicalBase}/?sku=${encodeURIComponent(i.sku)}</loc><lastmod>${(i.updated_at || todayIso).split('T')[0]}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>`
+      );
+      const urls = [...staticUrls, ...itemUrls].join('\n  ');
+      res.writeHead(200, {
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Cache-Control': 'public, max-age=300'
+      });
       res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  ${urls}\n</urlset>`);
       return;
     }
@@ -1938,18 +1949,24 @@ const server = http.createServer(async (req, res) => {
 
     if (filePath.startsWith(PUBLIC_DIR) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase();
+      const isAppAsset = ext === '.html' || ext === '.js' || ext === '.css' || ext === '.webmanifest';
       res.writeHead(200, {
         'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-        'Cache-Control': ext === '.jpg' || ext === '.png' ? 'public, max-age=3600' : 'no-cache'
+        'Cache-Control': isAppAsset
+          ? 'no-store, no-cache, must-revalidate'
+          : (ext === '.jpg' || ext === '.jpeg' || ext === '.png' || ext === '.svg' ? 'public, max-age=3600' : 'no-cache')
       });
       fs.createReadStream(filePath).pipe(res);
       return;
     }
 
-    // SPA Fallback to index.html
+    // SPA Fallback to index.html (handles /review, /?tab=review, deep links)
     const indexHtml = path.join(PUBLIC_DIR, 'index.html');
     if (fs.existsSync(indexHtml)) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
       fs.createReadStream(indexHtml).pipe(res);
       return;
     }

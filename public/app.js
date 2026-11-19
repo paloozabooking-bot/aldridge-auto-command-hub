@@ -92,12 +92,12 @@ function renderAll() {
   document.body.dataset.theme = settings.theme_preset || 'pnw_navy_orange';
   const logoEl = document.getElementById('header-brand-logo');
   if (logoEl) {
-    logoEl.src = settings.logo_url || '/assets/aldridge-crest.jpg';
+    logoEl.src = settings.logo_url || '/assets/aldridge-crest.jpg?v=11';
   }
 
   // Branding & Header/Footer
   const fullAddr = `${settings.street_address}, ${settings.city_display || settings.city}, ${settings.state} ${settings.zip}`;
-  document.title = `${settings.business_name} — University Place & Tacoma OEM Parts, 5.0★ Service & U-Haul #${settings.uhaul_dealer_id || '046117'}`;
+  document.title = `${settings.google_listing_name || settings.business_name} — University Place & Tacoma OEM Parts, 5.0★ Service & U-Haul #${settings.uhaul_dealer_id || '046117'}`;
   document.getElementById('util-address').textContent = fullAddr;
   document.getElementById('util-hours').textContent = settings.hours_weekday;
   document.getElementById('util-phone').textContent = settings.phone;
@@ -112,20 +112,72 @@ function renderAll() {
 
   document.getElementById('header-business-name').textContent = settings.business_name;
   document.getElementById('header-tagline').textContent = settings.tagline;
-  document.getElementById('footer-name').textContent = settings.business_name;
+  document.getElementById('footer-name').textContent = settings.google_listing_name || settings.business_name;
   document.getElementById('footer-addr').textContent = fullAddr;
   document.getElementById('footer-contact').textContent =
     `Shop & Parts: ${settings.phone} • U-Haul: ${settings.uhaul_phone || '(253) 948-3487'} • ${settings.email}`;
 
   const activeItems = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
-  document.getElementById('hero-stock-count').textContent = `${activeItems.length} Active SKUs Synced`;
+  document.getElementById('hero-stock-count').textContent =
+    activeItems.length > 0 ? `${activeItems.length} Active SKUs Synced` : 'Photo Triage Live';
+
+  // Build verified cross-platform backlinks map
+  const canonBase = getCanonicalBaseUrl(settings);
+  const gbpUrl =
+    settings.social_links?.google_maps ||
+    'https://www.google.com/maps/search/?api=1&query=Aldridge+Auto%27s+Service+%26+Repair+5115+66th+St+W+Bldg+B+University+Place+WA+98467';
+  const uhaulUrl =
+    settings.uhaul_dealer_url ||
+    settings.social_links?.uhaul_dealer ||
+    'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/';
+  const shopifyUrl =
+    settings.shopify_storefront_url ||
+    settings.social_links?.shopify_store ||
+    'https://aldridgesales.myshopify.com/';
+  const ebayUrl = settings.social_links?.ebay_store || 'https://www.ebay.com/usr/aabcas';
+  const fbUrl = settings.social_links?.facebook || 'https://www.facebook.com/AldridgeAutos';
+  const igUrl = settings.social_links?.instagram || 'https://www.instagram.com/aldridgeautos/';
+  const offerupUrl = settings.social_links?.offerup || 'https://offerup.com/search?q=Aldridge+Auto+Tacoma';
+
+  // Render homepage cross-platform backlink bar & footer channel links
+  const verifiedBarEl = document.getElementById('home-verified-channels');
+  if (verifiedBarEl) {
+    verifiedBarEl.innerHTML = [
+      `<a class="channel-pill channel-pill-star" href="${esc(gbpUrl)}" target="_blank" rel="noopener me">★ 5.0 Google Business Profile (87 Reviews) ↗</a>`,
+      `<a class="channel-pill channel-pill-uhaul" href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a>`,
+      `<a class="channel-pill" href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Store ↗</a>`,
+      `<a class="channel-pill" href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a>`,
+      `<a class="channel-pill" href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook (@AldridgeAutos) ↗</a>`,
+      `<a class="channel-pill" href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a>`,
+      `<a class="channel-pill" href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a>`
+    ].join('');
+  }
+
+  const footerSocialEl = document.getElementById('footer-social-links');
+  if (footerSocialEl) {
+    footerSocialEl.innerHTML = [
+      `<li><a href="${esc(gbpUrl)}" target="_blank" rel="noopener me">Google Business Profile (5.0★ • 87 Reviews) ↗</a></li>`,
+      `<li><a href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Neighborhood Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a></li>`,
+      `<li><a href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Storefront ↗</a></li>`,
+      `<li><a href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a></li>`,
+      `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook (@AldridgeAutos) ↗</a></li>`,
+      `<li><a href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a></li>`,
+      `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`,
+      `<li><a href="/api/feeds/google-merchant.xml" target="_blank">Google Merchant XML Feed</a></li>`,
+      `<li><a href="/api/feeds/meta-catalog.csv" target="_blank">Meta Commerce Catalog Feed</a></li>`,
+      `<li><a href="/sitemap.xml" target="_blank">SEO XML Sitemap</a></li>`
+    ].join('');
+  }
 
   // Update canonical link, og:url & SEO JSON-LD @graph dynamically
-  const canonBase = getCanonicalBaseUrl(settings);
   const canonicalEl = document.querySelector('link[rel="canonical"]');
   if (canonicalEl) canonicalEl.setAttribute('href', `${canonBase}/`);
   const ogUrlEl = document.querySelector('meta[property="og:url"]');
   if (ogUrlEl) ogUrlEl.setAttribute('content', `${canonBase}/`);
+
+  const sameAsList = Array.from(
+    new Set([gbpUrl, uhaulUrl, shopifyUrl, ebayUrl, fbUrl, igUrl, offerupUrl].filter((u) => u && /^https?:\/\//i.test(u)))
+  );
 
   const seoEl = document.getElementById('seo-json-ld');
   if (seoEl) {
@@ -135,15 +187,27 @@ function renderAll() {
         {
           '@type': ['AutoRepair', 'AutoPartsStore', 'LocalBusiness'],
           '@id': `${canonBase}/#business`,
-          name: settings.business_name,
-          alternateName: settings.google_listing_name || "Aldridge Auto's",
-          description: `${settings.business_name} in University Place / Tacoma, WA: 5.0-star auto repair & diagnostics, ${activeItems.length} tested Used OEM auto parts (Calculated Parcel Shipping, Free 98467 Counter Pickup & Certified Shop Bay Installation), and Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}.`,
+          name: settings.google_listing_name || "Aldridge Auto's Service & Repair",
+          alternateName: [settings.business_name, 'Aldridge Auto Supply', "Aldridge Auto's University Place & Tacoma"],
+          description: `${settings.google_listing_name || settings.business_name} in University Place / Tacoma, WA: 5.0-star auto repair & diagnostics (Free Engine Light Scan, $100 Inspections, Fleet/Veteran/First Responder Discounts), verified photographed Used OEM auto parts (Calculated Parcel Shipping, Free 98467 Counter Pickup & Certified Shop Bay Installation), and Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}.`,
           url: `${canonBase}/`,
-          image: `${canonBase}/assets/aldridge-shop-hero.jpg`,
-          logo: `${canonBase}/assets/aldridge-crest.jpg`,
+          image: [
+            `${canonBase}/assets/og-banner.jpg?v=11`,
+            `${canonBase}/assets/aldridge-shop-hero.jpg?v=11`,
+            `${canonBase}/assets/aldridge-lot-uhaul.jpg?v=11`
+          ],
+          logo: {
+            '@type': 'ImageObject',
+            url: `${canonBase}/assets/aldridge-crest.jpg?v=11`,
+            width: 1024,
+            height: 1024
+          },
           telephone: settings.phone,
           email: settings.email,
           priceRange: '$$',
+          currenciesAccepted: 'USD',
+          paymentAccepted: 'Cash, Credit Card, Debit Card',
+          hasMap: gbpUrl,
           address: {
             '@type': 'PostalAddress',
             streetAddress: settings.street_address,
@@ -164,6 +228,18 @@ function renderAll() {
               dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
               opens: '12:00',
               closes: '19:00'
+            },
+            {
+              '@type': 'OpeningHoursSpecification',
+              dayOfWeek: ['Saturday'],
+              opens: '12:00',
+              closes: '18:00'
+            },
+            {
+              '@type': 'OpeningHoursSpecification',
+              dayOfWeek: ['Sunday'],
+              opens: '13:00',
+              closes: '16:00'
             }
           ],
           aggregateRating: {
@@ -172,17 +248,23 @@ function renderAll() {
             bestRating: '5',
             reviewCount: '87'
           },
-          sameAs: [
-            settings.uhaul_dealer_url || 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
-            settings.social_links?.ebay_store || 'https://www.ebay.com/usr/aabcas',
-            settings.shopify_storefront_url || 'https://aldridgesales.myshopify.com/'
-          ].filter(Boolean),
+          hasOfferCatalog: {
+            '@type': 'OfferCatalog',
+            name: "Aldridge Auto's Service, OEM Parts & U-Haul Offerings",
+            itemListElement: [
+              { '@type': 'Offer', itemOffered: { '@type': 'Service', name: 'Full-Service Auto Repair, Electrical & Cooling Diagnostics (Free Engine Light Scan)' } },
+              { '@type': 'Offer', itemOffered: { '@type': 'Service', name: '$100 Pre-Purchase & Multi-Point Vehicle Inspection' } },
+              { '@type': 'Offer', itemOffered: { '@type': 'Product', name: 'Tested Photographed Used OEM Auto Parts (Ship Nationwide, Free 98467 Pickup, or Shop Bay Install)' } },
+              { '@type': 'Offer', itemOffered: { '@type': 'Service', name: `Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'} Truck & Trailer Rentals` } }
+            ]
+          },
+          sameAs: sameAsList,
           department: [
             {
               '@type': 'AutoRental',
               name: `${settings.business_name} — Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}`,
               telephone: settings.uhaul_phone || '(253) 948-3487',
-              url: settings.uhaul_dealer_url || 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
+              url: uhaulUrl,
               description: 'Limited-stock neighborhood U-Haul truck & trailer rental dispatch with 24/7 Truck Share and 24-hour drop-off return (no hitch sales or hitch installation on-site).'
             }
           ]
@@ -191,7 +273,8 @@ function renderAll() {
           '@type': 'WebSite',
           '@id': `${canonBase}/#website`,
           url: `${canonBase}/`,
-          name: `${settings.business_name} — OEM Auto Parts, 5.0★ Auto Repair & U-Haul #${settings.uhaul_dealer_id || '046117'}`,
+          name: `${settings.google_listing_name || settings.business_name} — OEM Auto Parts, 5.0★ Auto Repair & U-Haul #${settings.uhaul_dealer_id || '046117'}`,
+          publisher: { '@id': `${canonBase}/#business` },
           potentialAction: {
             '@type': 'SearchAction',
             target: `${canonBase}/?sku={search_term_string}`,
@@ -1022,6 +1105,12 @@ function populateSettingsVaultForm(s) {
   document.getElementById('set-labor-rate').value = s.labor_rate_hourly ?? 135;
   document.getElementById('set-fb').value = s.social_links?.facebook || '';
   document.getElementById('set-ebay').value = s.social_links?.ebay_store || '';
+  const igEl = document.getElementById('set-ig');
+  if (igEl) igEl.value = s.social_links?.instagram || '';
+  const offerupEl = document.getElementById('set-offerup');
+  if (offerupEl) offerupEl.value = s.social_links?.offerup || '';
+  const gbpEl = document.getElementById('set-gbp');
+  if (gbpEl) gbpEl.value = s.social_links?.google_maps || '';
   document.getElementById('set-shopify-domain').value = s.shopify_domain || '';
   document.getElementById('set-shopify-token').value = s.shopify_admin_token || '';
   document.getElementById('set-uhaul-url').value = s.uhaul_dealer_url || '';
@@ -2334,7 +2423,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       labor_rate_hourly: Number(document.getElementById('set-labor-rate').value || 135),
       social_links: {
         facebook: document.getElementById('set-fb').value,
-        ebay_store: document.getElementById('set-ebay').value
+        ebay_store: document.getElementById('set-ebay').value,
+        instagram: document.getElementById('set-ig')?.value || '',
+        offerup: document.getElementById('set-offerup')?.value || '',
+        google_maps: document.getElementById('set-gbp')?.value || ''
       }
     };
     if (state.uploadedLogoDataUrl) {
@@ -2378,13 +2470,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   bindReviewGalleryEvents();
-  await loadBootstrap();
 
-  // Deep-link directly into Employee Backend Visual Photo Review via ?tab=review or #review
+  // Deep-link IMMEDIATELY (before loadBootstrap) so /review, ?tab=review, #review, or ?view=... work instantly
   const params = new URLSearchParams(window.location.search);
+  const pathname = (window.location.pathname || '/').replace(/\/+$/, '').toLowerCase();
   const hash = (window.location.hash || '').toLowerCase();
-  if (params.get('tab') === 'review' || hash === '#review' || hash === '#staff-review') {
+  const requestedTab = (params.get('tab') || '').toLowerCase();
+  const requestedView = (params.get('view') || '').toLowerCase();
+
+  const wantsReview =
+    pathname === '/review' ||
+    requestedTab === 'review' ||
+    requestedTab === 'staff-review' ||
+    hash === '#review' ||
+    hash === '#staff-review';
+
+  if (wantsReview) {
     activateStaffMode('staff-review');
+  } else if (pathname === '/staff' || requestedTab === 'staff') {
+    activateStaffMode('staff-review');
+  } else if (['parts', 'repair', 'uhaul', 'support'].includes(requestedView)) {
+    switchCustomerView(`view-${requestedView}`);
+  } else if (['#parts', '#repair', '#uhaul', '#support'].includes(hash)) {
+    switchCustomerView(`view-${hash.slice(1)}`);
+  }
+
+  try {
+    await loadBootstrap();
+  } catch (err) {
+    console.error('[Bootstrap Load Error]', err);
+    showToast('Syncing with server — if the page just woke up, refresh in a moment.');
   }
 });
 
