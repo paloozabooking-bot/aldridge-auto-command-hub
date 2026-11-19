@@ -4,7 +4,7 @@ const zlib = require('node:zlib');
 const QRCode = require('qrcode');
 
 function isQrCardUrl(url) {
-  return /\.qr\.(png|jpe?g|webp)(\?|$)|qr[-_]card/i.test(String(url || ''));
+  return /(?:^|[\/._-])qr(?:[-_]card)?(?:[_-][a-z0-9]+)?\.(png|jpe?g|webp)(\?|$)|qr[-_]card/i.test(String(url || ''));
 }
 
 function resolvePublicAppBaseUrl(settings) {

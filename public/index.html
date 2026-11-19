@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=13" />
+  <link rel="stylesheet" href="/styles.css?v=14" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -1108,6 +1108,30 @@
         <!-- Urgent Account Unblocks & Dead-End Guardrails from Operational Audit -->
         <div class="surface-card" style="margin-bottom:1.35rem;border-left:4px solid var(--brand-amber);" id="audit-command-panel"></div>
 
+        <!-- 1-Click Crosslist Auto-Sync + Shopify Webhook Auto-Delist + Craigslist Tacoma pts Queue -->
+        <div class="surface-card" style="margin-bottom:1.35rem;border-left:4px solid #16a34a;" id="crosslist-auto-sync-panel">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
+            <div style="flex:1;min-width:260px;">
+              <div class="eyebrow-label" style="color:#16a34a;">MULTI-CHANNEL PHOTO ISOLATION • 1-IN-STOCK AUTO-DELIST</div>
+              <h3 style="margin:0.15rem 0 0.35rem;">⚡ 1-Click Crosslist Auto-Sync &amp; Craigslist Tacoma <code>pts</code> Queue</h3>
+              <p style="margin:0 0 0.55rem;font-size:0.84rem;color:var(--text-secondary);">
+                <strong>Photo Isolation Guaranteed:</strong> <code>&lt;SKU&gt;.qr.png</code> attaches <strong>ONLY to Shopify</strong> and is strictly excluded from <strong>Crosslist</strong>, <strong>eBay <code>aabcas</code></strong>, <strong>Google Merchant XML</strong>, <strong>Meta CSV</strong>, and <strong>Craigslist</strong>.
+                Sold 1-in-stock SKUs received on <code>/api/webhooks/shopify</code> (<code>orders/create</code> &amp; <code>products/update</code>) auto-zero and delist immediately across every feed.
+              </p>
+              <div id="crosslist-auto-sync-badges" style="display:flex;gap:0.45rem;flex-wrap:wrap;font-size:0.76rem;"></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:280px;">
+              <button type="button" id="btn-crosslist-auto-sync" class="btn btn-primary btn-sm" onclick="runCrosslistAutoSyncUi()">⚡ Run 1-Click Crosslist Auto-Sync &amp; Download CSV</button>
+              <button type="button" class="btn btn-dark btn-sm" onclick="launchNextCraigslistQueueItemUi()">🚗 Launch Next Craigslist Tacoma pts ($0 • ZIP 98467)</button>
+              <div style="display:flex;gap:0.45rem;flex-wrap:wrap;">
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="flex:1;text-align:center;">⚙ Craigslist Auto-Fill Script</a>
+                <button type="button" class="btn btn-outline btn-sm" style="flex:1;" onclick="copyFeedUrl(window.location.origin + '/api/webhooks/shopify')">📋 Copy Webhook URL</button>
+              </div>
+            </div>
+          </div>
+          <div id="crosslist-auto-sync-result" style="display:none;margin-top:0.85rem;padding:0.75rem 0.9rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border);font-size:0.82rem;"></div>
+        </div>
+
         <div class="grid-2" style="margin-bottom:1.35rem;">
           <!-- Live Automated Feeds & Exporters -->
           <div class="surface-card">
@@ -1672,6 +1696,6 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=13"></script>
+  <script src="/app.js?v=14"></script>
 </body>
 </html>

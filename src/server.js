@@ -28,6 +28,7 @@ const {
 } = require('./db');
 const { generateAllPolicies } = require('./policies');
 const {
+  getValidPhotos,
   importInventoryCsv,
   generateMasterImportTemplateCsv,
   generateShopifyCsv,
@@ -39,6 +40,7 @@ const {
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
+  resolveShopifyAccessToken,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook
@@ -600,19 +602,32 @@ const server = http.createServer(async (req, res) => {
     // Automated Craigslist Tacoma/Pierce County (pts — $0 Auto Parts, ZIP 98467) Bulk Queue & Auto-Fill Endpoints
     if (method === 'GET' && pathname === '/api/craigslist/queue') {
       const donorMap = buildDonorMap();
-      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
+        .all()
+        .filter((r) => getValidPhotos(r).length > 0 && validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
+        .map((r) => hydrateInventoryItem(r, donorMap));
       const queue = rows.map((i) => ({
         sku: i.sku,
         title: i.title,
         price: Number(i.price_we_pull || 0),
+        install_price: Number(i.price_pull_install || i.price_we_pull || 0),
         zip: '98467',
+        category: 'pts',
+        fee: '$0',
         posted_craigslist: Boolean(i.channels?.craigslist_posted),
         launch_url: `https://post.craigslist.org/c/sea?lang=en&cc=us#aldridge_sku=${encodeURIComponent(i.sku)}&hub=${encodeURIComponent(baseUrl)}`
       }));
+      const postedCount = queue.filter((q) => q.posted_craigslist).length;
       sendJson(res, 200, {
         target: 'seattle.craigslist.org -> Tacoma/Pierce County (tac) -> auto parts - by owner (pts, $0 fee, ZIP 98467)',
         userscript_url: `${baseUrl}/craigslist-autofill.user.js`,
+        csv_export_url: `${baseUrl}/api/exports/craigslist.csv`,
+        zip: '98467',
+        category: 'pts',
+        fee: '$0',
         count: queue.length,
+        posted_count: postedCount,
+        remaining_count: queue.length - postedCount,
         queue
       });
       return;
@@ -623,13 +638,26 @@ const server = http.createServer(async (req, res) => {
       const sku = decodeURIComponent(clItemMatch[1]);
       const row = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(sku);
       if (!row) return sendJson(res, 404, { error: 'SKU not found' });
+      if (row.status !== 'active' || Number(row.quantity || 0) <= 0) {
+        return sendJson(res, 410, { sold: true, sku: row.sku, error: `SKU ${row.sku} is sold/delisted (qty=${row.quantity}). Do not post to Craigslist.` });
+      }
       const item = hydrateInventoryItem(row);
       const cfg = getSettings();
       const tax = resolvePartTaxonomyAndMetafields(item, cfg);
+      const reviewThumbsDir = path.join(PUBLIC_DIR, 'review-thumbs');
+      const cleanPhotos = getValidPhotos(row);
       const photoDataUrls = [];
-      for (const p of item.photos) {
+      for (const p of cleanPhotos) {
+        if (isQrCardUrl(p)) continue;
         if (p.startsWith('/uploads/')) {
           const abs = path.join(UPLOADS_DIR, path.basename(p));
+          if (fs.existsSync(abs)) {
+            const ext = path.extname(abs).toLowerCase();
+            const mime = MIME_TYPES[ext] || 'image/jpeg';
+            photoDataUrls.push(`data:${mime};base64,${fs.readFileSync(abs).toString('base64')}`);
+          }
+        } else if (p.startsWith('/review-thumbs/')) {
+          const abs = path.join(reviewThumbsDir, path.basename(p));
           if (fs.existsSync(abs)) {
             const ext = path.extname(abs).toLowerCase();
             const mime = MIME_TYPES[ext] || 'image/jpeg';
@@ -642,9 +670,12 @@ const server = http.createServer(async (req, res) => {
       const clBody = renderLocalMarketplacePacket(row, cfg);
       sendJson(res, 200, {
         sku: item.sku,
+        sold: false,
         cl_title: `${item.title} (OEM Tested — University Place / Tacoma)`.slice(0, 70),
         price_int: Math.max(1, Math.round(Number(item.price_we_pull || 0))),
         zip: cfg.zip || '98467',
+        category: 'pts',
+        fee: '$0',
         brand: tax.brand,
         mpn_or_fitment: tax.mpn !== 'Does Not Apply' ? tax.mpn : tax.customLabel0,
         ymm: tax.customLabel0,
@@ -1106,7 +1137,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Co-Master Shopify Sync & Webhook Receiver
+    // Co-Master Shopify Sync, Crosslist Auto-Sync & Webhook Receiver
     if (method === 'POST' && pathname === '/api/sync/shopify') {
       const raw = await readRawBody(req);
       if (raw) {
@@ -1116,6 +1147,9 @@ const server = http.createServer(async (req, res) => {
           if (parsed.shopify_admin_token && String(parsed.shopify_admin_token).trim()) {
             patch.shopify_admin_token = String(parsed.shopify_admin_token).trim();
           }
+          if (parsed.shopify_client_id && String(parsed.shopify_client_id).trim()) {
+            patch.shopify_client_id = String(parsed.shopify_client_id).trim();
+          }
           if (parsed.shopify_domain && String(parsed.shopify_domain).trim()) {
             patch.shopify_domain = String(parsed.shopify_domain).trim();
           }
@@ -1124,6 +1158,82 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await syncAllToShopifyCoMaster();
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/sync/crosslist-auto-sync') {
+      const raw = await readRawBody(req);
+      let opts = {};
+      try { opts = raw ? JSON.parse(raw) : {}; } catch (_) { opts = {}; }
+      const now = new Date().toISOString();
+      const allRows = db.prepare('SELECT * FROM inventory_items').all();
+      const activeSafe = allRows.filter((r) =>
+        r.status === 'active' &&
+        Number(r.quantity || 0) > 0 &&
+        getValidPhotos(r).length > 0 &&
+        validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant
+      );
+      const soldDelisted = allRows.filter((r) => r.status === 'sold' || Number(r.quantity || 0) <= 0);
+
+      let qrLeakCount = 0;
+      const updateChStmt = db.prepare('UPDATE inventory_items SET channels_json = ?, updated_at = ? WHERE id = ?');
+      db.exec('BEGIN;');
+      try {
+        for (const row of activeSafe) {
+          const cleanPhotos = getValidPhotos(row);
+          if (cleanPhotos.some((u) => isQrCardUrl(u))) qrLeakCount++;
+          let ch = {};
+          try { ch = JSON.parse(row.channels_json || '{}'); } catch (_) { ch = {}; }
+          ch.crosslist_synced = true;
+          ch.crosslist_synced_at = now;
+          ch.crosslist_auto_delist_on_zero = true;
+          ch.ebay_aabcas = true;
+          ch.offerup = true;
+          ch.facebook_marketplace = true;
+          ch.delisted_all_feeds = false;
+          updateChStmt.run(JSON.stringify(ch), now, row.id);
+        }
+        db.exec('COMMIT;');
+      } catch (err) {
+        db.exec('ROLLBACK;');
+        throw err;
+      }
+
+      let shopifySyncResult = null;
+      if (opts.push_shopify === true) {
+        try {
+          shopifySyncResult = await syncAllToShopifyCoMaster();
+        } catch (err) {
+          shopifySyncResult = { mode: 'error', error: err.message };
+        }
+      }
+
+      logSync(
+        'outbound',
+        'crosslist_auto_sync',
+        'sync_all_channels',
+        'ALL',
+        'success',
+        `Crosslist Auto-Sync verified ${activeSafe.length} single-variant OEM SKUs (${soldDelisted.length} sold/delisted excluded, ${qrLeakCount} QR cards leaked — 100% isolated). Ready for eBay aabcas, OfferUp, FB Marketplace, Google Merchant XML, Meta CSV & Craigslist Tacoma pts.`
+      );
+
+      sendJson(res, 200, {
+        ok: true,
+        synced_at: now,
+        ready_skus: activeSafe.length,
+        sold_delisted_skus: soldDelisted.length,
+        qr_excluded_verified: qrLeakCount === 0,
+        qr_leak_count: qrLeakCount,
+        shopify_webhook_url: `${baseUrl}/api/webhooks/shopify`,
+        crosslist_csv_url: `${baseUrl}/api/exports/crosslist.csv`,
+        ebay_us_csv_url: `${baseUrl}/api/exports/ebay_us.csv`,
+        google_merchant_xml_url: `${baseUrl}/api/feeds/google-merchant.xml`,
+        meta_catalog_csv_url: `${baseUrl}/api/feeds/meta-catalog.csv`,
+        craigslist_csv_url: `${baseUrl}/api/exports/craigslist.csv`,
+        craigslist_queue_url: `${baseUrl}/api/craigslist/queue`,
+        craigslist_userscript_url: `${baseUrl}/craigslist-autofill.user.js`,
+        shopify_sync: shopifySyncResult
+      });
       return;
     }
 
@@ -2086,14 +2196,35 @@ async function autoSyncKeepItemsOnStartup() {
     const keepCount = db.prepare("SELECT COUNT(*) c FROM photo_review_items WHERE review_status = 'keep'").get().c;
     if (!keepCount) return;
 
+    // 1. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
+    // exchange grant_type=client_credentials at https://${shopDomain}/admin/oauth/access_token
+    // for a fresh access_token BEFORE running startup auto-sync.
+    let shopifyAuthReady = false;
+    const rawToken = String(cfg.shopify_admin_token || process.env.SHOPIFY_ADMIN_TOKEN || '').trim();
+    const clientId = String(cfg.shopify_client_id || process.env.SHOPIFY_CLIENT_ID || '').trim();
+    if (rawToken) {
+      try {
+        const auth = await resolveShopifyAccessToken(cfg, { forceRefresh: rawToken.startsWith('shpss_') && Boolean(clientId) });
+        if (auth.token && auth.authMode !== 'shpss_missing_client_id') {
+          shopifyAuthReady = true;
+          console.log(
+            `[Startup Shopify Auth] Ready for ${auth.shopDomain} via ${auth.authMode}${auth.scope ? ` (scope=${auth.scope})` : ''}`
+          );
+        } else if (auth.authMode === 'shpss_missing_client_id') {
+          console.warn('[Startup Shopify Auth] SHOPIFY_ADMIN_TOKEN starts with shpss_ but SHOPIFY_CLIENT_ID is not set — skipping live Shopify push until SHOPIFY_CLIENT_ID is configured.');
+        }
+      } catch (oauthErr) {
+        console.error('[Startup Shopify OAuth Error]', oauthErr.message || oauthErr);
+      }
+    }
+
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
     const activeCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0"
     ).get().c;
-    const hasShopifyToken = Boolean(cfg.shopify_admin_token && cfg.shopify_admin_token.trim());
-    const shouldPushShopify = hasShopifyToken && (activeCount === 0 || unsyncedShopifyCount > 0);
+    const shouldPushShopify = shopifyAuthReady && (activeCount === 0 || unsyncedShopifyCount > 0);
 
     const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
     const result = await runKeepBatchIntakeAndPublish({

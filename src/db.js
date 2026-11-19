@@ -399,8 +399,12 @@ const DEFAULT_SETTINGS = {
 function applyEnvOverrides(cfg) {
   const envShopDomain = (process.env.SHOPIFY_SHOP_DOMAIN || process.env.SHOPIFY_DOMAIN || '').trim();
   if (envShopDomain) cfg.shopify_domain = envShopDomain;
-  if (process.env.SHOPIFY_ADMIN_TOKEN && process.env.SHOPIFY_ADMIN_TOKEN.trim()) {
-    cfg.shopify_admin_token = process.env.SHOPIFY_ADMIN_TOKEN.trim();
+  if (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_ID.trim()) {
+    cfg.shopify_client_id = process.env.SHOPIFY_CLIENT_ID.trim();
+  }
+  const envShopifyToken = (process.env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_CLIENT_SECRET || '').trim();
+  if (envShopifyToken) {
+    cfg.shopify_admin_token = envShopifyToken;
   }
   if (process.env.SHOPIFY_WEBHOOK_SECRET && process.env.SHOPIFY_WEBHOOK_SECRET.trim()) {
     cfg.shopify_webhook_secret = process.env.SHOPIFY_WEBHOOK_SECRET.trim();

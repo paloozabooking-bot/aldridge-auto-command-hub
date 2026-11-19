@@ -16,7 +16,11 @@ services:
         value: aldridgesales.myshopify.com
       - key: SHOPIFY_DOMAIN
         value: aldridgesales.myshopify.com
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
       - key: SHOPIFY_ADMIN_TOKEN
+        sync: false
+      - key: SHOPIFY_WEBHOOK_SECRET
         sync: false
       - key: GEMINI_API_KEY
         sync: false

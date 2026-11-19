@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts ($0 pts) Bulk Auto-Filler
 // @namespace    https://aldridgeautosupply.com/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Automatically selects Tacoma/Pierce County -> For Sale By Owner -> Auto Parts ($0 fee, ZIP 98467), fills Title, Price, Condition, OEM Make/Model/MPN, Description, and attaches clean part photos from Aldridge Command Hub!
 // @match        https://post.craigslist.org/*
 // @match        https://seattle.craigslist.org/*
@@ -95,11 +95,21 @@
       titleInput.dataset.aldridgeFilled = '1';
       showBanner('Fetching SKU specs & clean photos from Command Hub...');
       const res = await fetch(`${saved.hub}/api/craigslist/item/${encodeURIComponent(saved.sku)}`);
+      if (res.status === 410) {
+        sessionStorage.removeItem(STORAGE_KEY);
+        showBanner(`⛔ STOP: ${saved.sku} was SOLD / auto-delisted via Shopify webhook (qty=0). Do NOT post this item.`);
+        return;
+      }
       if (!res.ok) {
         showBanner(`Could not load ${saved.sku} from Hub (HTTP ${res.status}).`);
         return;
       }
       const item = await res.json();
+      if (item.sold) {
+        sessionStorage.removeItem(STORAGE_KEY);
+        showBanner(`⛔ STOP: ${saved.sku} is marked SOLD (qty=0). Do NOT post.`);
+        return;
+      }
       saved.item = item;
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 
@@ -119,7 +129,7 @@
         if (goodOpt) setNativeValue(condSelect, goodOpt.value);
       }
 
-      showBanner('✓ Auto-filled Title, Price, ZIP 98467, Specs & Description! Click "Continue" below to auto-attach photos.');
+      showBanner('✓ Auto-filled Title, Price, ZIP 98467 ($0 pts), Specs & Description! Click "Continue" below to auto-attach clean non-QR part photos.');
       return;
     }
 
@@ -133,7 +143,7 @@
         if (res.ok) item = await res.json();
       }
       if (item && Array.isArray(item.photo_data_urls) && item.photo_data_urls.length > 0) {
-        showBanner(`Attaching ${item.photo_data_urls.length} clean high-res part photo(s)...`);
+        showBanner(`Attaching ${item.photo_data_urls.length} clean high-res part photo(s) (QR cards excluded)...`);
         const dt = new DataTransfer();
         for (let i = 0; i < item.photo_data_urls.length; i++) {
           const resp = await fetch(item.photo_data_urls[i]);
@@ -154,7 +164,18 @@
             body: JSON.stringify({ sku: saved.sku })
           });
           sessionStorage.removeItem(STORAGE_KEY);
-          showBanner(`✓ Marked ${saved.sku} posted in Command Hub!`);
+          let nextBtn = '';
+          try {
+            const qRes = await fetch(`${saved.hub}/api/craigslist/queue`);
+            if (qRes.ok) {
+              const qData = await qRes.json();
+              const nextItem = (qData.queue || []).find((q) => !q.posted_craigslist && q.sku !== saved.sku);
+              if (nextItem) {
+                nextBtn = `<a href="${nextItem.launch_url}" style="display:block;margin-top:8px;background:#16a34a;color:#fff;text-decoration:none;text-align:center;padding:7px 10px;border-radius:5px;font-weight:700;">➡ Next Unposted SKU: ${nextItem.sku} ($${nextItem.price})</a>`;
+              }
+            }
+          } catch (_) {}
+          showBanner(`✓ Marked ${saved.sku} posted in Command Hub (Tacoma pts • $0 • ZIP 98467)!`, nextBtn);
         });
       }
     }

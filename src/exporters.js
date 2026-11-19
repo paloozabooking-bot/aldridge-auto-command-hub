@@ -981,34 +981,161 @@ function generateCarPartHollanderCsv(items) {
   return rows.join('\n') + '\n';
 }
 
+const _shopifyOAuthCache = {
+  cacheKey: '',
+  accessToken: '',
+  scope: '',
+  expiresAt: 0
+};
+
+/**
+ * Resolves a live Shopify Admin API access token.
+ * - If SHOPIFY_ADMIN_TOKEN starts with `shpss_` and SHOPIFY_CLIENT_ID is set,
+ *   exchanges `grant_type=client_credentials` at `https://${shopDomain}/admin/oauth/access_token`
+ *   and caches the fresh 24h access_token in memory.
+ * - Otherwise returns the configured static Admin API token (`shpat_...`).
+ */
+async function resolveShopifyAccessToken(settingsOverride = null, { forceRefresh = false } = {}) {
+  const cfg = settingsOverride || getSettings();
+  const shopDomain = (
+    cfg.shopify_domain ||
+    process.env.SHOPIFY_SHOP_DOMAIN ||
+    process.env.SHOPIFY_DOMAIN ||
+    'aldridgesales.myshopify.com'
+  )
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+
+  const rawToken = String(
+    cfg.shopify_admin_token ||
+    process.env.SHOPIFY_ADMIN_TOKEN ||
+    process.env.SHOPIFY_CLIENT_SECRET ||
+    ''
+  ).trim();
+  const clientId = String(cfg.shopify_client_id || process.env.SHOPIFY_CLIENT_ID || '').trim();
+
+  if (!rawToken) {
+    return { token: '', shopDomain, authMode: 'none' };
+  }
+
+  if (rawToken.startsWith('shpss_') && clientId) {
+    const cacheKey = `${shopDomain}|${clientId}|${rawToken.slice(0, 14)}`;
+    if (!forceRefresh && _shopifyOAuthCache.cacheKey === cacheKey && _shopifyOAuthCache.accessToken && Date.now() < _shopifyOAuthCache.expiresAt - 60_000) {
+      return {
+        token: _shopifyOAuthCache.accessToken,
+        shopDomain,
+        authMode: 'client_credentials',
+        cached: true,
+        scope: _shopifyOAuthCache.scope
+      };
+    }
+
+    const tokenEndpoint = `https://${shopDomain}/admin/oauth/access_token`;
+    const bodyParams = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: rawToken
+    });
+
+    const resp = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      body: bodyParams.toString(),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    const rawText = await resp.text().catch(() => '');
+    let data = {};
+    try {
+      data = JSON.parse(rawText || '{}');
+    } catch (_) {
+      data = {};
+    }
+
+    if (!resp.ok || !data.access_token) {
+      const msg = `Shopify client_credentials OAuth exchange failed at ${tokenEndpoint} (HTTP ${resp.status}): ${data.error_description || data.error || rawText.slice(0, 180)}`;
+      logSync('outbound', 'shopify_oauth', 'client_credentials_error', 'AUTH', 'error', msg);
+      throw new Error(msg);
+    }
+
+    const ttlSec = Math.max(300, Number(data.expires_in) || 86399);
+    _shopifyOAuthCache.cacheKey = cacheKey;
+    _shopifyOAuthCache.accessToken = String(data.access_token).trim();
+    _shopifyOAuthCache.scope = String(data.scope || '');
+    _shopifyOAuthCache.expiresAt = Date.now() + ttlSec * 1000;
+
+    logSync(
+      'outbound',
+      'shopify_oauth',
+      'client_credentials_exchange',
+      'AUTH',
+      'success',
+      `Exchanged shpss_ client_credentials for fresh Shopify access_token on ${shopDomain} (ttl=${ttlSec}s${data.scope ? `, scope=${data.scope}` : ''}).`
+    );
+
+    return {
+      token: _shopifyOAuthCache.accessToken,
+      shopDomain,
+      authMode: 'client_credentials',
+      cached: false,
+      scope: _shopifyOAuthCache.scope,
+      expires_in: ttlSec
+    };
+  }
+
+  return {
+    token: rawToken,
+    shopDomain,
+    authMode: rawToken.startsWith('shpss_') ? 'shpss_missing_client_id' : 'static_admin_token'
+  };
+}
+
 async function syncAllToShopifyCoMaster() {
   const settings = getSettings();
   const items = db.prepare('SELECT * FROM inventory_items').all().filter(isMarketplaceSafeItem);
-  if (!settings.shopify_domain || !settings.shopify_admin_token) {
+  const auth = await resolveShopifyAccessToken(settings);
+  if (!auth.shopDomain || !auth.token) {
     logSync(
       'outbound',
       'shopify_co_master',
       'staged_sync_ready',
       'ALL',
       'staged',
-      `Staged ${items.length} single-variant photo-verified products for Shopify sync. Add your .myshopify.com domain & Admin API token in Business Settings Vault for live push/pull.`
+      `Staged ${items.length} single-variant photo-verified products for Shopify sync. Add SHOPIFY_SHOP_DOMAIN & SHOPIFY_ADMIN_TOKEN (or SHOPIFY_CLIENT_ID + shpss_ secret) in Render Environment or Settings Vault for live push/pull.`
     );
     return {
       mode: 'staged_ready',
+      auth_mode: auth.authMode,
       synced_count: items.length,
-      message: 'Shopify Single-Variant payload staged (Photos Required + Shop Install in Description HTML). Paste your Shopify Admin API token in Settings Vault to activate live API push.'
+      message: 'Shopify Single-Variant payload staged (Photos Required + Shop Install in Description HTML). Configure SHOPIFY_ADMIN_TOKEN (or SHOPIFY_CLIENT_ID + shpss_) to activate live API push.'
     };
   }
+  if (auth.authMode === 'shpss_missing_client_id') {
+    throw new Error('SHOPIFY_ADMIN_TOKEN starts with shpss_ (client secret) but SHOPIFY_CLIENT_ID is missing. Add SHOPIFY_CLIENT_ID in Render Environment to enable client_credentials OAuth exchange.');
+  }
 
-  const domain = settings.shopify_domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const domain = auth.shopDomain;
+  let activeAccessToken = auth.token;
   const existingHandles = new Set();
-  const existingSkus = new Set();
+  const existingSkus = new Map();
   let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,variants`;
   while (nextUrl) {
-    const preResp = await fetch(nextUrl, {
-      headers: { 'X-Shopify-Access-Token': settings.shopify_admin_token, 'Accept': 'application/json' },
+    let preResp = await fetch(nextUrl, {
+      headers: { 'X-Shopify-Access-Token': activeAccessToken, 'Accept': 'application/json' },
       signal: AbortSignal.timeout(10000)
     });
+    if (preResp.status === 401 && auth.authMode === 'client_credentials') {
+      const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+      activeAccessToken = refreshed.token;
+      preResp = await fetch(nextUrl, {
+        headers: { 'X-Shopify-Access-Token': activeAccessToken, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000)
+      });
+    }
     if (!preResp.ok) {
       throw new Error(`Shopify Admin API authentication check failed (HTTP ${preResp.status})`);
     }
@@ -1016,7 +1143,13 @@ async function syncAllToShopifyCoMaster() {
     for (const p of preData.products || []) {
       existingHandles.add(String(p.handle || '').toLowerCase());
       for (const v of p.variants || []) {
-        if (v.sku) existingSkus.add(String(v.sku).trim().toUpperCase());
+        if (v.sku) {
+          existingSkus.set(String(v.sku).trim().toUpperCase(), {
+            product_id: String(p.id || ''),
+            variant_id: String(v.id || ''),
+            inventory_item_id: String(v.inventory_item_id || '')
+          });
+        }
       }
     }
     const link = preResp.headers.get('link') || '';
@@ -1031,10 +1164,22 @@ async function syncAllToShopifyCoMaster() {
   for (const item of items) {
     try {
       const handle = item.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      if (
-        existingHandles.has(handle) ||
-        existingSkus.has(String(item.sku || '').toUpperCase())
-      ) {
+      const skuUpper = String(item.sku || '').toUpperCase();
+      const matchedExisting = existingSkus.get(skuUpper);
+      if (existingHandles.has(handle) || matchedExisting) {
+        if (matchedExisting && !item.shopify_product_id) {
+          db.prepare(`
+            UPDATE inventory_items
+            SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, updated_at = ?
+            WHERE id = ?
+          `).run(
+            matchedExisting.product_id,
+            matchedExisting.variant_id,
+            matchedExisting.inventory_item_id,
+            new Date().toISOString(),
+            item.id
+          );
+        }
         skippedProtected++;
         continue;
       }
@@ -1127,7 +1272,7 @@ async function syncAllToShopifyCoMaster() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': settings.shopify_admin_token
+          'X-Shopify-Access-Token': activeAccessToken
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(12000)
@@ -1139,7 +1284,19 @@ async function syncAllToShopifyCoMaster() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': settings.shopify_admin_token
+            'X-Shopify-Access-Token': activeAccessToken
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(12000)
+        });
+      } else if (resp.status === 401 && auth.authMode === 'client_credentials') {
+        const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+        activeAccessToken = refreshed.token;
+        resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': activeAccessToken
           },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(12000)
@@ -1152,8 +1309,13 @@ async function syncAllToShopifyCoMaster() {
       const data = await resp.json();
       if (data.product && data.product.id) {
         const primaryVar = data.product.variants?.[0] || {};
-        const cdnImages = (data.product.images || []).map((img) => img.src).filter(Boolean);
-        const nextPhotosJson = cdnImages.length > 0 ? JSON.stringify(cdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
+        // Multi-channel photo isolation: store ONLY clean part photo CDN URLs (never <SKU>.qr.png)
+        // in inventory_items.photos_json so Crosslist, eBay aabcas, Google Merchant XML, Meta CSV,
+        // and Craigslist stay 100% QR-free.
+        const cleanCdnImages = (data.product.images || [])
+          .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+          .map((img) => img.src);
+        const nextPhotosJson = cleanCdnImages.length > 0 ? JSON.stringify(cleanCdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
         db.prepare(`
           UPDATE inventory_items
           SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
@@ -1175,62 +1337,191 @@ async function syncAllToShopifyCoMaster() {
   }
 
   const finalCount = existingHandles.size + pushed;
-  logSync('outbound', 'shopify_co_master', 'live_api_push', 'ALL', errors.length ? 'partial' : 'success', `Created ${pushed} new single-variant products on ${domain} (${skippedProtected} existing SKUs untouched, ${errors.length} errors; total live=${finalCount}).`);
-  return { mode: 'live_api', synced_count: pushed, skipped_protected: skippedProtected, total_live_shopify_products: finalCount, errors };
+  logSync('outbound', 'shopify_co_master', 'live_api_push', 'ALL', errors.length ? 'partial' : 'success', `Created ${pushed} new single-variant products on ${domain} via ${auth.authMode} (${skippedProtected} existing SKUs untouched, ${errors.length} errors; total live=${finalCount}).`);
+  return { mode: 'live_api', auth_mode: auth.authMode, synced_count: pushed, skipped_protected: skippedProtected, total_live_shopify_products: finalCount, errors };
+}
+
+function markInventoryChannelDelisted(item, reason, extra = {}) {
+  let ch = {};
+  try {
+    ch = JSON.parse(item.channels_json || '{}');
+  } catch (_) {
+    ch = {};
+  }
+  const now = new Date().toISOString();
+  return JSON.stringify({
+    ...ch,
+    delisted_all_feeds: true,
+    delisted_at: now,
+    delist_reason: reason,
+    crosslist_delist_required: true,
+    ebay_delisted: true,
+    google_merchant_removed: true,
+    meta_catalog_removed: true,
+    craigslist_delisted: true,
+    ...extra
+  });
+}
+
+function findInventoryItemForWebhook({ sku, variantId, productId, inventoryItemId }) {
+  const cleanSku = String(sku || '').trim().replace(/-(SELFPULL|INSTALL)$/i, '');
+  if (cleanSku) {
+    const bySku = db.prepare('SELECT * FROM inventory_items WHERE UPPER(sku) = UPPER(?)').get(cleanSku);
+    if (bySku) return bySku;
+  }
+  if (variantId) {
+    const byVar = db.prepare('SELECT * FROM inventory_items WHERE shopify_variant_id = ?').get(String(variantId));
+    if (byVar) return byVar;
+  }
+  if (inventoryItemId) {
+    const byInv = db.prepare('SELECT * FROM inventory_items WHERE shopify_inventory_item_id = ?').get(String(inventoryItemId));
+    if (byInv) return byInv;
+  }
+  if (productId) {
+    const byProd = db.prepare('SELECT * FROM inventory_items WHERE shopify_product_id = ?').get(String(productId));
+    if (byProd) return byProd;
+  }
+  return null;
 }
 
 function handleShopifyWebhook(topic, rawBody, hmacHeader) {
   const settings = getSettings();
-  if (settings.shopify_webhook_secret && hmacHeader) {
+  const normalizedTopic = String(topic || 'orders/create').trim().toLowerCase();
+
+  if (settings.shopify_webhook_secret) {
+    if (!hmacHeader) {
+      const err = new Error('Missing Shopify webhook HMAC signature');
+      err.statusCode = 401;
+      throw err;
+    }
     const digest = crypto
       .createHmac('sha256', settings.shopify_webhook_secret)
       .update(rawBody, 'utf8')
       .digest('base64');
-    if (digest !== hmacHeader) {
-      throw new Error('Invalid Shopify webhook HMAC signature');
+    const a = Buffer.from(digest, 'utf8');
+    const b = Buffer.from(String(hmacHeader).trim(), 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      const err = new Error('Invalid Shopify webhook HMAC signature');
+      err.statusCode = 401;
+      throw err;
     }
   }
 
   const payload = JSON.parse(rawBody || '{}');
   const now = new Date().toISOString();
+  const updatedSkus = [];
+  const delistedSkus = [];
 
-  if (topic === 'orders/create' && Array.isArray(payload.line_items)) {
+  if ((normalizedTopic === 'orders/create' || normalizedTopic === 'orders/paid') && Array.isArray(payload.line_items)) {
     for (const li of payload.line_items) {
-      const baseSku = String(li.sku || '').replace(/-(SELFPULL|INSTALL)$/, '');
-      if (!baseSku) continue;
-      const item = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(baseSku);
-      if (item) {
-        const nextQty = Math.max(0, item.quantity - Number(li.quantity || 1));
-        const nextStatus = nextQty === 0 ? 'sold' : 'active';
-        db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, updated_at = ? WHERE id = ?').run(
-          nextQty, nextStatus, now, item.id
-        );
-        logSync('inbound', 'shopify_webhook', 'order_stock_decrement', baseSku, 'success', `Shopify Order #${payload.name || payload.id} decremented single-variant ${baseSku} to ${nextQty}. Queued zero-out across eBay/Feeds.`);
-      }
+      const item = findInventoryItemForWebhook({
+        sku: li.sku,
+        variantId: li.variant_id,
+        productId: li.product_id
+      });
+      if (!item) continue;
+      const qtyOrdered = Math.max(1, Number(li.quantity || 1));
+      const nextQty = Math.max(0, Number(item.quantity || 0) - qtyOrdered);
+      const nextStatus = nextQty === 0 ? 'sold' : 'active';
+      const nextChannels = nextQty === 0
+        ? markInventoryChannelDelisted(item, 'shopify_order_sold', { shopify_order: String(payload.name || payload.id || '') })
+        : (item.channels_json || '{}');
+
+      db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+        nextQty, nextStatus, nextChannels, now, item.id
+      );
+      updatedSkus.push(item.sku);
+      if (nextQty === 0) delistedSkus.push(item.sku);
+
+      logSync(
+        'inbound',
+        'shopify_webhook',
+        nextQty === 0 ? 'order_sold_auto_delist_all_feeds' : 'order_stock_decrement',
+        item.sku,
+        'success',
+        `Shopify Order #${payload.name || payload.id || 'N/A'} set single-variant ${item.sku} qty=${nextQty} (status=${nextStatus}). Auto-delisted from Crosslist, eBay aabcas, Google Merchant XML, Meta CSV & Craigslist queue.`
+      );
     }
-  } else if (topic === 'products/update' && Array.isArray(payload.variants)) {
+  } else if (normalizedTopic === 'products/update' && Array.isArray(payload.variants)) {
+    const shopifyStatus = String(payload.status || 'active').toLowerCase();
+    const isArchivedOrDraft = shopifyStatus === 'archived' || shopifyStatus === 'draft';
+
     for (const v of payload.variants) {
-      const baseSku = String(v.sku || '').replace(/-(SELFPULL|INSTALL)$/, '');
-      if (!baseSku || String(v.sku || '').endsWith('-SELFPULL') || String(v.sku || '').endsWith('-INSTALL')) continue;
-      const item = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(baseSku);
-      if (item && v.inventory_quantity !== undefined) {
-        const nextQty = Math.max(0, Number(v.inventory_quantity));
-        db.prepare('UPDATE inventory_items SET quantity = ?, price_we_pull = COALESCE(?, price_we_pull), status = ?, updated_at = ? WHERE id = ?').run(
-          nextQty, parseFloat(v.price) || item.price_we_pull, nextQty === 0 ? 'sold' : 'active', now, item.id
-        );
-        logSync('inbound', 'shopify_webhook', 'co_master_product_sync', baseSku, 'success', `Co-Master sync updated ${baseSku} qty=${nextQty}, price=$${v.price}`);
+      if (String(v.sku || '').endsWith('-SELFPULL') || String(v.sku || '').endsWith('-INSTALL')) continue;
+      const item = findInventoryItemForWebhook({
+        sku: v.sku,
+        variantId: v.id,
+        productId: payload.id,
+        inventoryItemId: v.inventory_item_id
+      });
+      if (!item) continue;
+
+      const hasInvField = v.inventory_quantity !== undefined && v.inventory_quantity !== null;
+      const rawQty = hasInvField ? Math.max(0, Number(v.inventory_quantity)) : Number(item.quantity || 0);
+      const nextQty = isArchivedOrDraft ? 0 : rawQty;
+      const nextStatus = nextQty === 0 ? (isArchivedOrDraft && rawQty > 0 ? 'inactive' : 'sold') : 'active';
+      const nextPrice = Number.isFinite(parseFloat(v.price)) && parseFloat(v.price) > 0 ? parseFloat(v.price) : item.price_we_pull;
+
+      let nextChannels = item.channels_json || '{}';
+      if (nextQty === 0) {
+        nextChannels = markInventoryChannelDelisted(item, isArchivedOrDraft ? `shopify_${shopifyStatus}` : 'shopify_zero_inventory');
+        delistedSkus.push(item.sku);
+      } else {
+        try {
+          const ch = JSON.parse(nextChannels);
+          ch.delisted_all_feeds = false;
+          ch.crosslist_delist_required = false;
+          nextChannels = JSON.stringify(ch);
+        } catch (_) {}
       }
+
+      db.prepare(`
+        UPDATE inventory_items
+        SET quantity = ?, price_we_pull = ?, status = ?, channels_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextQty, nextPrice, nextStatus, nextChannels, now, item.id);
+      updatedSkus.push(item.sku);
+
+      logSync(
+        'inbound',
+        'shopify_webhook',
+        nextQty === 0 ? 'product_update_auto_delist_all_feeds' : 'co_master_product_sync',
+        item.sku,
+        'success',
+        `Shopify products/update synced ${item.sku}: qty=${nextQty}, status=${nextStatus}, price=$${nextPrice}${nextQty === 0 ? ' — auto-delisted across Crosslist, eBay aabcas, Google Merchant XML, Meta CSV & Craigslist.' : '.'}`
+      );
+    }
+  } else if (normalizedTopic === 'inventory_levels/update' && payload.inventory_item_id !== undefined) {
+    const item = findInventoryItemForWebhook({ inventoryItemId: payload.inventory_item_id });
+    if (item && payload.available !== undefined && payload.available !== null) {
+      const nextQty = Math.max(0, Number(payload.available));
+      const nextStatus = nextQty === 0 ? 'sold' : 'active';
+      const nextChannels = nextQty === 0
+        ? markInventoryChannelDelisted(item, 'shopify_inventory_zero')
+        : (item.channels_json || '{}');
+      db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+        nextQty, nextStatus, nextChannels, now, item.id
+      );
+      updatedSkus.push(item.sku);
+      if (nextQty === 0) delistedSkus.push(item.sku);
+      logSync('inbound', 'shopify_webhook', 'inventory_level_sync', item.sku, 'success', `Shopify inventory_levels/update set ${item.sku} qty=${nextQty} (status=${nextStatus}).`);
     }
   }
 
-  return { ok: true, topic };
+  return {
+    ok: true,
+    topic: normalizedTopic,
+    updated_count: updatedSkus.length,
+    updated_skus: updatedSkus,
+    delisted_count: delistedSkus.length,
+    delisted_skus: delistedSkus
+  };
 }
 
 async function pushSingleItemToShopify(item, settings, uploadsDir) {
   const cfg = settings || getSettings();
-  const domain = (cfg.shopify_domain || 'aldridgesales.myshopify.com')
-    .replace(/^https?:\/\//, '')
-    .replace(/\/+$/, '');
+  const auth = await resolveShopifyAccessToken(cfg);
+  const domain = auth.shopDomain;
 
   if (!hasRealPhotos(item)) {
     return {
@@ -1240,13 +1531,15 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
     };
   }
 
-  if (!cfg.shopify_admin_token) {
+  if (!auth.token || auth.authMode === 'shpss_missing_client_id') {
     return {
       pushed: false,
       queued_for_shopify: true,
       queued_for_ebay: true,
       shopify_domain: domain,
-      reason: 'Awaiting SHOPIFY_ADMIN_TOKEN in Settings Vault or cloud env vars'
+      reason: auth.authMode === 'shpss_missing_client_id'
+        ? 'SHOPIFY_ADMIN_TOKEN starts with shpss_ but SHOPIFY_CLIENT_ID is missing'
+        : 'Awaiting SHOPIFY_ADMIN_TOKEN in Settings Vault or cloud env vars'
     };
   }
 
@@ -1350,15 +1643,30 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   };
 
   const endpoint = `https://${domain}/admin/api/2025-01/products.json`;
-  const resp = await fetch(endpoint, {
+  let activeAccessToken = auth.token;
+  let resp = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': cfg.shopify_admin_token
+      'X-Shopify-Access-Token': activeAccessToken
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15000)
   });
+
+  if (resp.status === 401 && auth.authMode === 'client_credentials') {
+    const refreshed = await resolveShopifyAccessToken(cfg, { forceRefresh: true });
+    activeAccessToken = refreshed.token;
+    resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': activeAccessToken
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000)
+    });
+  }
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
@@ -1375,8 +1683,10 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   const data = await resp.json();
   if (data.product && data.product.id) {
     const primaryVar = data.product.variants?.[0] || {};
-    const cdnImages = (data.product.images || []).map((img) => img.src).filter(Boolean);
-    const nextPhotosJson = cdnImages.length > 0 ? JSON.stringify(cdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
+    const cleanCdnImages = (data.product.images || [])
+      .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+      .map((img) => img.src);
+    const nextPhotosJson = cleanCdnImages.length > 0 ? JSON.stringify(cleanCdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
     db.prepare(`
       UPDATE inventory_items
       SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
@@ -1389,13 +1699,13 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
       new Date().toISOString(),
       item.id
     );
-    logSync('outbound', 'shopify_direct_camera', 'auto_publish_live', item.sku, 'success', `Published single-variant ${item.sku} directly to https://${domain}/products/${data.product.handle} (Product ID ${data.product.id}, ${cdnImages.length} CDN images incl. final QR App Card; clean photos preserved for eBay/Google).`);
+    logSync('outbound', 'shopify_direct_camera', 'auto_publish_live', item.sku, 'success', `Published single-variant ${item.sku} directly to https://${domain}/products/${data.product.handle} (Product ID ${data.product.id}, ${cleanCdnImages.length} clean CDN images; QR card isolated to Shopify only).`);
     return {
       pushed: true,
       shopify_domain: domain,
       shopify_product_id: String(data.product.id),
       shopify_url: `https://${domain}/products/${data.product.handle}`,
-      cdn_photos: cdnImages,
+      cdn_photos: cleanCdnImages,
       queued_for_ebay: true
     };
   }
@@ -1421,6 +1731,7 @@ module.exports = {
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
+  resolveShopifyAccessToken,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook

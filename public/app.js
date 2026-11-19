@@ -837,13 +837,13 @@ function renderSyncAndChecklists() {
           <div class="eyebrow-label">CLEAN CATALOG POLICY • REAL PHOTOS REQUIRED • SINGLE VARIANT ONLY</div>
           <h3 style="margin:0.15rem 0 0.35rem;">Live Action Console (Shopify <code>${esc(settings.shopify_domain || 'aldridgesales.myshopify.com')}</code> • eBay <code>AABCAS</code> • Meta <code>C#26046204</code>)</h3>
           <p style="margin:0;font-size:0.83rem;color:var(--text-secondary);">
-            <strong>1) Shopify <code>aldridgesales.myshopify.com</code>:</strong> ${totalActive} verified photo SKUs (<code>ALD-OH-001</code>..<code>057</code>) staged with <strong>1 Single Variant (<code>1 in stock</code>)</strong> + Shop Install callout &amp; website/PWA links in description HTML.
-            <strong>2) eBay <code>AABCAS</code>:</strong> 100% policy-compliant descriptions (zero off-eBay URLs, domains, or phone numbers).
-            <strong>3) Meta <code>C#26046204</code>:</strong> Send WA AG <code>#730525</code> reply below for Personal Marketplace restoration.
+            <strong>1) Shopify <code>${esc(settings.shopify_domain || 'aldridgesales.myshopify.com')}</code>:</strong> ${totalActive} verified photo SKUs staged/synced with <strong>1 Single Variant (<code>1 in stock</code>)</strong> + Shop Install callout &amp; website/PWA links in description HTML + <code>&lt;SKU&gt;.qr.png</code> isolated to Shopify only.
+            <strong>2) Crosslist &amp; eBay <code>AABCAS</code>:</strong> 100% clean non-QR part photos &amp; policy-compliant descriptions (zero off-eBay URLs, domains, or phone numbers).
+            <strong>3) Shopify Webhook Auto-Delist:</strong> <code>/api/webhooks/shopify</code> auto-zeros sold 1-in-stock SKUs across all feeds immediately.
           </p>
         </div>
         <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:265px;">
-          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Open Clean 57-SKU Sync &amp; Ad Center</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Open Live ${totalActive}-SKU Sync &amp; Ad Center</button>
           <a href="${esc(feeds.shopify_csv)}" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Clean ${totalActive}-SKU Single-Variant Shopify CSV</a>
           <button type="button" class="btn btn-dark btn-sm" onclick="copyWaAgMetaEmail()">Copy WA AG / Meta C#26046204 Email Draft</button>
         </div>
@@ -852,10 +852,22 @@ function renderSyncAndChecklists() {
         <span class="badge badge-ok">Verified Photo SKUs: ${totalActive} (1 Variant Only)</span>
         <span class="badge badge-ok">Parcel (&lt;70 lb): ${parcelActive}</span>
         <span class="badge badge-warn">Local Pickup 98467: ${localActive}</span>
-        <span class="badge badge-ok">Shop Install Pricing: In Description HTML</span>
+        <span class="badge badge-ok">QR Card Isolated: Shopify Only</span>
         <span class="badge badge-ok">eBay Off-Site Links: 0 (100% Compliant)</span>
-        <span class="badge badge-err">Crosslist: NEVER CONNECT TO EBAY</span>
+        <span class="badge badge-ok">Shopify Webhook Auto-Delist: Armed</span>
       </div>
+    `;
+  }
+
+  const clBadges = document.getElementById('crosslist-auto-sync-badges');
+  if (clBadges) {
+    const soldCount = (state.inventory || []).filter((i) => i.status === 'sold' || Number(i.quantity || 0) <= 0).length;
+    const clPostedCount = (state.inventory || []).filter((i) => i.status === 'active' && Number(i.quantity || 0) > 0 && i.channels?.craigslist_posted).length;
+    clBadges.innerHTML = `
+      <span class="badge badge-ok">Crosslist Ready: ${totalActive} Single-Variant SKUs (Qty=1)</span>
+      <span class="badge badge-ok">QR Cards Excluded: Crosslist • eBay • Google • Meta • CL</span>
+      <span class="badge badge-ok">Sold/Auto-Delisted Excluded: ${soldCount}</span>
+      <span class="badge badge-warn">Craigslist Tacoma pts ($0 • 98467): ${totalActive - clPostedCount} Remaining (${clPostedCount} Posted)</span>
     `;
   }
 
@@ -3494,4 +3506,95 @@ function bindReviewGalleryEvents() {
     }
   });
 }
+
+async function runCrosslistAutoSyncUi() {
+  const btn = document.getElementById('btn-crosslist-auto-sync');
+  const box = document.getElementById('crosslist-auto-sync-result');
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Syncing Crosslist & Verifying QR Photo Isolation...';
+  }
+  try {
+    const res = await fetch('/api/sync/crosslist-auto-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ push_shopify: false })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `
+        <div style="font-weight:700;color:#15803d;margin-bottom:0.4rem;">
+          ✅ Crosslist Auto-Sync Complete — ${data.ready_skus} Active Single-Variant OEM SKUs Ready (${data.sold_delisted_skus} Sold/Delisted Excluded • ${data.qr_leak_count} QR Cards Leaked)
+        </div>
+        <div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;">
+          <a href="${esc(data.crosslist_csv_url || '/api/exports/crosslist.csv')}" download="aldridge_crosslist_ebay_offerup_fb_sync.csv" class="btn btn-primary btn-sm">⬇ Crosslist CSV (eBay aabcas + OfferUp + FB)</a>
+          <a href="${esc(data.ebay_us_csv_url || '/api/exports/ebay_us.csv')}" download="aldridge_ebay_us_aabcas.csv" class="btn btn-outline btn-sm">⬇ eBay US aabcas CSV</a>
+          <a href="${esc(data.craigslist_csv_url || '/api/exports/craigslist.csv')}" download="aldridge_craigslist_tacoma_98467_pts.csv" class="btn btn-outline btn-sm">⬇ Craigslist Tacoma pts CSV</a>
+          <button type="button" class="btn btn-outline btn-sm" onclick="copyFeedUrl('${esc(data.google_merchant_xml_url)}')">📋 Google Merchant XML</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="copyFeedUrl('${esc(data.meta_catalog_csv_url)}')">📋 Meta Catalog CSV</button>
+        </div>
+      `;
+    }
+    // Trigger automatic download of the freshly verified Crosslist CSV
+    const a = document.createElement('a');
+    a.href = data.crosslist_csv_url || '/api/exports/crosslist.csv';
+    a.download = 'aldridge_crosslist_ebay_offerup_fb_sync.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    if (typeof loadBootstrap === 'function') {
+      await loadBootstrap();
+    }
+    if (typeof showToast === 'function') {
+      showToast(`Crosslist Auto-Sync verified ${data.ready_skus} SKUs (0 QR cards leaked) — CSV downloaded!`);
+    }
+  } catch (err) {
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `<span style="color:#b91c1c;font-weight:700;">❌ Crosslist Auto-Sync Error: ${esc(err.message || String(err))}</span>`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origLabel || '⚡ Run 1-Click Crosslist Auto-Sync & Download CSV';
+    }
+  }
+}
+
+async function launchNextCraigslistQueueItemUi() {
+  const box = document.getElementById('crosslist-auto-sync-result');
+  try {
+    const res = await fetch('/api/craigslist/queue');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const nextItem = (data.queue || []).find((q) => !q.posted_craigslist) || (data.queue || [])[0];
+    if (!nextItem) {
+      if (box) {
+        box.style.display = 'block';
+        box.innerHTML = '<strong>All active SKUs have already been posted to Craigslist Tacoma pts!</strong>';
+      }
+      return;
+    }
+    window.open(nextItem.launch_url, '_blank', 'noopener');
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `
+        <strong>🚗 Opened Craigslist Tacoma pts ($0 • ZIP 98467) for <code>${esc(nextItem.sku)}</code> — ${esc(nextItem.title)} ($${nextItem.price})</strong><br/>
+        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code></a> is active in Tampermonkey/Violentmonkey.</span>
+      `;
+    }
+  } catch (err) {
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `<span style="color:#b91c1c;font-weight:700;">❌ Craigslist Queue Error: ${esc(err.message || String(err))}</span>`;
+    }
+  }
+}
+
 
