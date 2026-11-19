@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=12" />
+  <link rel="stylesheet" href="/styles.css?v=13" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -733,6 +733,7 @@
               <h3 style="margin:0;font-size:1.1rem;">Visual In-Stock vs. Sold/Disposed Review Gallery</h3>
             </div>
             <div class="review-top-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-review-run-keep-intake">🚀 Run AI Intake &amp; Publish All KEEP Items</button>
               <a id="review-master-drive-link" href="https://drive.google.com/drive/folders/1GU119_1CurzYNq1vnQXO3e3po4tp1sz4" target="_blank" rel="noopener" class="btn btn-outline btn-sm">📁 Open Sorted Drive Library ↗</a>
               <button type="button" class="btn btn-outline btn-sm" id="btn-review-undo" disabled>↶ Undo</button>
               <a href="/api/review-photos/export.csv?status=keep" download class="btn btn-outline btn-sm">⬇ Export KEEP CSV</a>
@@ -740,6 +741,8 @@
               <a href="/api/review-photos/export.json" download class="btn btn-dark btn-sm">⬇ Backup JSON</a>
             </div>
           </div>
+
+          <div id="review-keep-intake-result" class="keep-intake-result-box" style="display:none;"></div>
 
           <!-- Progress Stats Strip -->
           <div class="review-stats-row" id="review-stats-row">
@@ -1017,15 +1020,18 @@
                 Every part routes strictly to <strong>Standard eBay US (<code>ebay.com</code> <code>SiteID=US</code> — never eBay Motors)</strong>, maps exact <strong>Shopify + Google Merchant + eBay US categories &amp; metafields</strong> (<code>custom_label_0</code> YMM, <code>custom_label_1</code> Pickup vs Parcel), exposes clean single-variant stock &amp; carrier dimensions to <strong>Crosslist (OfferUp + Personal FB Marketplace auto-delist)</strong>, attaches <code>&lt;SKU&gt;.qr.png</code> as the final Shopify image, and queues 1-click auto-fill for <strong>Seattle/Tacoma Craigslist <code>pts</code> ($0 fee, ZIP <code>98467</code>)</strong>.
               </p>
               <div style="display:flex;gap:0.55rem;flex-wrap:wrap;align-items:center;">
-                <a href="/craigslist-autofill.user.js" target="_blank" class="btn btn-primary btn-sm">⚡ Install Craigslist Tacoma Auto-Fill Script ($0 pts • ZIP 98467)</a>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-inv-run-keep-intake">🚀 Run AI Intake &amp; Publish All KEEP Items</button>
+                <a href="/craigslist-autofill.user.js" target="_blank" class="btn btn-outline btn-sm">⚡ Install Craigslist Tacoma Auto-Fill Script ($0 pts • ZIP 98467)</a>
                 <button type="button" class="btn btn-dark btn-sm" id="btn-batch-generate-qr-cards">📲 1-Click Regenerate QR App Cards</button>
               </div>
+              <div id="inv-keep-intake-result" class="keep-intake-result-box" style="display:none;"></div>
               <div id="qr-batch-status" style="display:none;margin-top:0.65rem;padding:0.65rem 0.8rem;border-radius:6px;background:var(--status-ok-bg);color:var(--status-ok-fg);font-size:0.81rem;"></div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:275px;">
+            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:285px;">
               <a href="/api/exports/shopify.csv" download="aldridge_clean_single_variant_shopify_with_qr.csv" class="btn btn-primary btn-sm" style="text-align:center;">⬇ Clean Shopify CSV (+ Taxonomy &amp; Final QR)</a>
+              <a href="/api/exports/crosslist.csv" download="aldridge_crosslist_ebay_offerup_fb_sync.csv" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Crosslist CSV (eBay aabcas + OfferUp + FB Marketplace)</a>
+              <a href="/api/exports/craigslist.csv" download="aldridge_craigslist_tacoma_98467_pts.csv" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Craigslist CSV (Tacoma pts • $0 Fee • ZIP 98467)</a>
               <a href="/api/exports/ebay_us.csv" download="aldridge_standard_ebay_us_aabcas.csv" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Standard eBay US CSV (ebay.com • Clean Photos)</a>
-              <a href="/api/exports/crosslist.csv" download="aldridge_crosslist_offerup_fb_sync.csv" class="btn btn-outline btn-sm" style="text-align:center;">⬇ Crosslist CSV (OfferUp + Personal FB Sync)</a>
             </div>
           </div>
           <div id="audit-sanitize-status" style="font-size:0.81rem;color:var(--status-ok-fg);margin-top:0.5rem;"></div>
@@ -1666,6 +1672,6 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=12"></script>
+  <script src="/app.js?v=13"></script>
 </body>
 </html>

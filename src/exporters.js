@@ -837,12 +837,13 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
 function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo') {
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
-    ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Return_Policy', 'Zip Code', 'Image 1', 'Internal Notes']
+    ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Year', 'Make', 'Model', 'eBay_US_Category_ID', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Return_Policy', 'Zip Code', 'Shop_Install_Price_98467', 'Image 1', 'Additional_Images', 'Internal Notes']
     : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Local_Pickup_Location', 'Return_Policy', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
 
   const rows = [headers.join(',')];
   for (const item of items) {
     if (!isMarketplaceSafeItem(item)) continue;
+    const tax = resolvePartTaxonomyAndMetafields(item, settings);
     const photos = getValidPhotos(item);
     const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
@@ -856,19 +857,21 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
     const returnPolicy = 'Returns Not Accepted (Defect-Only)';
     const basePrice = Number(item.price_we_pull || 0).toFixed(2);
     const { installTotal } = computeInstallEstimate(item, settings);
-    // Compliant marketplace description (includes Certified Shop Install price, zero external URLs/phones so Vendoo channels stay safe)
-    const compliantDesc = `${stripOffEbayContactText(item.title)} | MPN: ${mpnOut} | Single-Unit OEM Part (1 in stock) | Spec: ${item.weight_lbs} lbs (${formatDimensionsIn(item)} in) | Optional Certified Shop Bay Installation in University Place, WA 98467: ~$${installTotal.toFixed(2)} turnkey installed | ${shippingPolicy} | ${returnPolicy} | Security ID: ${item.security_mark_code}`;
+    // Compliant marketplace description (includes Certified Shop Install price at 5115 66th St W Bldg B, zero external URLs/phones so eBay aabcas + OfferUp + FB Marketplace channels stay safe)
+    const compliantDesc = `${stripOffEbayContactText(item.title)} | MPN: ${mpnOut} | Single-Unit OEM Part (1 in stock) | Fits: ${tax.customLabel0} | Spec: ${item.weight_lbs} lbs (${formatDimensionsIn(item)} in) | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: ~$${installTotal.toFixed(2)} turnkey installed | ${shippingPolicy} | ${returnPolicy} | Security ID: ${item.security_mark_code}`;
 
     if (mode === 'crosslist') {
       rows.push([
-        item.sku, item.title, compliantDesc, item.brand || 'OEM', mpnOut, condOut,
-        basePrice, 1, item.weight_lbs, item.length_in, item.width_in, item.height_in,
+        item.sku, item.title, compliantDesc, tax.brand || item.brand || 'OEM', mpnOut, condOut,
+        basePrice, 1, item.fitment_years || '', item.fitment_make || '', item.fitment_model || '',
+        tax.ebayUsCategoryId, item.weight_lbs, item.length_in, item.width_in, item.height_in,
         shippingPolicy, returnPolicy,
-        settings.zip || '98467', imgUrl, `SINGLE_VARIANT_ONLY | Bin: ${item.bin_location} | Security: ${item.security_mark_code}`
+        settings.zip || '98467', installTotal.toFixed(2), imgUrl, extraImgs,
+        `SINGLE_VARIANT_ONLY | eBay aabcas + OfferUp + FB Marketplace | Bin: ${item.bin_location} | Security: ${item.security_mark_code}`
       ].map(csvEscape).join(','));
     } else {
       rows.push([
-        item.sku, item.title, compliantDesc, item.brand || 'OEM', mpnOut, condOut,
+        item.sku, item.title, compliantDesc, tax.brand || item.brand || 'OEM', mpnOut, condOut,
         basePrice, Number(item.cost_basis || 0).toFixed(2), 1,
         item.weight_lbs, item.length_in, item.width_in, item.height_in,
         shippingPolicy,
@@ -880,6 +883,50 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
         `1-Variant Only | Shop Install Est: $${installTotal.toFixed(2)} | Bin: ${item.bin_location} | Security: ${item.security_mark_code}`
       ].map(csvEscape).join(','));
     }
+  }
+  return rows.join('\n') + '\n';
+}
+
+function generateCraigslistCsv(items, settings, baseUrl) {
+  const headers = [
+    'SKU', 'Posting_Title', 'Price_USD', 'Category', 'Area_Subarea', 'Postal_Code',
+    'Condition', 'Make_Model', 'OEM_Part_Number', 'Shipping_Or_Pickup',
+    'Turnkey_Bay_Install_Price_98467', 'Posting_Body', 'Primary_Image_URL',
+    'Additional_Image_URLs', 'Direct_Storefront_URL'
+  ];
+  const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
+  const rows = [headers.join(',')];
+  for (const item of items) {
+    if (!isMarketplaceSafeItem(item)) continue;
+    const photos = getValidPhotos(item);
+    const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
+    const primaryImg = photos[0] ? resolvePhoto(photos[0]) : '';
+    const extraImgs = photos.slice(1).map(resolvePhoto).join('|');
+    const mpnOut = resolveExportMpn(item.oem_part_number);
+    const condOut = normalizeExportCondition(item.condition);
+    const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+    const { installTotal } = computeInstallEstimate(item, settings);
+    const ymm = [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim() || 'OEM Auto Part';
+    const postTitle = `${cleanListingTitle(item.title)} — ${heavyPickupOnly ? 'University Place 98467 Pickup' : '98467 Pickup or Ship'}`.slice(0, 70);
+    const body = renderLocalMarketplacePacket(item, settings, baseUrl);
+
+    rows.push([
+      item.sku,
+      postTitle,
+      Math.round(Number(item.price_we_pull || 0)),
+      'auto parts - by owner (pts)',
+      'seattle.craigslist.org > tac (Tacoma / Pierce County)',
+      settings.zip || '98467',
+      condOut === 'New' ? 'new' : 'good',
+      ymm,
+      mpnOut,
+      heavyPickupOnly ? 'Local Pickup Only — 5115 66th St W, Bldg B, University Place, WA 98467' : 'Free Counter Pickup 98467 or Calculated Parcel Shipping',
+      installTotal.toFixed(2),
+      body,
+      primaryImg,
+      extraImgs,
+      `${pwaUrl}/?sku=${encodeURIComponent(item.sku)}`
+    ].map(csvEscape).join(','));
   }
   return rows.join('\n') + '\n';
 }
@@ -1025,6 +1072,7 @@ async function syncAllToShopifyCoMaster() {
       ];
 
       const uploadsDir = path.join(DATA_DIR, 'uploads');
+      const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
       const rawPhotos = getShopifyGalleryPhotos(item, settings, uploadsDir);
       const images = rawPhotos.map((u, idx) => {
         const altText = isQrCardUrl(u)
@@ -1036,6 +1084,17 @@ async function syncAllToShopifyCoMaster() {
             return {
               attachment: fs.readFileSync(localFile).toString('base64'),
               filename: path.basename(localFile),
+              position: idx + 1,
+              alt: altText
+            };
+          }
+        }
+        if (u.startsWith('/review-thumbs/')) {
+          const localThumb = path.join(reviewThumbsDir, path.basename(u));
+          if (fs.existsSync(localThumb)) {
+            return {
+              attachment: fs.readFileSync(localThumb).toString('base64'),
+              filename: `${item.sku}.${idx + 1}.jpg`,
               position: idx + 1,
               alt: altText
             };
@@ -1093,14 +1152,17 @@ async function syncAllToShopifyCoMaster() {
       const data = await resp.json();
       if (data.product && data.product.id) {
         const primaryVar = data.product.variants?.[0] || {};
+        const cdnImages = (data.product.images || []).map((img) => img.src).filter(Boolean);
+        const nextPhotosJson = cdnImages.length > 0 ? JSON.stringify(cdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
         db.prepare(`
           UPDATE inventory_items
-          SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, updated_at = ?
+          SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
           WHERE id = ?
         `).run(
           String(data.product.id),
           String(primaryVar.id || ''),
           String(primaryVar.inventory_item_id || ''),
+          nextPhotosJson,
           new Date().toISOString(),
           item.id
         );
@@ -1225,6 +1287,7 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   ];
 
   const targetDir = uploadsDir || path.join(DATA_DIR, 'uploads');
+  const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
   const rawPhotos = getShopifyGalleryPhotos(item, cfg, targetDir);
   const images = [];
   let pos = 1;
@@ -1248,6 +1311,16 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
         images.push({
           attachment: fs.readFileSync(localFile).toString('base64'),
           filename: path.basename(localFile),
+          position: pos++,
+          alt: altText
+        });
+      }
+    } else if (str.startsWith('/review-thumbs/')) {
+      const localThumb = path.join(reviewThumbsDir, path.basename(str));
+      if (fs.existsSync(localThumb)) {
+        images.push({
+          attachment: fs.readFileSync(localThumb).toString('base64'),
+          filename: `${item.sku}.${pos}.jpg`,
           position: pos++,
           alt: altText
         });
@@ -1344,6 +1417,7 @@ module.exports = {
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
+  generateCraigslistCsv,
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,

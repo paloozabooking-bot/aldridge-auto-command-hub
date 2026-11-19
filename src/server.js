@@ -29,6 +29,7 @@ const {
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
+  generateCraigslistCsv,
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
@@ -36,6 +37,7 @@ const {
   pushSingleItemToShopify,
   handleShopifyWebhook
 } = require('./exporters');
+const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
 const {
   decodeVin,
   analyzePartIntake,
@@ -216,7 +218,7 @@ function hydrateInventoryItem(row, donorMap = null) {
   if (!row) return null;
   let donor = null;
   if (row.donor_vehicle_id) {
-    donor = donorMap
+    donor = donorMap instanceof Map
       ? (donorMap.get(row.donor_vehicle_id) || null)
       : db.prepare('SELECT stock_number, vin, year, make, model, mileage, yard_row FROM donor_vehicles WHERE id = ?').get(row.donor_vehicle_id);
   }
@@ -464,9 +466,11 @@ const server = http.createServer(async (req, res) => {
           google_merchant_xml: `${baseUrl}/api/feeds/google-merchant.xml`,
           meta_catalog_csv: `${baseUrl}/api/feeds/meta-catalog.csv`,
           shopify_csv: `${baseUrl}/api/exports/shopify.csv`,
+          ebay_us_csv: `${baseUrl}/api/exports/ebay_us.csv`,
           ebay_motors_csv: `${baseUrl}/api/exports/ebay_motors.csv`,
           vendoo_csv: `${baseUrl}/api/exports/vendoo.csv`,
           crosslist_csv: `${baseUrl}/api/exports/crosslist.csv`,
+          craigslist_csv: `${baseUrl}/api/exports/craigslist.csv`,
           tiktok_shop_csv: `${baseUrl}/api/exports/tiktok_shop.csv`,
           master_import_template_csv: `${baseUrl}/api/templates/master-import.csv`,
           shopify_webhook_endpoint: `${baseUrl}/api/webhooks/shopify`
@@ -589,7 +593,8 @@ const server = http.createServer(async (req, res) => {
 
     // Automated Craigslist Tacoma/Pierce County (pts — $0 Auto Parts, ZIP 98467) Bulk Queue & Auto-Fill Endpoints
     if (method === 'GET' && pathname === '/api/craigslist/queue') {
-      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC").all().map(hydrateInventoryItem);
+      const donorMap = buildDonorMap();
+      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
       const queue = rows.map((i) => ({
         sku: i.sku,
         title: i.title,
@@ -790,7 +795,8 @@ const server = http.createServer(async (req, res) => {
     // Inventory CRUD
     if (pathname === '/api/inventory') {
       if (method === 'GET') {
-        const rows = db.prepare('SELECT * FROM inventory_items ORDER BY id DESC').all().map(hydrateInventoryItem);
+        const donorMap = buildDonorMap();
+        const rows = db.prepare('SELECT * FROM inventory_items ORDER BY id DESC').all().map((r) => hydrateInventoryItem(r, donorMap));
         sendJson(res, 200, rows);
         return;
       }
@@ -1056,7 +1062,8 @@ const server = http.createServer(async (req, res) => {
       '/api/exports/ebay_us.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/ebay_motors.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/vendoo.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'vendoo'), file: 'vendoo-bulk-import.csv' },
-      '/api/exports/crosslist.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'crosslist'), file: 'crosslist-offerup-fb-import.csv' },
+      '/api/exports/crosslist.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'crosslist'), file: 'crosslist-ebay-offerup-fb-import.csv' },
+      '/api/exports/craigslist.csv': { fn: (i, s, u) => generateCraigslistCsv(i, s, u), file: 'craigslist-tacoma-98467-pts.csv' },
       '/api/exports/tiktok_shop.csv': { fn: (i, s, u) => generateTiktokShopCsv(i, s, u), file: 'tiktok-shop-bulk.csv' },
       '/api/exports/car_part_hollander.csv': { fn: (i) => generateCarPartHollanderCsv(i), file: 'car-part-hollander-interchange.csv' }
     };
@@ -1766,6 +1773,33 @@ const server = http.createServer(async (req, res) => {
         checked_pending: result.checked_pending,
         summary: getPhotoReviewSummary()
       });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/review-photos/intake-keep-batch') {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const raw = await readRawBody(req);
+      let b = {};
+      try {
+        b = JSON.parse(raw || '{}');
+      } catch (_) {}
+      const patch = {};
+      if (b.shopify_admin_token && String(b.shopify_admin_token).trim()) {
+        patch.shopify_admin_token = String(b.shopify_admin_token).trim();
+      }
+      if (b.shopify_domain && String(b.shopify_domain).trim()) {
+        patch.shopify_domain = String(b.shopify_domain).trim();
+      }
+      if (Object.keys(patch).length > 0) {
+        updateSettings(patch);
+      }
+      const pushShopify = b.push_shopify !== false;
+      const result = await runKeepBatchIntakeAndPublish({
+        pushShopify,
+        baseUrl,
+        uploadsDir: UPLOADS_DIR
+      });
+      sendJson(res, 200, result);
       return;
     }
 

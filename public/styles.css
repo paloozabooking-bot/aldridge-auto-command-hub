@@ -1642,4 +1642,30 @@ button, input, select, textarea {
   }
 }
 
+.keep-intake-result-box {
+  margin-top: 0.7rem;
+  margin-bottom: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  background: #f0fdf4;
+  border: 1.5px solid #16a34a;
+  color: #14532d;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.keep-intake-result-box.is-warn {
+  background: #fffbeb;
+  border-color: #d97706;
+  color: #78350f;
+}
+
+.keep-intake-exports-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+
 
