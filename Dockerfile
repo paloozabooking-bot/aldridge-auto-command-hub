@@ -4,6 +4,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=8080
+ENV CANONICAL_DOMAIN=https://aldridgeautosupply.com
+ENV PUBLIC_PWA_URL=https://aldridgeautosupply.com
 ENV SHOPIFY_DOMAIN=aldridgesales.myshopify.com
 
 COPY package*.json ./

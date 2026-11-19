@@ -120,10 +120,15 @@ function renderAll() {
   const activeItems = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
   document.getElementById('hero-stock-count').textContent = `${activeItems.length} Active SKUs Synced`;
 
-  // Update SEO JSON-LD @graph dynamically
+  // Update canonical link, og:url & SEO JSON-LD @graph dynamically
+  const canonBase = getCanonicalBaseUrl(settings);
+  const canonicalEl = document.querySelector('link[rel="canonical"]');
+  if (canonicalEl) canonicalEl.setAttribute('href', `${canonBase}/`);
+  const ogUrlEl = document.querySelector('meta[property="og:url"]');
+  if (ogUrlEl) ogUrlEl.setAttribute('content', `${canonBase}/`);
+
   const seoEl = document.getElementById('seo-json-ld');
   if (seoEl) {
-    const canonBase = `https://${settings.shopify_domain || 'aldridgesales.myshopify.com'}`;
     seoEl.textContent = JSON.stringify({
       '@context': 'https://schema.org',
       '@graph': [
@@ -134,6 +139,8 @@ function renderAll() {
           alternateName: settings.google_listing_name || "Aldridge Auto's",
           description: `${settings.business_name} in University Place / Tacoma, WA: 5.0-star auto repair & diagnostics, ${activeItems.length} tested Used OEM auto parts (Calculated Parcel Shipping, Free 98467 Counter Pickup & Certified Shop Bay Installation), and Authorized U-Haul Neighborhood Dealer #${settings.uhaul_dealer_id || '046117'}.`,
           url: `${canonBase}/`,
+          image: `${canonBase}/assets/aldridge-shop-hero.jpg`,
+          logo: `${canonBase}/assets/aldridge-crest.jpg`,
           telephone: settings.phone,
           email: settings.email,
           priceRange: '$$',
@@ -165,6 +172,11 @@ function renderAll() {
             bestRating: '5',
             reviewCount: '87'
           },
+          sameAs: [
+            settings.uhaul_dealer_url || 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
+            settings.social_links?.ebay_store || 'https://www.ebay.com/usr/aabcas',
+            settings.shopify_storefront_url || 'https://aldridgesales.myshopify.com/'
+          ].filter(Boolean),
           department: [
             {
               '@type': 'AutoRental',
@@ -210,6 +222,11 @@ function renderAll() {
   updateCartBadge();
 }
 
+function getCanonicalBaseUrl(settings) {
+  const raw = settings?.canonical_domain || settings?.public_pwa_url || 'https://aldridgeautosupply.com';
+  return String(raw).trim().replace(/\/+$/, '') || 'https://aldridgeautosupply.com';
+}
+
 /* ==================== SPECIALS & SHARE-TO-FRIEND ==================== */
 function renderSpecials(specials) {
   const grid = document.getElementById('home-specials-grid');
@@ -240,7 +257,8 @@ function renderSpecials(specials) {
 }
 
 async function shareSpecial(id, title, code) {
-  const url = `${window.location.origin}/?promo=${encodeURIComponent(code)}`;
+  const baseUrl = getCanonicalBaseUrl(state.data?.settings);
+  const url = `${baseUrl}/?promo=${encodeURIComponent(code)}`;
   const shareText = `${title} — Use code ${code} at ${state.data?.settings?.business_name || "Aldridge Auto's"}! ${url}`;
   try {
     await api(`/api/specials/${id}/share`, { method: 'POST' });
@@ -258,7 +276,7 @@ async function shareSpecial(id, title, code) {
 
 async function shareSiteWithFriend() {
   const s = state.data?.settings;
-  const url = window.location.origin;
+  const url = getCanonicalBaseUrl(s);
   const text = `Check out ${s?.business_name || "Aldridge Auto's"} in University Place / Tacoma for OEM Auto Parts, 5.0★ Auto Repair & U-Haul #046117: ${url}`;
   if (navigator.share) {
     await navigator.share({ title: s?.business_name || "Aldridge Auto's", text, url }).catch(() => {});
@@ -1332,7 +1350,7 @@ Whether you need a hard-to-find factory OEM part, a 5.0★ rated mechanic you ca
 
 📍 5115 66th St W, Bldg B, University Place, WA 98467
 🕒 Mon–Fri: 12:00 PM – 7:00 PM
-📞 Shop & Parts: (253) 245-4206 | 🌐 https://aldridgesales.myshopify.com`
+📞 Shop & Parts: (253) 245-4206 | 🌐 https://aldridgeautosupply.com`
   },
   {
     id: 'social-turnkey-install',
@@ -1347,7 +1365,7 @@ At Aldridge Auto's in University Place (Bldg B), we do something online-only sal
 
 Message us your 17-digit VIN anytime for a fast fitment check!
 📍 5115 66th St W, Bldg B, University Place, WA 98467 | 📞 (253) 245-4206
-🔗 Shop Live Inventory: https://aldridgesales.myshopify.com`
+🔗 Shop Live Inventory: https://aldridgeautosupply.com`
   },
   {
     id: 'social-reel-tiktok',
@@ -1379,13 +1397,13 @@ I wanted to share that our brand-new online OEM Auto Parts catalog & mobile book
 • Official U-Haul Neighborhood Dealer #046117 for quick local truck/trailer pickups & 24-hr drop-offs (U-Haul line: 253-948-3487; note: tow vehicles must already have a hitch & wiring as we don't install hitches on-site)
 
 Mention "NEXTDOOR" or code DIAG25 this month for $25 OFF Check-Engine/Electrical Diagnostics, or PULLINSTALL15 for 15% OFF labor when we install any in-stock OEM part!
-— Chris Aldridge | (253) 245-4206 | https://aldridgesales.myshopify.com`
+— Chris Aldridge | (253) 245-4206 | https://aldridgeautosupply.com`
   },
   {
     id: 'social-vip-sms',
     channel: 'VIP SMS & Email Customer Blast (TCPA Compliant)',
     title: '160-Char SMS + VIP Email Launch Alert',
-    copy: `Aldridge Auto's (UP/Tacoma): Our new OEM Parts Store & Booking App is LIVE! 962 parts + 5.0★ Repair. Use PULLINSTALL15 for 15% off install labor: https://aldridgesales.myshopify.com (253)245-4206 Reply STOP to opt out`
+    copy: `Aldridge Auto's (UP/Tacoma): Our new OEM Parts Store & Booking App is LIVE! 962 parts + 5.0★ Repair. Use PULLINSTALL15 for 15% off install labor: https://aldridgeautosupply.com (253)245-4206 Reply STOP to opt out`
   }
 ];
 
@@ -1394,7 +1412,7 @@ const LAUNCH_AD_CAMPAIGNS = [
     id: 'ad-google-repair',
     channel: 'Google Search Campaign #1 — 12-Mile Radius Around 98467 ($15–$25/day)',
     title: '5.0★ Auto Repair, Electrical & Cooling Diagnostics (University Place / Tacoma)',
-    copy: `FINAL URL: https://aldridgesales.myshopify.com/#repair
+    copy: `FINAL URL: https://aldridgeautosupply.com/#repair
 LOCATION TARGET: 12-mi radius around 5115 66th St W, University Place, WA 98467 (Presence ONLY)
 CALL EXTENSION: (253) 245-4206 (Mon–Fri 12:00 PM – 7:00 PM)
 
@@ -1420,8 +1438,8 @@ MANDATORY NEGATIVE KEYWORDS:
     id: 'ad-google-parts',
     channel: 'Google Search + Free Merchant Listings Campaign #2 — OEM Auto Parts',
     title: 'Tested Used OEM Auto Parts (Local 253 Pickup + Nationwide Shipping)',
-    copy: `FINAL URL: https://aldridgesales.myshopify.com/
-FEED SOURCE: /api/feeds/google-merchant.xml (962 SKUs w/ Verified Weight & L×W×H Dimensions)
+    copy: `FINAL URL: https://aldridgeautosupply.com/
+FEED SOURCE: https://aldridgeautosupply.com/api/feeds/google-merchant.xml (Verified Weight & L×W×H Dimensions)
 
 HEADLINES (<=30 chars):
 1. Tested Used OEM Auto Parts
@@ -1448,7 +1466,7 @@ Come see why Tacoma, University Place & Lakewood drivers give Aldridge Auto's a 
 
 HEADLINE: 5.0★ Auto Repair & 962 OEM Parts — University Place
 DESCRIPTION: Mon–Fri 12–7 PM • Free Counter Pickup or Turnkey Bay Install
-CTA BUTTON: Book Now / Shop Now -> https://aldridgesales.myshopify.com`
+CTA BUTTON: Book Now / Shop Now -> https://aldridgeautosupply.com`
   },
   {
     id: 'ad-craigslist-partout',
@@ -1470,7 +1488,7 @@ POPULAR IN-STOCK OEM ASSEMBLIES RIGHT NOW:
 • Ford F-150 / Explorer / Escape / Mustang, Subaru Outback / Forester, Chevy Silverado / Tahoe, Ram & BMW E46/E90 OEM Parts
 
 HOW TO ORDER OR CHECK FITMENT:
-1) Browse live photos & prices: https://aldridgesales.myshopify.com
+1) Browse live photos & prices: https://aldridgeautosupply.com
 2) Call or text (253) 245-4206 with your 17-digit VIN or OEM Part Number for an instant stock check.
 3) Pick up at Bldg B (98467), ship parcel nationwide (<70 lbs), or schedule turnkey bay installation!
 (Note: No SRS airbags or catalytic converters sold. All parts carry serialized UV/Paint security marks; Defect-Only return policy.)`
@@ -1511,12 +1529,12 @@ const PLATFORM_SETTINGS_MATRIX = [
   {
     platform: '7. Facebook Business Page & FB Marketplace',
     badge: '962-SKU Meta Catalog Ready',
-    rules: '• Business Page Name: Aldridge Auto\'s | Categories: Auto Repair Shop • Auto Parts Store • Truck Rental Agency.\n• Meta Commerce Manager: Add Data Feed -> Scheduled URL -> paste /api/feeds/meta-catalog.csv (or upload aldridge_combined_962_meta_catalog.csv).\n• Personal Marketplace Unblock: Send the pre-written WA AG File #730525 / Meta C#26046204 email in Tab 3 with paloozabooking@gmail.com + fresh unlinked email + profile URL.'
+    rules: '• Business Page Name: Aldridge Auto\'s | Categories: Auto Repair Shop • Auto Parts Store • Truck Rental Agency.\n• Meta Commerce Manager: Add Data Feed -> Scheduled URL -> paste https://aldridgeautosupply.com/api/feeds/meta-catalog.csv (or upload aldridge_combined_962_meta_catalog.csv).\n• Personal Marketplace Unblock: Send the pre-written WA AG File #730525 / Meta C#26046204 email in Tab 3 with paloozabooking@gmail.com + fresh unlinked email + profile URL.'
   },
   {
     platform: '8. Google Business Profile, Merchant Center & SEO',
     badge: '5.0★ (87 Reviews) + XML Live',
-    rules: '• GBP NAP: Aldridge Auto\'s | 5115 66th St W, Bldg B, University Place, WA 98467 | (253) 245-4206 | Mon–Fri 12:00 PM – 7:00 PM | Website: https://aldridgesales.myshopify.com.\n• GBP Primary Category: Auto Repair Shop | Additional: Auto Parts Store, Auto Electrical Service, Auto Radiator Repair Service, Truck Rental Agency.\n• Google Merchant Center: Enable "Free Product Listings" + "Local Inventory" -> Add Scheduled XML Feed /api/feeds/google-merchant.xml (includes g:shipping_weight + g:shipping_length/width/height).\n• Google Search Console: Submit https://aldridgesales.myshopify.com/sitemap.xml.'
+    rules: '• GBP NAP: Aldridge Auto\'s | 5115 66th St W, Bldg B, University Place, WA 98467 | (253) 245-4206 | Mon–Fri 12:00 PM – 7:00 PM | Website: https://aldridgeautosupply.com.\n• GBP Primary Category: Auto Repair Shop | Additional: Auto Parts Store, Auto Electrical Service, Auto Radiator Repair Service, Truck Rental Agency.\n• Google Merchant Center: Enable "Free Product Listings" + "Local Inventory" -> Add Scheduled XML Feed https://aldridgeautosupply.com/api/feeds/google-merchant.xml (includes g:shipping_weight + g:shipping_length/width/height).\n• Google Search Console: Submit https://aldridgeautosupply.com/sitemap.xml.'
   }
 ];
 

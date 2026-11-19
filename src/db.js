@@ -298,7 +298,8 @@ const DEFAULT_SETTINGS = {
   clean_slate_mode: true,
   single_variant_only: true,
   photos_required: true,
-  public_pwa_url: '',
+  canonical_domain: 'https://aldridgeautosupply.com',
+  public_pwa_url: 'https://aldridgeautosupply.com',
   legacy_archive_db: 'data/archive_905_legacy.db',
   default_condition: 'Used',
   blank_mpn_fallback: 'Does Not Apply',
@@ -403,8 +404,17 @@ function applyEnvOverrides(cfg) {
   if (process.env.GEMINI_API_KEY && !cfg.gemini_api_key) {
     cfg.gemini_api_key = process.env.GEMINI_API_KEY.trim();
   }
+  if (process.env.CANONICAL_DOMAIN) {
+    cfg.canonical_domain = process.env.CANONICAL_DOMAIN.trim().replace(/\/+$/, '');
+  }
   if (process.env.PUBLIC_PWA_URL) {
-    cfg.public_pwa_url = process.env.PUBLIC_PWA_URL.trim();
+    cfg.public_pwa_url = process.env.PUBLIC_PWA_URL.trim().replace(/\/+$/, '');
+  }
+  if (!cfg.canonical_domain) {
+    cfg.canonical_domain = DEFAULT_SETTINGS.canonical_domain;
+  }
+  if (!cfg.public_pwa_url) {
+    cfg.public_pwa_url = cfg.canonical_domain;
   }
   return cfg;
 }

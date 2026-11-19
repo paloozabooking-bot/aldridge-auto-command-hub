@@ -258,30 +258,33 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Automatically lock QR codes & Shopify links to the live public HTTPS PWA URL once deployed
+    // Preserve canonical custom domain (never overwrite configured custom domain with onrender.com)
     if (
+      !process.env.CANONICAL_DOMAIN &&
       !process.env.PUBLIC_PWA_URL &&
       /^https:\/\//i.test(baseUrl) &&
-      !/localhost|127\.0\.0\.1/i.test(baseUrl)
+      !/localhost|127\.0\.0\.1|onrender\.com/i.test(baseUrl)
     ) {
       const curCfg = getSettings();
-      if (curCfg.public_pwa_url !== baseUrl) {
-        updateSettings({ public_pwa_url: baseUrl });
+      if (!curCfg.canonical_domain && !curCfg.public_pwa_url) {
+        updateSettings({ canonical_domain: baseUrl, public_pwa_url: baseUrl });
       }
     }
 
-    // SEO Sitemap & Robots
+    // SEO Sitemap & Robots (always emit canonical live domain)
     if (method === 'GET' && pathname === '/robots.txt') {
+      const canonicalBase = resolvePublicAppBaseUrl(getSettings());
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(`User-agent: *\nAllow: /\nSitemap: ${baseUrl}/sitemap.xml\n`);
+      res.end(`User-agent: *\nAllow: /\nSitemap: ${canonicalBase}/sitemap.xml\n`);
       return;
     }
 
     if (method === 'GET' && pathname === '/sitemap.xml') {
+      const canonicalBase = resolvePublicAppBaseUrl(getSettings());
       const items = db.prepare("SELECT sku, updated_at FROM inventory_items WHERE status = 'active'").all();
       const urls = [
-        `<url><loc>${baseUrl}/</loc><priority>1.0</priority></url>`,
-        ...items.map((i) => `<url><loc>${baseUrl}/?sku=${encodeURIComponent(i.sku)}</loc><lastmod>${(i.updated_at || '').split('T')[0]}</lastmod><priority>0.8</priority></url>`)
+        `<url><loc>${canonicalBase}/</loc><priority>1.0</priority></url>`,
+        ...items.map((i) => `<url><loc>${canonicalBase}/?sku=${encodeURIComponent(i.sku)}</loc><lastmod>${(i.updated_at || '').split('T')[0]}</lastmod><priority>0.8</priority></url>`)
       ].join('\n  ');
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
       res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  ${urls}\n</urlset>`);
@@ -559,6 +562,7 @@ const server = http.createServer(async (req, res) => {
         qr_dual_photo_pipeline: true,
         crosslist_offerup_fb_sync: true,
         craigslist_autofill_script: '/craigslist-autofill.user.js',
+        canonical_domain: resolvePublicAppBaseUrl(cfg),
         qr_target_base_url: resolvePublicAppBaseUrl(cfg),
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,

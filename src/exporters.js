@@ -117,6 +117,11 @@ function isHeavyLocalPickupItem(item, settings) {
 function resolveExportPhotoUrl(photoPath, baseUrl, settings) {
   if (!photoPath) return '';
   if (/^https?:\/\//i.test(photoPath)) return photoPath;
+  const { resolvePublicAppBaseUrl } = require('./qr-card');
+  const canonicalBase = resolvePublicAppBaseUrl(settings);
+  if (canonicalBase) {
+    return `${canonicalBase}${photoPath.startsWith('/') ? photoPath : '/' + photoPath}`;
+  }
   const isLocalBase = !baseUrl || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(baseUrl);
   if (isLocalBase && photoPath.startsWith('/uploads/') && settings?.shopify_cdn_id) {
     const fileName = photoPath.replace(/^\/uploads\//, '');
@@ -148,8 +153,8 @@ function stripOffEbayContactText(text) {
 }
 
 function resolveDirectPublicUrls(settings, baseUrl) {
-  const isPublicBase = baseUrl && /^https:\/\//i.test(baseUrl) && !/localhost|127\.0\.0\.1/i.test(baseUrl);
-  const pwaUrl = (settings?.public_pwa_url || (isPublicBase ? baseUrl : '') || settings?.shopify_storefront_url || 'https://aldridgesales.myshopify.com').replace(/\/+$/, '');
+  const { resolvePublicAppBaseUrl } = require('./qr-card');
+  const pwaUrl = resolvePublicAppBaseUrl(settings);
   const shopifyUrl = (settings?.shopify_storefront_url || 'https://aldridgesales.myshopify.com').replace(/\/+$/, '');
   return { pwaUrl, shopifyUrl };
 }
@@ -161,18 +166,18 @@ function renderShopifyHtml(item, settings, baseUrl) {
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
   const { installTotal, hours } = computeInstallEstimate(item, settings);
-  const { pwaUrl, shopifyUrl } = resolveDirectPublicUrls(settings, baseUrl);
+  const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const phone = settings.phone || '(253) 245-4206';
 
   const installCalloutHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
       <strong style="color:#0369a1;">🔧 OPTIONAL CERTIFIED SHOP BAY INSTALLATION (INFO-ONLY — SINGLE-UNIT PART):</strong><br/>
       Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> <em>(includes this tested OEM part + ~${hours.toFixed(1)} hrs certified technician labor at 5115 66th St W, Bldg B)</em>.<br/>
-      <span style="font-size:12px;color:#334155;">To prevent double-booking this 1-of-1 part, purchase the part here first to lock it in, then schedule your bay installation on our <a href="${pwaUrl}" style="color:#0369a1;font-weight:700;">Live Website &amp; Mobile App</a> or call/text <strong>${phone}</strong>.</span>
+      <span style="font-size:12px;color:#334155;">To prevent double-booking this 1-of-1 part, purchase the part here first to lock it in, then schedule your bay installation on our <a href="${pwaUrl}" style="color:#0369a1;font-weight:700;">Live Website &amp; Mobile App (${pwaUrl.replace(/^https?:\/\//i, '')})</a> or call/text <strong>${phone}</strong>.</span>
     </div>`;
 
   const directAppCalloutHtml = `<div style="background:#f8fafc;border:1px solid #0b1628;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;line-height:1.5;">
       <strong style="color:#0b1628;">📱 BUY DIRECT &amp; INSTALL THE ALDRIDGE AUTO'S MOBILE APP (SAVE ON MARKETPLACE FEES):</strong><br/>
-      Shop our full verified photo catalog directly at <a href="${shopifyUrl}" style="color:#ea580c;font-weight:700;">${shopifyUrl}</a> or open our <a href="${pwaUrl}" style="color:#ea580c;font-weight:700;">Mobile Booking &amp; Parts App</a> and tap <strong>"Add to Home Screen"</strong> on iPhone or Android for instant 17-digit VIN checks, bay booking, and direct repeat-customer pricing!
+      Shop our full verified photo catalog directly at <a href="${pwaUrl}" style="color:#ea580c;font-weight:700;">${pwaUrl}</a> and tap <strong>"Add to Home Screen"</strong> on iPhone or Android for instant 17-digit VIN checks, bay booking, and direct repeat-customer pricing!
     </div>`;
 
   const shipLabel = heavyPickupOnly

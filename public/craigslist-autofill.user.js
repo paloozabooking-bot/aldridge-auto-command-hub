@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts ($0 pts) Bulk Auto-Filler
-// @namespace    https://aldridgesales.myshopify.com/
-// @version      1.0.0
+// @namespace    https://aldridgeautosupply.com/
+// @version      1.0.1
 // @description  Automatically selects Tacoma/Pierce County -> For Sale By Owner -> Auto Parts ($0 fee, ZIP 98467), fills Title, Price, Condition, OEM Make/Model/MPN, Description, and attaches clean part photos from Aldridge Command Hub!
 // @match        https://post.craigslist.org/*
 // @match        https://seattle.craigslist.org/*

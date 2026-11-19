@@ -9,11 +9,11 @@ function isQrCardUrl(url) {
 
 function resolvePublicAppBaseUrl(settings) {
   const candidates = [
+    process.env.CANONICAL_DOMAIN,
     process.env.PUBLIC_PWA_URL,
+    settings?.canonical_domain,
     settings?.public_pwa_url,
-    settings?.shopify_storefront_url,
-    settings?.shopify_domain ? `https://${String(settings.shopify_domain).replace(/^https?:\/\//, '')}` : '',
-    'https://aldridgesales.myshopify.com'
+    'https://aldridgeautosupply.com'
   ];
   for (const raw of candidates) {
     const trimmed = String(raw || '').trim().replace(/\/+$/, '');
@@ -21,7 +21,7 @@ function resolvePublicAppBaseUrl(settings) {
       return trimmed;
     }
   }
-  return 'https://aldridgesales.myshopify.com';
+  return 'https://aldridgeautosupply.com';
 }
 
 function buildQrTrackingUrl(itemOrSku, settings, sourceTag = 'qr_part_card') {
@@ -229,6 +229,7 @@ function generatePartQrCardPng(item, settings, uploadsDir) {
   const safeSku = String(item?.sku || 'ALD-PART').replace(/[^A-Za-z0-9-]/g, '').toUpperCase() || 'ALD-PART';
   const secCode = String(item?.security_mark_code || 'SEC-VERIFIED').toUpperCase();
   const trackingUrl = buildQrTrackingUrl(safeSku, settings, 'qr_shopify_gallery');
+  const displayHost = resolvePublicAppBaseUrl(settings).replace(/^https?:\/\//i, '').toUpperCase();
 
   const W = 1000;
   const H = 1000;
@@ -240,7 +241,7 @@ function generatePartQrCardPng(item, settings, uploadsDir) {
   // Top Pacific Navy header bar
   c.fillRect(24, 24, W - 48, 118, 11, 22, 40);
   c.drawTextCentered("ALDRIDGE AUTO'S - UNIVERSITY PLACE WA", 62, 4, 255, 255, 255);
-  c.drawTextCentered('VERIFIED OEM PART + DIRECT MOBILE APP', 110, 3, 251, 191, 36);
+  c.drawTextCentered(`${displayHost} - DIRECT MOBILE APP`, 110, 3, 251, 191, 36);
 
   // Safety Orange callout bar
   c.fillRect(24, 142, W - 48, 52, 234, 88, 12); // #ea580c
@@ -307,6 +308,8 @@ function generatePartQrCardPng(item, settings, uploadsDir) {
  * Printable Customer In-Box Packing Slip & VIP App QR Card
  */
 function generatePrintablePackingSlipHtml(item, settings) {
+  const publicBase = resolvePublicAppBaseUrl(settings);
+  const displayHost = publicBase.replace(/^https?:\/\//i, '');
   const trackingUrl = buildQrTrackingUrl(item, settings, 'qr_packing_slip');
   const qrSvg = renderScannableQrSvg(trackingUrl, 190);
   const mpn = item.oem_part_number || 'Does Not Apply';
@@ -342,7 +345,7 @@ function generatePrintablePackingSlipHtml(item, settings) {
     <div class="hdr">
       <div>
         <div class="brand">${settings.business_name || "Aldridge Auto's"} — Bench-Inspected OEM Certificate</div>
-        <div class="sub">${settings.street_address || '5115 66th St W, Bldg B'}, ${settings.city_display || 'University Place / Tacoma'}, ${settings.state || 'WA'} ${settings.zip || '98467'} • Shop &amp; Parts: ${settings.phone || '(253) 245-4206'}</div>
+        <div class="sub">${settings.street_address || '5115 66th St W, Bldg B'}, ${settings.city_display || 'University Place / Tacoma'}, ${settings.state || 'WA'} ${settings.zip || '98467'} • Shop &amp; Parts: ${settings.phone || '(253) 245-4206'} • ${displayHost}</div>
       </div>
       <div class="sec-badge">
         SKU: ${item.sku}<br/>
@@ -363,10 +366,10 @@ function generatePrintablePackingSlipHtml(item, settings) {
     <div class="qr-callout">
       <div class="qr-wrap">${qrSvg}</div>
       <div>
-        <div style="color:#fbbf24;font-size:11px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;">Repeat-Buyer Direct App &amp; VIP Savings</div>
+        <div style="color:#fbbf24;font-size:11px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;">Repeat-Buyer Direct App &amp; VIP Savings • ${displayHost}</div>
         <div style="font-size:17px;font-weight:900;margin:4px 0 6px;">Scan With Your Phone Camera to Shop Direct &amp; Install Our App</div>
         <div style="font-size:12.5px;line-height:1.45;color:#e2e8f0;">
-          1. Point your iPhone or Android camera at this QR code to open our live catalog.<br/>
+          1. Point your iPhone or Android camera at this QR code (or visit <strong>${publicBase}</strong>) to open our live catalog.<br/>
           2. Tap <strong>"Install App"</strong> or <strong>"Add to Home Screen"</strong> for 1-tap VIN checks, direct repeat-customer pricing (skipping marketplace markups), and 5.0★ repair bay scheduling!
         </div>
       </div>

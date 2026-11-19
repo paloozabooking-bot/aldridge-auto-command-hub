@@ -566,8 +566,9 @@ function generateDeterministicMatrixSvg(codeText) {
 }
 
 function generatePrintableBinLabelHtml(item, settings) {
-  const { buildQrTrackingUrl, renderScannableQrSvg } = require('./qr-card');
+  const { buildQrTrackingUrl, renderScannableQrSvg, resolvePublicAppBaseUrl } = require('./qr-card');
   const trackingUrl = buildQrTrackingUrl(item, settings, 'qr_bin_tag');
+  const displayHost = resolvePublicAppBaseUrl(settings).replace(/^https?:\/\//i, '');
   const svg = renderScannableQrSvg(trackingUrl, 126);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -603,12 +604,12 @@ function generatePrintableBinLabelHtml(item, settings) {
           <span class="bin">${item.bin_location || 'UNASSIGNED'}</span>
           <span class="sec">${item.security_mark_code}</span>
         </div>
-        <div style="font-size:10px;color:#4b5563;margin-top:4px;">Scan QR → Live Store &amp; App</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:4px;">Scan QR → ${displayHost}</div>
       </div>
     </div>
     <div class="title">${item.title}</div>
     <div class="oem">OEM #: ${item.oem_part_number || 'Does Not Apply'} • ${item.weight_lbs} lbs • $${Number(item.price_we_pull || 0).toFixed(2)}</div>
-    <div class="app-scan">SCAN QR TO SHOP DIRECT &amp; TAP "ADD TO HOME SCREEN"</div>
+    <div class="app-scan">SCAN QR OR VISIT ${displayHost.toUpperCase()} • ADD TO HOME SCREEN</div>
   </div>
   <div class="actions">
     <button onclick="window.print()">Print on Y813BT 4x6 Thermal Printer</button>

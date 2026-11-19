@@ -8,5 +8,9 @@ services:
         value: production
       - key: PORT
         value: "8080"
+      - key: CANONICAL_DOMAIN
+        value: https://aldridgeautosupply.com
+      - key: PUBLIC_PWA_URL
+        value: https://aldridgeautosupply.com
       - key: SHOPIFY_DOMAIN
         value: aldridgesales.myshopify.com
