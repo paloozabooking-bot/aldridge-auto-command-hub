@@ -279,7 +279,7 @@ const DEFAULT_SETTINGS = {
   tagline: '5.0★ Auto Repair & Diagnostics • Tested OEM Parts • U-Haul Neighborhood Dealer #046117',
   phone: '(253) 245-4206',
   uhaul_phone: '(253) 948-3487',
-  email: 'service@aldridgeautos.com',
+  email: 'service@aldridgeautosupply.com',
   street_address: '5115 66th St W, Bldg B',
   city: 'university place',
   city_display: 'University Place / Tacoma',
@@ -347,9 +347,10 @@ const DEFAULT_SETTINGS = {
   email_webhook_url: '',
   social_links: {
     facebook: 'https://www.facebook.com/AldridgeAutos',
+    facebook_marketplace: 'https://www.facebook.com/ProfessionalFacilitatorOfNeeds',
     instagram: 'https://www.instagram.com/aldridgeautos/',
+    youtube: 'https://www.youtube.com/@AldridgeAutos',
     tiktok: 'https://www.tiktok.com/',
-    youtube: 'https://www.youtube.com/',
     ebay_store: 'https://www.ebay.com/usr/aabcas',
     offerup: 'https://offerup.com/search?q=Aldridge+Auto+Tacoma',
     uhaul_dealer: 'https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/',
@@ -437,8 +438,14 @@ function getSettings() {
   if (!mergedSocial.facebook || mergedSocial.facebook === 'https://www.facebook.com/') {
     mergedSocial.facebook = DEFAULT_SETTINGS.social_links.facebook;
   }
+  if (!mergedSocial.facebook_marketplace) {
+    mergedSocial.facebook_marketplace = DEFAULT_SETTINGS.social_links.facebook_marketplace;
+  }
   if (!mergedSocial.instagram || mergedSocial.instagram === 'https://www.instagram.com/') {
     mergedSocial.instagram = DEFAULT_SETTINGS.social_links.instagram;
+  }
+  if (!mergedSocial.youtube || mergedSocial.youtube === 'https://www.youtube.com/') {
+    mergedSocial.youtube = DEFAULT_SETTINGS.social_links.youtube;
   }
   if (!mergedSocial.offerup || mergedSocial.offerup === 'https://offerup.com/') {
     mergedSocial.offerup = DEFAULT_SETTINGS.social_links.offerup;
@@ -446,6 +453,9 @@ function getSettings() {
   if (!mergedSocial.google_maps || mergedSocial.google_maps.includes("Aldridge+Auto's+5115")) {
     mergedSocial.google_maps = DEFAULT_SETTINGS.social_links.google_maps;
   }
+  const mergedEmail = !saved.email || saved.email === 'service@aldridgeautos.com'
+    ? DEFAULT_SETTINGS.email
+    : saved.email;
   const mergedLogo = !saved.logo_url || saved.logo_url === '/assets/aldridge-crest.jpg'
     ? DEFAULT_SETTINGS.logo_url
     : saved.logo_url;
@@ -455,6 +465,7 @@ function getSettings() {
   return applyEnvOverrides({
     ...DEFAULT_SETTINGS,
     ...saved,
+    email: mergedEmail,
     google_listing_name: mergedListingName,
     logo_url: mergedLogo,
     single_variant_only: true,

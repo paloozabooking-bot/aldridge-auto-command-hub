@@ -136,7 +136,10 @@ function renderAll() {
     'https://aldridgesales.myshopify.com/';
   const ebayUrl = settings.social_links?.ebay_store || 'https://www.ebay.com/usr/aabcas';
   const fbUrl = settings.social_links?.facebook || 'https://www.facebook.com/AldridgeAutos';
+  const fbMarketplaceUrl =
+    settings.social_links?.facebook_marketplace || 'https://www.facebook.com/ProfessionalFacilitatorOfNeeds';
   const igUrl = settings.social_links?.instagram || 'https://www.instagram.com/aldridgeautos/';
+  const ytUrl = settings.social_links?.youtube || 'https://www.youtube.com/@AldridgeAutos';
   const offerupUrl = settings.social_links?.offerup || 'https://offerup.com/search?q=Aldridge+Auto+Tacoma';
 
   // Render homepage cross-platform backlink bar & footer channel links
@@ -145,10 +148,12 @@ function renderAll() {
     verifiedBarEl.innerHTML = [
       `<a class="channel-pill channel-pill-star" href="${esc(gbpUrl)}" target="_blank" rel="noopener me">★ 5.0 Google Business Profile (87 Reviews) ↗</a>`,
       `<a class="channel-pill channel-pill-uhaul" href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a>`,
+      `<a class="channel-pill" href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook Page (@AldridgeAutos) ↗</a>`,
+      `<a class="channel-pill" href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">Facebook Marketplace Profile ↗</a>`,
+      `<a class="channel-pill" href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a>`,
+      `<a class="channel-pill" href="${esc(ytUrl)}" target="_blank" rel="noopener me">YouTube ↗</a>`,
       `<a class="channel-pill" href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Store ↗</a>`,
       `<a class="channel-pill" href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a>`,
-      `<a class="channel-pill" href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook (@AldridgeAutos) ↗</a>`,
-      `<a class="channel-pill" href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a>`,
       `<a class="channel-pill" href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a>`
     ].join('');
   }
@@ -158,10 +163,12 @@ function renderAll() {
     footerSocialEl.innerHTML = [
       `<li><a href="${esc(gbpUrl)}" target="_blank" rel="noopener me">Google Business Profile (5.0★ • 87 Reviews) ↗</a></li>`,
       `<li><a href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Neighborhood Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a></li>`,
+      `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook Business Page (@AldridgeAutos) ↗</a></li>`,
+      `<li><a href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">Facebook Personal Marketplace Profile ↗</a></li>`,
+      `<li><a href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a></li>`,
+      `<li><a href="${esc(ytUrl)}" target="_blank" rel="noopener me">YouTube ↗</a></li>`,
       `<li><a href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Storefront ↗</a></li>`,
       `<li><a href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a></li>`,
-      `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook (@AldridgeAutos) ↗</a></li>`,
-      `<li><a href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a></li>`,
       `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`,
       `<li><a href="/api/feeds/google-merchant.xml" target="_blank">Google Merchant XML Feed</a></li>`,
       `<li><a href="/api/feeds/meta-catalog.csv" target="_blank">Meta Commerce Catalog Feed</a></li>`,
@@ -176,7 +183,11 @@ function renderAll() {
   if (ogUrlEl) ogUrlEl.setAttribute('content', `${canonBase}/`);
 
   const sameAsList = Array.from(
-    new Set([gbpUrl, uhaulUrl, shopifyUrl, ebayUrl, fbUrl, igUrl, offerupUrl].filter((u) => u && /^https?:\/\//i.test(u)))
+    new Set(
+      [gbpUrl, uhaulUrl, fbUrl, fbMarketplaceUrl, igUrl, ytUrl, shopifyUrl, ebayUrl, offerupUrl].filter(
+        (u) => u && /^https?:\/\//i.test(u)
+      )
+    )
   );
 
   const seoEl = document.getElementById('seo-json-ld');
@@ -1104,9 +1115,13 @@ function populateSettingsVaultForm(s) {
   document.getElementById('set-handling-days').value = s.handling_days_default ?? 3;
   document.getElementById('set-labor-rate').value = s.labor_rate_hourly ?? 135;
   document.getElementById('set-fb').value = s.social_links?.facebook || '';
+  const fbMktEl = document.getElementById('set-fb-marketplace');
+  if (fbMktEl) fbMktEl.value = s.social_links?.facebook_marketplace || '';
   document.getElementById('set-ebay').value = s.social_links?.ebay_store || '';
   const igEl = document.getElementById('set-ig');
   if (igEl) igEl.value = s.social_links?.instagram || '';
+  const ytEl = document.getElementById('set-yt');
+  if (ytEl) ytEl.value = s.social_links?.youtube || '';
   const offerupEl = document.getElementById('set-offerup');
   if (offerupEl) offerupEl.value = s.social_links?.offerup || '';
   const gbpEl = document.getElementById('set-gbp');
@@ -2423,8 +2438,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       labor_rate_hourly: Number(document.getElementById('set-labor-rate').value || 135),
       social_links: {
         facebook: document.getElementById('set-fb').value,
+        facebook_marketplace: document.getElementById('set-fb-marketplace')?.value || '',
         ebay_store: document.getElementById('set-ebay').value,
         instagram: document.getElementById('set-ig')?.value || '',
+        youtube: document.getElementById('set-yt')?.value || '',
         offerup: document.getElementById('set-offerup')?.value || '',
         google_maps: document.getElementById('set-gbp')?.value || ''
       }

@@ -2,7 +2,7 @@ function generateAllPolicies(settings) {
   const name = settings.business_name || "Aldridge Auto's";
   const addr = `${settings.street_address}, ${settings.city_display || settings.city}, ${settings.state} ${settings.zip}`;
   const phone = settings.phone || '(253) 245-4206';
-  const email = settings.email || 'service@aldridgeautos.com';
+  const email = settings.email || 'service@aldridgeautosupply.com';
   const handlingFee = Number(settings.handling_fee_default ?? 10).toFixed(2);
   const handlingDays = Number(settings.handling_days_default ?? 3);
   const freightLbs = Number(settings.freight_weight_threshold_lbs ?? 70);
