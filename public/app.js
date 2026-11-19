@@ -60,7 +60,7 @@ function switchCustomerView(viewId) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function activateStaffMode(staffTabId = 'staff-intake') {
+function activateStaffMode(staffTabId = 'staff-review') {
   document.getElementById('mode-staff-btn').classList.add('active');
   document.getElementById('mode-customer-btn').classList.remove('active');
   document.getElementById('customer-nav').style.display = 'none';
@@ -78,6 +78,9 @@ function switchStaffTab(tabId) {
   document.querySelectorAll('.staff-section').forEach((sec) => {
     sec.classList.toggle('active', sec.id === tabId);
   });
+  if (tabId === 'staff-review' && typeof ensureReviewGalleryLoaded === 'function') {
+    ensureReviewGalleryLoaded();
+  }
 }
 
 /* ==================== MASTER RENDER ==================== */
@@ -545,11 +548,22 @@ function showCustomerPolicy(key) {
 
 /* ==================== EMPLOYEE BACKEND RENDERERS ==================== */
 function renderStaffKpis() {
-  const { inventory, appointments, returnClaims, customers } = state.data;
+  const { inventory, appointments, returnClaims, customers, reviewSummary } = state.data;
   const activeSkus = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
   const totalValue = activeSkus.reduce((sum, i) => sum + Number(i.price_we_pull || 0) * i.quantity, 0);
   const pendingAppts = appointments.filter((a) => a.status === 'pending_approval').length;
   const openRmas = returnClaims.filter((r) => r.status === 'pending_evidence_review').length;
+
+  const invTabBtn = document.getElementById('tab-btn-inventory');
+  if (invTabBtn) {
+    invTabBtn.textContent = `2. Inventory (${activeSkus.length.toLocaleString()} SKUs) & CSV`;
+  }
+  const revTabBtn = document.getElementById('tab-btn-review');
+  if (revTabBtn && reviewSummary && reviewSummary.total > 0) {
+    revTabBtn.textContent = reviewSummary.pending > 0
+      ? `0. Photo Review (${reviewSummary.pending.toLocaleString()} Pending)`
+      : `0. Photo Review (${reviewSummary.keep.toLocaleString()} Kept ✓)`;
+  }
 
   document.getElementById('staff-kpi-strip').innerHTML = `
     <div class="kpi-card">
@@ -558,19 +572,19 @@ function renderStaffKpis() {
       <div class="kpi-sub">Retail We-Pull Value: $${totalValue.toLocaleString()}</div>
     </div>
     <div class="kpi-card">
+      <div class="kpi-label">Visual Photo Review Queue</div>
+      <div class="kpi-value" style="color:${(reviewSummary?.pending || 0) > 0 ? 'var(--brand-amber)' : 'var(--status-ok-fg)'};">${(reviewSummary?.pending || 0).toLocaleString()}</div>
+      <div class="kpi-sub">✓ ${(reviewSummary?.keep || 0).toLocaleString()} KEEP • ✕ ${(reviewSummary?.remove || 0).toLocaleString()} REMOVE</div>
+    </div>
+    <div class="kpi-card">
       <div class="kpi-label">Pending Staff Approvals</div>
       <div class="kpi-value" style="color:${pendingAppts > 0 ? 'var(--brand-amber)' : 'inherit'};">${pendingAppts}</div>
       <div class="kpi-sub">Self-Pull, Pickup, Pull+Install &amp; Bay Slots</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">CRM &amp; VIP Subscribers</div>
-      <div class="kpi-value">${customers.length}</div>
-      <div class="kpi-sub">Unified Parts, Repair &amp; U-Haul Leads</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">RMA Evidence Queue</div>
-      <div class="kpi-value">${openRmas}</div>
-      <div class="kpi-sub">Strict Security-Mark &amp; Scan Proof</div>
+      <div class="kpi-label">CRM &amp; RMA Queue</div>
+      <div class="kpi-value">${customers.length} / ${openRmas}</div>
+      <div class="kpi-sub">VIP Leads / Open RMA Evidence Claims</div>
     </div>
   `;
 }
@@ -1611,7 +1625,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchCustomerView('view-home');
   });
   document.getElementById('mode-customer-btn').addEventListener('click', () => switchCustomerView('view-home'));
-  document.getElementById('mode-staff-btn').addEventListener('click', () => activateStaffMode('staff-intake'));
+  document.getElementById('mode-staff-btn').addEventListener('click', () => activateStaffMode('staff-review'));
   document.querySelectorAll('.staff-tab').forEach((tab) => {
     tab.addEventListener('click', () => switchStaffTab(tab.dataset.staff));
   });
@@ -2345,5 +2359,778 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadBootstrap();
   });
 
+  bindReviewGalleryEvents();
   await loadBootstrap();
+
+  // Deep-link directly into Employee Backend Visual Photo Review via ?tab=review or #review
+  const params = new URLSearchParams(window.location.search);
+  const hash = (window.location.hash || '').toLowerCase();
+  if (params.get('tab') === 'review' || hash === '#review' || hash === '#staff-review') {
+    activateStaffMode('staff-review');
+  }
 });
+
+/* ==================== VISUAL PHOTO REVIEW GALLERY CONTROLLER ==================== */
+const REVIEW_LS_KEY = 'aldridge_photo_review_decisions_v1';
+
+const reviewState = {
+  loaded: false,
+  syncedLocal: false,
+  loading: false,
+  mode: 'triage', // 'triage' | 'grid'
+  folder: 'all',
+  status: 'pending',
+  q: '',
+  page: 1,
+  limit: 48,
+  totalFiltered: 0,
+  totalPages: 1,
+  items: [],
+  triageIdx: 0,
+  summary: null,
+  undoStack: [],
+  zoomItem: null,
+  searchTimer: null
+};
+
+function readLocalReviewDecisions() {
+  try {
+    const raw = localStorage.getItem(REVIEW_LS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveLocalReviewDecision(uid, patch) {
+  try {
+    const map = readLocalReviewDecisions();
+    const prev = map[uid] || {};
+    map[uid] = {
+      status: patch.status !== undefined ? patch.status : (prev.status || 'pending'),
+      vehicle_tag_override: patch.vehicle_tag_override !== undefined ? patch.vehicle_tag_override : prev.vehicle_tag_override,
+      notes: patch.notes !== undefined ? patch.notes : prev.notes,
+      updated_at: new Date().toISOString()
+    };
+    localStorage.setItem(REVIEW_LS_KEY, JSON.stringify(map));
+  } catch (_) {
+    // localStorage unavailable
+  }
+}
+
+function setReviewSyncBadge(text, isWarn = false) {
+  const el = document.getElementById('rev-sync-badge');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isWarn ? 'var(--status-warn-fg)' : 'var(--status-ok-fg)';
+}
+
+async function syncLocalReviewDecisionsIfNeeded(serverSummary) {
+  if (reviewState.syncedLocal) return false;
+  reviewState.syncedLocal = true;
+  const localMap = readLocalReviewDecisions();
+  const localKeys = Object.keys(localMap);
+  if (!localKeys.length) return false;
+
+  const localDecidedCount = localKeys.filter((k) => localMap[k]?.status === 'keep' || localMap[k]?.status === 'remove').length;
+  const serverDecidedCount = Number(serverSummary?.keep || 0) + Number(serverSummary?.remove || 0);
+
+  // If Render restarted on ephemeral disk or client has offline decisions ahead of server, reconcile them cleanly
+  if (localDecidedCount > serverDecidedCount) {
+    setReviewSyncBadge('↻ Restoring Phone Saves...', true);
+    try {
+      await api('/api/review-photos/bulk-status', {
+        method: 'POST',
+        body: JSON.stringify({ decisions: localMap })
+      });
+      setReviewSyncBadge('✓ Phone + Cloud Synced');
+      showToast(`Restored ${localDecidedCount} saved KEEP/REMOVE decisions from your device!`);
+      return true;
+    } catch (_) {
+      setReviewSyncBadge('Saved on Phone (Offline)', true);
+      return false;
+    }
+  }
+  return false;
+}
+
+async function ensureReviewGalleryLoaded() {
+  if (!reviewState.loaded) {
+    reviewState.loaded = true;
+    await loadReviewGallery(true);
+  }
+}
+
+async function loadReviewGallery(resetPage = false) {
+  if (resetPage) {
+    reviewState.page = 1;
+    reviewState.triageIdx = 0;
+  }
+  reviewState.loading = true;
+  try {
+    const qs = new URLSearchParams({
+      folder: reviewState.folder,
+      status: reviewState.status,
+      q: reviewState.q,
+      page: String(reviewState.page),
+      limit: String(reviewState.limit)
+    });
+    const res = await api(`/api/review-photos?${qs.toString()}`);
+
+    // Reconcile localStorage decisions if Render container reset
+    const reconciled = await syncLocalReviewDecisionsIfNeeded(res.summary);
+    if (reconciled) {
+      reviewState.loading = false;
+      return loadReviewGallery(false);
+    }
+
+    reviewState.summary = res.summary;
+    reviewState.items = res.items || [];
+    reviewState.totalFiltered = Number(res.total_filtered || 0);
+    reviewState.totalPages = Number(res.total_pages || 1);
+    if (reviewState.triageIdx >= reviewState.items.length) {
+      reviewState.triageIdx = Math.max(0, reviewState.items.length - 1);
+    }
+
+    // Keep global bootstrap summary + Employee Backend KPIs in sync
+    if (state.data) {
+      state.data.reviewSummary = res.summary;
+      renderStaffKpis();
+    }
+
+    renderReviewChrome();
+    renderReviewStage();
+    preloadUpcomingReviewThumbs();
+  } catch (err) {
+    showToast('Could not load visual review photos: ' + err.message);
+  } finally {
+    reviewState.loading = false;
+  }
+}
+
+function preloadUpcomingReviewThumbs() {
+  const start = Math.max(0, reviewState.triageIdx);
+  for (let i = start; i < Math.min(reviewState.items.length, start + 5); i++) {
+    const url = reviewState.items[i]?.thumb_url;
+    if (url) {
+      const img = new Image();
+      img.src = url;
+    }
+  }
+}
+
+function renderReviewChrome() {
+  const sum = reviewState.summary;
+  if (!sum) return;
+
+  const total = Number(sum.total || 0);
+  const pending = Number(sum.pending || 0);
+  const keep = Number(sum.keep || 0);
+  const remove = Number(sum.remove || 0);
+
+  document.getElementById('rev-stat-total').textContent = total.toLocaleString();
+  document.getElementById('rev-stat-pending').textContent = pending.toLocaleString();
+  document.getElementById('rev-stat-keep').textContent = keep.toLocaleString();
+  document.getElementById('rev-stat-remove').textContent = remove.toLocaleString();
+
+  const keepPct = total > 0 ? (keep / total) * 100 : 0;
+  const remPct = total > 0 ? (remove / total) * 100 : 0;
+  document.getElementById('rev-prog-keep').style.width = `${keepPct.toFixed(2)}%`;
+  document.getElementById('rev-prog-remove').style.width = `${remPct.toFixed(2)}%`;
+
+  const masterLink = document.getElementById('review-master-drive-link');
+  if (masterLink && sum.master_drive_folder_url) {
+    masterLink.href = sum.master_drive_folder_url;
+  }
+
+  const undoBtn = document.getElementById('btn-review-undo');
+  if (undoBtn) {
+    undoBtn.disabled = reviewState.undoStack.length === 0;
+    undoBtn.textContent = reviewState.undoStack.length ? `↶ Undo (${reviewState.undoStack.length})` : '↶ Undo';
+  }
+
+  // Status filter pills with live counts
+  document.querySelectorAll('#review-status-pills .review-filter-pill').forEach((btn) => {
+    const st = btn.dataset.status;
+    btn.classList.toggle('active', st === reviewState.status);
+    if (st === 'pending') btn.textContent = `Pending (${pending.toLocaleString()})`;
+    else if (st === 'keep') btn.textContent = `✓ KEEP (${keep.toLocaleString()})`;
+    else if (st === 'remove') btn.textContent = `✕ REMOVE (${remove.toLocaleString()})`;
+    else btn.textContent = `All (${total.toLocaleString()})`;
+  });
+
+  // Layout mode buttons
+  document.getElementById('btn-rev-mode-triage')?.classList.toggle('active', reviewState.mode === 'triage');
+  document.getElementById('btn-rev-mode-grid')?.classList.toggle('active', reviewState.mode === 'grid');
+
+  // Folder dropdown
+  const sel = document.getElementById('review-folder-select');
+  const folders = sum.folders || [];
+  if (sel) {
+    sel.innerHTML =
+      `<option value="all">All Vehicle Folders (${folders.length} folders • ${total.toLocaleString()} photos)</option>` +
+      folders.map((f) => {
+        const countLabel = reviewState.status === 'pending'
+          ? `${f.pending} pending / ${f.total}`
+          : reviewState.status === 'keep'
+            ? `${f.keep} keep / ${f.total}`
+            : reviewState.status === 'remove'
+              ? `${f.remove} remove / ${f.total}`
+              : `${f.total} total`;
+        return `<option value="${esc(f.name)}">${esc(f.name)} (${countLabel})</option>`;
+      }).join('');
+    sel.value = reviewState.folder;
+  }
+
+  // Scrollable folder chips
+  const chipsEl = document.getElementById('review-folder-chips');
+  if (chipsEl) {
+    const allChip = `<button type="button" class="review-folder-chip ${reviewState.folder === 'all' ? 'active' : ''}" onclick="selectReviewFolder('all')">All Folders <span class="chip-count">${pending}</span></button>`;
+    const fChips = folders.map((f) => {
+      const activeCls = reviewState.folder === f.name ? 'active' : '';
+      const unidCls = f.name === 'Unidentified_Auto_Parts_Needs_Tag' ? 'unidentified' : '';
+      const badgeNum = reviewState.status === 'keep' ? f.keep : reviewState.status === 'remove' ? f.remove : reviewState.status === 'all' ? f.total : f.pending;
+      const shortLabel = f.name === 'Unidentified_Auto_Parts_Needs_Tag' ? '🏷 Unidentified (Needs Tag)' : f.name;
+      return `<button type="button" class="review-folder-chip ${unidCls} ${activeCls}" onclick="selectReviewFolder('${esc(f.name).replace(/'/g, "\\'")}')">${esc(shortLabel)} <span class="chip-count">${badgeNum}</span></button>`;
+    }).join('');
+    chipsEl.innerHTML = allChip + fChips;
+  }
+
+  // Folder context banner (when specific folder selected)
+  const banner = document.getElementById('review-folder-banner');
+  if (banner) {
+    const activeFolder = folders.find((f) => f.name === reviewState.folder);
+    if (activeFolder) {
+      banner.style.display = 'flex';
+      banner.innerHTML = `
+        <div>
+          <strong>📁 ${esc(activeFolder.name)}</strong> —
+          <span>${activeFolder.total} total • <strong style="color:var(--status-warn-fg);">${activeFolder.pending} pending</strong> • <strong style="color:var(--status-ok-fg);">${activeFolder.keep} keep</strong> • <strong style="color:var(--status-err-fg);">${activeFolder.remove} remove</strong></span>
+        </div>
+        <div style="display:flex;gap:0.45rem;flex-wrap:wrap;">
+          <a href="${esc(activeFolder.drive_folder_url)}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">Open Folder in Drive ↗</a>
+          ${activeFolder.pending > 0 ? `
+            <button type="button" class="btn btn-outline btn-sm" style="border-color:#15803d;color:#15803d;" onclick="bulkDecideCurrentFolder('keep')">✓ Keep All ${activeFolder.pending} Pending</button>
+            <button type="button" class="btn btn-outline btn-sm" style="border-color:#dc2626;color:#dc2626;" onclick="bulkDecideCurrentFolder('remove')">✕ Remove All ${activeFolder.pending} Pending</button>
+          ` : ''}
+        </div>
+      `;
+    } else {
+      banner.style.display = 'none';
+      banner.innerHTML = '';
+    }
+  }
+}
+
+function renderReviewStage() {
+  const triageEl = document.getElementById('review-triage-stage');
+  const gridEl = document.getElementById('review-grid-stage');
+  const pagerEl = document.getElementById('review-pagination-bar');
+
+  if (reviewState.mode === 'triage') {
+    triageEl.style.display = 'block';
+    gridEl.style.display = 'none';
+    renderReviewTriageCard(triageEl);
+  } else {
+    triageEl.style.display = 'none';
+    gridEl.style.display = 'grid';
+    renderReviewGridCards(gridEl);
+  }
+
+  // Pagination bar
+  if (reviewState.totalPages > 1) {
+    pagerEl.innerHTML = `
+      <button type="button" class="btn btn-outline btn-sm" ${reviewState.page <= 1 ? 'disabled' : ''} onclick="goReviewPage(${reviewState.page - 1})">← Prev Page</button>
+      <span class="mono" style="font-size:0.82rem;font-weight:700;">Page ${reviewState.page} of ${reviewState.totalPages} (${reviewState.totalFiltered.toLocaleString()} matching)</span>
+      <button type="button" class="btn btn-outline btn-sm" ${reviewState.page >= reviewState.totalPages ? 'disabled' : ''} onclick="goReviewPage(${reviewState.page + 1})">Next Page →</button>
+    `;
+  } else {
+    pagerEl.innerHTML = reviewState.totalFiltered > 0
+      ? `<span class="mono" style="font-size:0.8rem;color:var(--text-muted);">Showing ${reviewState.items.length} of ${reviewState.totalFiltered.toLocaleString()} matching photos</span>`
+      : '';
+  }
+}
+
+function renderReviewTriageCard(container) {
+  if (!reviewState.items.length) {
+    container.innerHTML = `
+      <div class="surface-card" style="text-align:center;padding:2.2rem 1.25rem;">
+        <h3 style="margin:0 0 0.45rem;">${reviewState.status === 'pending' ? '🎉 All Caught Up in This Filter!' : 'No Photos Match This Filter'}</h3>
+        <p style="margin:0 0 1rem;color:var(--text-secondary);font-size:0.88rem;">
+          ${reviewState.status === 'pending'
+            ? 'Every photo in this folder has been sorted into KEEP or REMOVE. Switch folders above or inspect your KEEP / REMOVE lists.'
+            : 'Try switching status filters (Pending / KEEP / REMOVE / All) or clearing your search.'}
+        </p>
+        <div style="display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="selectReviewFolder('all'); setReviewStatusFilter('pending');">View All Remaining Pending</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReviewStatusFilter('keep')">Inspect ✓ KEEP List</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReviewStatusFilter('remove')">Inspect ✕ REMOVE List</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const item = reviewState.items[reviewState.triageIdx] || reviewState.items[0];
+  const globalPos = (reviewState.page - 1) * reviewState.limit + reviewState.triageIdx + 1;
+  const folderName = item.effective_folder || item.vehicle_folder;
+  const statusRibbon = item.review_status === 'keep'
+    ? '<span class="review-status-ribbon status-keep">✓ KEPT (IN STOCK)</span>'
+    : item.review_status === 'remove'
+      ? '<span class="review-status-ribbon status-remove">✕ REMOVED (SOLD/SCRAP)</span>'
+      : '<span class="review-status-ribbon status-pending">PENDING REVIEW</span>';
+
+  const folders = reviewState.summary?.folders || [];
+  const folderOptions = folders.map((f) => `<option value="${esc(f.name)}" ${f.name === folderName ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+
+  container.innerHTML = `
+    <article class="review-triage-card" id="review-active-card" data-uid="${esc(item.photo_uid)}">
+      <div class="review-triage-header">
+        <div>
+          <span class="badge badge-warn mono">${esc(item.photo_uid)}</span>
+          <strong style="margin-left:0.4rem;font-size:0.9rem;">${esc(folderName)}</strong>
+        </div>
+        <span class="mono" style="font-size:0.78rem;opacity:0.86;">${globalPos.toLocaleString()} / ${reviewState.totalFiltered.toLocaleString()}</span>
+      </div>
+
+      <div class="review-triage-media" id="review-triage-media" onclick="openReviewZoomModal('${esc(item.photo_uid)}')">
+        <img src="${esc(item.thumb_url)}" alt="${esc(item.title_hint || item.original_name)}" loading="eager" decoding="async" />
+        ${statusRibbon}
+      </div>
+
+      <div class="review-triage-body">
+        <h4 class="review-triage-title">${esc(item.title_hint || item.original_name)}</h4>
+        <div class="review-triage-sub">
+          File: <span class="mono">${esc(item.original_name)}</span>
+          ${item.copy_count > 1 ? ` • <span class="badge badge-dark">${item.copy_count} dupes merged</span>` : ''}
+          ${item.notes ? ` • Note: <strong>${esc(item.notes)}</strong>` : ''}
+        </div>
+
+        <div class="review-big-actions">
+          <button type="button" class="btn-review-remove" onclick="decideReviewPhoto('${esc(item.photo_uid)}', 'remove')">
+            ✕ REMOVE
+            <small>Sold / Disposed (R)</small>
+          </button>
+          <button type="button" class="btn-review-keep" onclick="decideReviewPhoto('${esc(item.photo_uid)}', 'keep')">
+            ✓ KEEP
+            <small>In Stock (K)</small>
+          </button>
+        </div>
+
+        <div class="review-triage-footer">
+          <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" onclick="stepReviewTriage(-1)" ${reviewState.triageIdx <= 0 && reviewState.page <= 1 ? 'disabled' : ''}>← Prev</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="stepReviewTriage(1)" ${reviewState.triageIdx >= reviewState.items.length - 1 && reviewState.page >= reviewState.totalPages ? 'disabled' : ''}>Skip / Next →</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openReviewZoomModal('${esc(item.photo_uid)}')">🔍 Zoom &amp; Tag</button>
+          </div>
+          ${folderName === 'Unidentified_Auto_Parts_Needs_Tag' ? `
+            <select class="select" style="width:auto;min-width:190px;padding:0.35rem 0.55rem;font-size:0.78rem;" onchange="quickRetagReviewPhoto('${esc(item.photo_uid)}', this.value)" aria-label="Quick re-tag vehicle folder">
+              <option value="">🏷 Re-tag to Vehicle Folder...</option>
+              ${folderOptions}
+            </select>
+          ` : `
+            <a href="${esc(item.drive_url)}" target="_blank" rel="noopener" style="font-size:0.78rem;font-weight:700;color:var(--brand-steel);">Drive Original ↗</a>
+          `}
+        </div>
+        <div style="margin-top:0.55rem;font-size:0.72rem;color:var(--text-muted);text-align:center;">
+          Tip: Swipe photo <strong>Right = KEEP</strong> or <strong>Left = REMOVE</strong> • Tap photo to zoom or re-tag vehicle
+        </div>
+      </div>
+    </article>
+  `;
+
+  attachTriageSwipeListeners();
+}
+
+function attachTriageSwipeListeners() {
+  const media = document.getElementById('review-triage-media');
+  const card = document.getElementById('review-active-card');
+  if (!media || !card) return;
+  const uid = card.dataset.uid;
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+
+  media.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    tracking = true;
+  }, { passive: true });
+
+  media.addEventListener('touchend', (e) => {
+    if (!tracking || !e.changedTouches.length) return;
+    tracking = false;
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      if (dx > 0) decideReviewPhoto(uid, 'keep');
+      else decideReviewPhoto(uid, 'remove');
+    }
+  }, { passive: true });
+}
+
+function renderReviewGridCards(container) {
+  if (!reviewState.items.length) {
+    container.style.display = 'block';
+    container.innerHTML = `
+      <div class="surface-card" style="text-align:center;padding:2rem 1rem;">
+        <h3 style="margin:0 0 0.4rem;">No Photos in This Filter</h3>
+        <p style="margin:0 0 0.85rem;color:var(--text-secondary);font-size:0.86rem;">Try another vehicle folder or switch between Pending, KEEP, REMOVE, and All.</p>
+        <button type="button" class="btn btn-primary btn-sm" onclick="selectReviewFolder('all'); setReviewStatusFilter('all');">Show All Photos</button>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = reviewState.items.map((item) => {
+    const folderName = item.effective_folder || item.vehicle_folder;
+    const statusCls = item.review_status === 'keep' ? 'is-keep' : item.review_status === 'remove' ? 'is-remove' : '';
+    const ribbon = item.review_status === 'keep'
+      ? '<span class="review-status-ribbon status-keep">✓ KEEP</span>'
+      : item.review_status === 'remove'
+        ? '<span class="review-status-ribbon status-remove">✕ REMOVE</span>'
+        : '';
+
+    return `
+      <article class="review-card ${statusCls}" data-uid="${esc(item.photo_uid)}">
+        <div class="review-card-media" onclick="openReviewZoomModal('${esc(item.photo_uid)}')">
+          <img src="${esc(item.thumb_url)}" alt="${esc(item.title_hint || item.original_name)}" loading="lazy" decoding="async" />
+          ${ribbon}
+        </div>
+        <div class="review-card-body">
+          <div class="review-card-folder" title="${esc(folderName)}">${esc(folderName)}</div>
+          <div class="review-card-name" title="${esc(item.title_hint || item.original_name)}">${esc(item.title_hint || item.original_name)}</div>
+          <div class="review-card-meta">
+            <span class="mono">${esc(item.photo_uid)}</span>
+            <span>${item.copy_count > 1 ? `×${item.copy_count} merged` : 'Unique'}</span>
+          </div>
+        </div>
+        <div class="review-card-actions">
+          <button type="button" class="btn-review-remove" onclick="decideReviewPhoto('${esc(item.photo_uid)}', 'remove')">
+            ✕ REMOVE
+            <small>Sold/Scrap</small>
+          </button>
+          <button type="button" class="btn-review-keep" onclick="decideReviewPhoto('${esc(item.photo_uid)}', 'keep')">
+            ✓ KEEP
+            <small>In Stock</small>
+          </button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function decideReviewPhoto(uid, nextStatus, extraMeta = null) {
+  const idx = reviewState.items.findIndex((i) => i.photo_uid === uid);
+  const item = idx >= 0 ? reviewState.items[idx] : (reviewState.zoomItem?.photo_uid === uid ? reviewState.zoomItem : null);
+  const prevStatus = item ? item.review_status : 'pending';
+  const prevTag = item ? (item.vehicle_tag_override || '') : '';
+  const prevNotes = item ? (item.notes || '') : '';
+
+  // Record undo entry
+  reviewState.undoStack.push({ uid, prevStatus, prevTag, prevNotes });
+  if (reviewState.undoStack.length > 50) reviewState.undoStack.shift();
+
+  // Save immediately to phone localStorage
+  const payload = { status: nextStatus };
+  if (extraMeta) {
+    if (extraMeta.vehicle_tag_override !== undefined) payload.vehicle_tag_override = extraMeta.vehicle_tag_override;
+    if (extraMeta.notes !== undefined) payload.notes = extraMeta.notes;
+  }
+  saveLocalReviewDecision(uid, payload);
+
+  // Optimistic local UI update for 0ms tap feel
+  if (reviewState.summary && prevStatus !== nextStatus) {
+    if (prevStatus === 'pending') reviewState.summary.pending = Math.max(0, reviewState.summary.pending - 1);
+    else if (prevStatus === 'keep') reviewState.summary.keep = Math.max(0, reviewState.summary.keep - 1);
+    else if (prevStatus === 'remove') reviewState.summary.remove = Math.max(0, reviewState.summary.remove - 1);
+
+    if (nextStatus === 'pending') reviewState.summary.pending += 1;
+    else if (nextStatus === 'keep') reviewState.summary.keep += 1;
+    else if (nextStatus === 'remove') reviewState.summary.remove += 1;
+
+    const effFolder = item ? (item.effective_folder || item.vehicle_folder) : '';
+    const fObj = (reviewState.summary.folders || []).find((f) => f.name === effFolder);
+    if (fObj) {
+      if (prevStatus === 'pending') fObj.pending = Math.max(0, fObj.pending - 1);
+      else if (prevStatus === 'keep') fObj.keep = Math.max(0, fObj.keep - 1);
+      else if (prevStatus === 'remove') fObj.remove = Math.max(0, fObj.remove - 1);
+
+      if (nextStatus === 'pending') fObj.pending += 1;
+      else if (nextStatus === 'keep') fObj.keep += 1;
+      else if (nextStatus === 'remove') fObj.remove += 1;
+    }
+  }
+
+  if (idx >= 0) {
+    reviewState.items[idx].review_status = nextStatus;
+    if (extraMeta?.vehicle_tag_override !== undefined) {
+      reviewState.items[idx].vehicle_tag_override = extraMeta.vehicle_tag_override;
+      reviewState.items[idx].effective_folder = extraMeta.vehicle_tag_override || reviewState.items[idx].vehicle_folder;
+    }
+    if (extraMeta?.notes !== undefined) {
+      reviewState.items[idx].notes = extraMeta.notes;
+    }
+    if (reviewState.status !== 'all' && reviewState.status !== nextStatus) {
+      reviewState.items.splice(idx, 1);
+      reviewState.totalFiltered = Math.max(0, reviewState.totalFiltered - 1);
+      if (reviewState.triageIdx >= reviewState.items.length) {
+        reviewState.triageIdx = Math.max(0, reviewState.items.length - 1);
+      }
+    } else if (reviewState.mode === 'triage' && reviewState.triageIdx < reviewState.items.length - 1) {
+      reviewState.triageIdx += 1;
+    }
+  }
+
+  closeReviewZoomModal();
+  renderReviewChrome();
+  renderReviewStage();
+  preloadUpcomingReviewThumbs();
+
+  // Persist to cloud SQLite
+  try {
+    const res = await api(`/api/review-photos/${encodeURIComponent(uid)}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.summary) {
+      reviewState.summary = res.summary;
+      if (state.data) {
+        state.data.reviewSummary = res.summary;
+        renderStaffKpis();
+      }
+      renderReviewChrome();
+    }
+    setReviewSyncBadge('✓ Phone + Cloud');
+  } catch (_) {
+    setReviewSyncBadge('Saved on Phone (Retry Soon)', true);
+  }
+
+  // Auto-fetch next batch if current filtered page just became empty while more matching photos remain
+  if (reviewState.items.length === 0 && reviewState.totalFiltered > 0) {
+    await loadReviewGallery(false);
+  }
+}
+
+async function undoLastReviewDecision() {
+  const last = reviewState.undoStack.pop();
+  if (!last) return;
+  saveLocalReviewDecision(last.uid, {
+    status: last.prevStatus,
+    vehicle_tag_override: last.prevTag,
+    notes: last.prevNotes
+  });
+  try {
+    await api(`/api/review-photos/${encodeURIComponent(last.uid)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        status: last.prevStatus,
+        vehicle_tag_override: last.prevTag,
+        notes: last.prevNotes
+      })
+    });
+    showToast(`Undid ${last.uid} → restored to ${last.prevStatus.toUpperCase()}`);
+    await loadReviewGallery(false);
+  } catch (err) {
+    showToast('Undo failed: ' + err.message);
+  }
+}
+
+async function quickRetagReviewPhoto(uid, newFolder) {
+  if (!newFolder) return;
+  const item = reviewState.items.find((i) => i.photo_uid === uid);
+  const status = item?.review_status || 'pending';
+  saveLocalReviewDecision(uid, { status, vehicle_tag_override: newFolder });
+  try {
+    await api(`/api/review-photos/${encodeURIComponent(uid)}`, {
+      method: 'POST',
+      body: JSON.stringify({ status, vehicle_tag_override: newFolder })
+    });
+    showToast(`Re-tagged ${uid} → ${newFolder}`);
+    await loadReviewGallery(false);
+  } catch (err) {
+    showToast('Could not re-tag: ' + err.message);
+  }
+}
+
+async function bulkDecideCurrentFolder(targetStatus) {
+  if (!reviewState.folder || reviewState.folder === 'all') return;
+  const actionWord = targetStatus === 'keep' ? 'KEEP (In Stock)' : 'REMOVE (Sold / Disposed)';
+  const ok = window.confirm(`Mark ALL remaining PENDING photos in "${reviewState.folder}" as ${actionWord}?`);
+  if (!ok) return;
+  try {
+    const res = await api('/api/review-photos/bulk-status', {
+      method: 'POST',
+      body: JSON.stringify({
+        folder: reviewState.folder,
+        from_status: 'pending',
+        status: targetStatus
+      })
+    });
+    showToast(`Updated ${res.updated} photos in ${reviewState.folder} → ${actionWord}`);
+    await loadReviewGallery(true);
+  } catch (err) {
+    showToast('Bulk update failed: ' + err.message);
+  }
+}
+
+function selectReviewFolder(folderName) {
+  reviewState.folder = folderName || 'all';
+  loadReviewGallery(true);
+}
+
+function setReviewStatusFilter(status) {
+  reviewState.status = status || 'pending';
+  loadReviewGallery(true);
+}
+
+function setReviewLayoutMode(mode) {
+  reviewState.mode = mode === 'grid' ? 'grid' : 'triage';
+  renderReviewChrome();
+  renderReviewStage();
+}
+
+function stepReviewTriage(delta) {
+  const nextIdx = reviewState.triageIdx + delta;
+  if (nextIdx >= 0 && nextIdx < reviewState.items.length) {
+    reviewState.triageIdx = nextIdx;
+    renderReviewStage();
+    preloadUpcomingReviewThumbs();
+  } else if (delta > 0 && reviewState.page < reviewState.totalPages) {
+    reviewState.page += 1;
+    reviewState.triageIdx = 0;
+    loadReviewGallery(false);
+  } else if (delta < 0 && reviewState.page > 1) {
+    reviewState.page -= 1;
+    reviewState.triageIdx = 0;
+    loadReviewGallery(false);
+  }
+}
+
+function goReviewPage(pageNum) {
+  reviewState.page = Math.max(1, Math.min(reviewState.totalPages, pageNum));
+  reviewState.triageIdx = 0;
+  loadReviewGallery(false);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function openReviewZoomModal(uid) {
+  const item = reviewState.items.find((i) => i.photo_uid === uid);
+  if (!item) return;
+  reviewState.zoomItem = item;
+  const effFolder = item.effective_folder || item.vehicle_folder;
+
+  document.getElementById('review-zoom-uid').textContent = item.photo_uid;
+  document.getElementById('review-zoom-folder').textContent = effFolder;
+  document.getElementById('review-zoom-img').src = item.thumb_url;
+  document.getElementById('review-zoom-title').textContent = item.title_hint || item.original_name;
+  document.getElementById('review-zoom-meta').textContent =
+    `File: ${item.original_name} • Source: ${item.source_path || 'Google Drive'} • Copies merged: ${item.copy_count || 1}`;
+  document.getElementById('review-zoom-drive-link').href = item.drive_url || reviewState.summary?.master_drive_folder_url || '#';
+
+  const folders = reviewState.summary?.folders || [];
+  const tagSel = document.getElementById('review-zoom-tag-select');
+  tagSel.innerHTML = folders.map((f) => `<option value="${esc(f.name)}" ${f.name === effFolder ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+  if (!folders.some((f) => f.name === effFolder)) {
+    tagSel.innerHTML = `<option value="${esc(effFolder)}" selected>${esc(effFolder)}</option>` + tagSel.innerHTML;
+  }
+  document.getElementById('review-zoom-tag-custom').value = '';
+  document.getElementById('review-zoom-notes').value = item.notes || '';
+  document.getElementById('review-zoom-modal').classList.add('open');
+}
+
+function closeReviewZoomModal() {
+  document.getElementById('review-zoom-modal')?.classList.remove('open');
+  reviewState.zoomItem = null;
+}
+
+function readZoomModalMetaPatch() {
+  const customTag = (document.getElementById('review-zoom-tag-custom')?.value || '').trim();
+  const selTag = (document.getElementById('review-zoom-tag-select')?.value || '').trim();
+  const notes = (document.getElementById('review-zoom-notes')?.value || '').trim();
+  const item = reviewState.zoomItem;
+  const chosenFolder = customTag || selTag;
+  const vehicle_tag_override = item && chosenFolder && chosenFolder !== item.vehicle_folder ? chosenFolder : (customTag || '');
+  return { vehicle_tag_override, notes };
+}
+
+function bindReviewGalleryEvents() {
+  document.getElementById('btn-rev-mode-triage')?.addEventListener('click', () => setReviewLayoutMode('triage'));
+  document.getElementById('btn-rev-mode-grid')?.addEventListener('click', () => setReviewLayoutMode('grid'));
+  document.getElementById('btn-review-undo')?.addEventListener('click', undoLastReviewDecision);
+
+  document.querySelectorAll('#review-status-pills .review-filter-pill').forEach((btn) => {
+    btn.addEventListener('click', () => setReviewStatusFilter(btn.dataset.status));
+  });
+
+  document.getElementById('review-folder-select')?.addEventListener('change', (e) => {
+    selectReviewFolder(e.target.value);
+  });
+
+  document.getElementById('review-search-input')?.addEventListener('input', (e) => {
+    clearTimeout(reviewState.searchTimer);
+    reviewState.searchTimer = setTimeout(() => {
+      reviewState.q = (e.target.value || '').trim();
+      loadReviewGallery(true);
+    }, 260);
+  });
+
+  document.getElementById('btn-close-review-zoom')?.addEventListener('click', closeReviewZoomModal);
+  document.getElementById('review-zoom-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'review-zoom-modal') closeReviewZoomModal();
+  });
+
+  document.getElementById('btn-review-zoom-save-meta')?.addEventListener('click', async () => {
+    if (!reviewState.zoomItem) return;
+    const patch = readZoomModalMetaPatch();
+    await decideReviewPhoto(reviewState.zoomItem.photo_uid, reviewState.zoomItem.review_status, patch);
+    showToast('Saved vehicle folder tag & note!');
+    await loadReviewGallery(false);
+  });
+
+  document.getElementById('btn-review-zoom-keep')?.addEventListener('click', () => {
+    if (!reviewState.zoomItem) return;
+    decideReviewPhoto(reviewState.zoomItem.photo_uid, 'keep', readZoomModalMetaPatch());
+  });
+
+  document.getElementById('btn-review-zoom-remove')?.addEventListener('click', () => {
+    if (!reviewState.zoomItem) return;
+    decideReviewPhoto(reviewState.zoomItem.photo_uid, 'remove', readZoomModalMetaPatch());
+  });
+
+  // Keyboard triage shortcuts (K = KEEP, R = REMOVE, Z = Undo, Arrows = Prev/Next)
+  document.addEventListener('keydown', (e) => {
+    const reviewVisible = document.getElementById('view-staff')?.classList.contains('active') &&
+      document.getElementById('staff-review')?.classList.contains('active');
+    if (!reviewVisible || reviewState.mode !== 'triage') return;
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    if (['input', 'textarea', 'select'].includes(tag)) return;
+    if (document.getElementById('review-zoom-modal')?.classList.contains('open')) {
+      if (e.key === 'Escape') closeReviewZoomModal();
+      return;
+    }
+    const cur = reviewState.items[reviewState.triageIdx];
+    if (!cur) return;
+    const key = e.key.toLowerCase();
+    if (key === 'k') {
+      e.preventDefault();
+      decideReviewPhoto(cur.photo_uid, 'keep');
+    } else if (key === 'r') {
+      e.preventDefault();
+      decideReviewPhoto(cur.photo_uid, 'remove');
+    } else if (key === 'z') {
+      e.preventDefault();
+      undoLastReviewDecision();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      stepReviewTriage(1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      stepReviewTriage(-1);
+    }
+  });
+}
+

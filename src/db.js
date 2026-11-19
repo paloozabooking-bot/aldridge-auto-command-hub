@@ -249,6 +249,26 @@ db.exec(`
     details TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS photo_review_items (
+    photo_uid TEXT PRIMARY KEY,
+    vehicle_folder TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    title_hint TEXT DEFAULT '',
+    drive_file_id TEXT NOT NULL,
+    copied_drive_id TEXT DEFAULT '',
+    copied_folder_id TEXT DEFAULT '',
+    source_path TEXT DEFAULT '',
+    copy_count INTEGER DEFAULT 1,
+    size_bytes INTEGER DEFAULT 0,
+    thumb_url TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    vehicle_tag_override TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_photo_review_status ON photo_review_items(review_status);
+  CREATE INDEX IF NOT EXISTS idx_photo_review_folder ON photo_review_items(vehicle_folder);
 `);
 
 const DEFAULT_SETTINGS = {
@@ -1289,12 +1309,161 @@ function ensureCleanSlateBaseline() {
   }
 }
 
+let _reviewCatalogMetaCache = null;
+
+function resolveReviewCatalogPath() {
+  const candidates = [
+    path.join(DATA_DIR, 'review_catalog.json'),
+    path.join(BUNDLED_DATA_DIR, 'review_catalog.json')
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function getReviewCatalogMeta() {
+  if (_reviewCatalogMetaCache) return _reviewCatalogMetaCache;
+  const catalogPath = resolveReviewCatalogPath();
+  if (!catalogPath) {
+    return {
+      master_drive_folder_id: '1GU119_1CurzYNq1vnQXO3e3po4tp1sz4',
+      master_drive_folder_url: 'https://drive.google.com/drive/folders/1GU119_1CurzYNq1vnQXO3e3po4tp1sz4',
+      duplicates_filtered: 26578,
+      folders_drive_map: {}
+    };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    _reviewCatalogMetaCache = {
+      master_drive_folder_id: raw.master_drive_folder_id || '1GU119_1CurzYNq1vnQXO3e3po4tp1sz4',
+      master_drive_folder_url: raw.master_drive_folder_url || `https://drive.google.com/drive/folders/${raw.master_drive_folder_id || '1GU119_1CurzYNq1vnQXO3e3po4tp1sz4'}`,
+      duplicates_filtered: Number(raw.duplicates_filtered || 26578),
+      folders_drive_map: raw.folders_drive_map || {}
+    };
+    return _reviewCatalogMetaCache;
+  } catch (_) {
+    return {
+      master_drive_folder_id: '1GU119_1CurzYNq1vnQXO3e3po4tp1sz4',
+      master_drive_folder_url: 'https://drive.google.com/drive/folders/1GU119_1CurzYNq1vnQXO3e3po4tp1sz4',
+      duplicates_filtered: 26578,
+      folders_drive_map: {}
+    };
+  }
+}
+
+function seedPhotoReviewCatalogIfNeeded(force = false) {
+  const existingCount = db.prepare('SELECT COUNT(*) AS c FROM photo_review_items').get().c;
+  if (existingCount > 0 && !force) {
+    return { seeded: 0, total: existingCount };
+  }
+  const catalogPath = resolveReviewCatalogPath();
+  if (!catalogPath) {
+    return { seeded: 0, total: existingCount };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    const items = Array.isArray(raw.items) ? raw.items : [];
+    if (!items.length) return { seeded: 0, total: existingCount };
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      INSERT ${force ? 'OR REPLACE' : 'OR IGNORE'} INTO photo_review_items (
+        photo_uid, vehicle_folder, original_name, title_hint, drive_file_id,
+        copied_drive_id, copied_folder_id, source_path, copy_count, size_bytes,
+        thumb_url, review_status, vehicle_tag_override, notes, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    db.exec('BEGIN;');
+    try {
+      for (const it of items) {
+        stmt.run(
+          String(it.photo_uid),
+          String(it.vehicle_folder || 'Unidentified_Auto_Parts_Needs_Tag'),
+          String(it.original_name || ''),
+          String(it.title_hint || ''),
+          String(it.drive_file_id || ''),
+          String(it.copied_drive_id || ''),
+          String(it.copied_folder_id || ''),
+          String(it.source_path || ''),
+          Number(it.copy_count || 1),
+          Number(it.size_bytes || 0),
+          String(it.thumb_url || `/review-thumbs/${it.photo_uid}.jpg`),
+          String(it.review_status || 'pending'),
+          String(it.vehicle_tag_override || ''),
+          String(it.notes || ''),
+          now
+        );
+      }
+      db.exec('COMMIT;');
+    } catch (err) {
+      db.exec('ROLLBACK;');
+      throw err;
+    }
+    _reviewCatalogMetaCache = null;
+    const total = db.prepare('SELECT COUNT(*) AS c FROM photo_review_items').get().c;
+    return { seeded: items.length, total };
+  } catch (err) {
+    console.error('[ReviewCatalog Seed Error]', err.message);
+    return { seeded: 0, total: existingCount };
+  }
+}
+
+function getPhotoReviewSummary() {
+  const totals = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN review_status = 'keep' THEN 1 ELSE 0 END) AS keep,
+      SUM(CASE WHEN review_status = 'remove' THEN 1 ELSE 0 END) AS remove
+    FROM photo_review_items
+  `).get();
+  const folderRows = db.prepare(`
+    SELECT
+      CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS folder_name,
+      COUNT(*) AS total,
+      SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN review_status = 'keep' THEN 1 ELSE 0 END) AS keep,
+      SUM(CASE WHEN review_status = 'remove' THEN 1 ELSE 0 END) AS remove,
+      MAX(copied_folder_id) AS drive_folder_id
+    FROM photo_review_items
+    GROUP BY folder_name
+    ORDER BY
+      CASE WHEN folder_name = 'Unidentified_Auto_Parts_Needs_Tag' THEN 1 ELSE 0 END,
+      total DESC,
+      folder_name ASC
+  `).all();
+  const meta = getReviewCatalogMeta();
+  const folders = folderRows.map((r) => {
+    const fId = meta.folders_drive_map?.[r.folder_name] || r.drive_folder_id || '';
+    return {
+      name: r.folder_name,
+      total: Number(r.total || 0),
+      pending: Number(r.pending || 0),
+      keep: Number(r.keep || 0),
+      remove: Number(r.remove || 0),
+      drive_folder_id: fId,
+      drive_folder_url: fId ? `https://drive.google.com/drive/folders/${fId}` : meta.master_drive_folder_url
+    };
+  });
+  return {
+    total: Number(totals?.total || 0),
+    pending: Number(totals?.pending || 0),
+    keep: Number(totals?.keep || 0),
+    remove: Number(totals?.remove || 0),
+    duplicates_filtered: meta.duplicates_filtered,
+    master_drive_folder_id: meta.master_drive_folder_id,
+    master_drive_folder_url: meta.master_drive_folder_url,
+    folders
+  };
+}
+
 if (getSettings().clean_slate_mode) {
   ensureCleanSlateBaseline();
 } else {
   seedDemoDataIfNeeded();
   seedAuditGroundTruthCatalog(false);
 }
+seedPhotoReviewCatalogIfNeeded(false);
 
 module.exports = {
   db,
@@ -1310,7 +1479,10 @@ module.exports = {
   logSync,
   ensureCleanSlateBaseline,
   seedDemoDataIfNeeded,
-  seedAuditGroundTruthCatalog
+  seedAuditGroundTruthCatalog,
+  seedPhotoReviewCatalogIfNeeded,
+  getReviewCatalogMeta,
+  getPhotoReviewSummary
 };
 
 

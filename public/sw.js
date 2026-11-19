@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aldridge-autos-hub-v8';
+const CACHE_NAME = 'aldridge-autos-hub-v9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -30,7 +30,11 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/uploads/')) {
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/uploads/') ||
+    url.pathname.startsWith('/review-thumbs/')
+  ) {
     return;
   }
   event.respondWith(

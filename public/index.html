@@ -628,7 +628,8 @@
           <h2>Employee Backend Command Center</h2>
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Open Launch Center (Shopify Push, Ads, Social &amp; SEO)</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-review')">📸 Visual Photo Review (KEEP / REMOVE)</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Launch Center</button>
           <a href="/api/exports/legacy-905-two-tier.csv" download="aldridge_905_legacy_two_tier_active_only.csv" class="btn btn-outline btn-sm">⬇ 905 Two-Tier Shopify CSV</a>
           <a href="/api/exports/ebay-safe-batch-50.csv" download="ebay_aabcas_safe_batch_1_50_skus.csv" class="btn btn-outline btn-sm">⬇ eBay Batch 1 (50 SKUs)</a>
           <a href="/api/exports/local-pickup-98467-ads.csv" download="local_pickup_98467_offerup_craigslist_ads.csv" class="btn btn-outline btn-sm">⬇ 318 Local Pickup Ads CSV</a>
@@ -641,8 +642,9 @@
 
       <!-- Staff Sub-Navigation -->
       <div class="staff-subnav" role="tablist">
-        <button type="button" class="staff-tab active" data-staff="staff-intake" id="tab-btn-intake">1. AI Camera Intake</button>
-        <button type="button" class="staff-tab" data-staff="staff-inventory" id="tab-btn-inventory">2. Inventory (962 SKUs) &amp; CSV</button>
+        <button type="button" class="staff-tab active" data-staff="staff-review" id="tab-btn-review">0. Visual Photo Review</button>
+        <button type="button" class="staff-tab" data-staff="staff-intake" id="tab-btn-intake">1. AI Camera Intake</button>
+        <button type="button" class="staff-tab" data-staff="staff-inventory" id="tab-btn-inventory">2. Inventory &amp; CSV</button>
         <button type="button" class="staff-tab" data-staff="staff-sync" id="tab-btn-sync">3. Multi-Platform Sync &amp; Policies</button>
         <button type="button" class="staff-tab" data-staff="staff-approvals" id="tab-btn-approvals">4. Staff Approvals &amp; Bay Queue</button>
         <button type="button" class="staff-tab" data-staff="staff-crm" id="tab-btn-crm">5. CRM, Inquiries, RMAs &amp; Specials</button>
@@ -650,8 +652,92 @@
         <button type="button" class="staff-tab" data-staff="staff-launch-kit" id="tab-btn-launch">7. Launch Center: Ads, Social &amp; SEO</button>
       </div>
 
+      <!-- STAFF TAB 0: VISUAL IN-STOCK vs SOLD/DISPOSED PHOTO REVIEW GALLERY -->
+      <div class="staff-section active" id="staff-review">
+        <div class="review-sticky-bar" id="review-sticky-bar">
+          <div class="review-top-row">
+            <div>
+              <div class="eyebrow-label" style="margin-bottom:0.15rem;">PRE-INTAKE AUTOMOTIVE PHOTO TRIAGE • PERSONAL &amp; NON-AUTO FILES EXCLUDED</div>
+              <h3 style="margin:0;font-size:1.1rem;">Visual In-Stock vs. Sold/Disposed Review Gallery</h3>
+            </div>
+            <div class="review-top-actions">
+              <a id="review-master-drive-link" href="https://drive.google.com/drive/folders/1GU119_1CurzYNq1vnQXO3e3po4tp1sz4" target="_blank" rel="noopener" class="btn btn-outline btn-sm">📁 Open Sorted Drive Library ↗</a>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-review-undo" disabled>↶ Undo</button>
+              <a href="/api/review-photos/export.csv?status=keep" download class="btn btn-outline btn-sm">⬇ Export KEEP CSV</a>
+              <a href="/api/review-photos/export.csv" download class="btn btn-outline btn-sm">⬇ All Decisions CSV</a>
+              <a href="/api/review-photos/export.json" download class="btn btn-dark btn-sm">⬇ Backup JSON</a>
+            </div>
+          </div>
+
+          <!-- Progress Stats Strip -->
+          <div class="review-stats-row" id="review-stats-row">
+            <div class="review-stat-pill review-stat-total">
+              <span class="review-stat-label">Unique Auto Photos</span>
+              <strong id="rev-stat-total">—</strong>
+            </div>
+            <div class="review-stat-pill review-stat-pending">
+              <span class="review-stat-label">Pending Review</span>
+              <strong id="rev-stat-pending">—</strong>
+            </div>
+            <div class="review-stat-pill review-stat-keep">
+              <span class="review-stat-label">✓ KEEP (In Stock)</span>
+              <strong id="rev-stat-keep">0</strong>
+            </div>
+            <div class="review-stat-pill review-stat-remove">
+              <span class="review-stat-label">✕ REMOVE (Sold/Scrap)</span>
+              <strong id="rev-stat-remove">0</strong>
+            </div>
+            <div class="review-stat-pill review-stat-sync">
+              <span class="review-stat-label">Persistence</span>
+              <strong id="rev-sync-badge">✓ Phone + Cloud</strong>
+            </div>
+          </div>
+
+          <div class="review-progress-track" aria-label="Review progress">
+            <div class="review-progress-keep" id="rev-prog-keep" style="width:0%;"></div>
+            <div class="review-progress-remove" id="rev-prog-remove" style="width:0%;"></div>
+          </div>
+
+          <!-- Filter & Mode Controls -->
+          <div class="review-controls-grid">
+            <div class="review-mode-toggle" role="group" aria-label="Review layout mode">
+              <button type="button" class="review-mode-btn active" id="btn-rev-mode-triage" data-mode="triage">⚡ Quick 1-by-1 Triage</button>
+              <button type="button" class="review-mode-btn" id="btn-rev-mode-grid" data-mode="grid">▦ Grid Gallery</button>
+            </div>
+
+            <div class="review-status-pills" id="review-status-pills">
+              <button type="button" class="review-filter-pill active" data-status="pending">Pending</button>
+              <button type="button" class="review-filter-pill" data-status="keep">✓ KEEP</button>
+              <button type="button" class="review-filter-pill" data-status="remove">✕ REMOVE</button>
+              <button type="button" class="review-filter-pill" data-status="all">All</button>
+            </div>
+
+            <select id="review-folder-select" class="select" aria-label="Filter by Year Make Model vehicle folder">
+              <option value="all">All Vehicle Folders (Loading...)</option>
+            </select>
+
+            <input type="search" id="review-search-input" class="input" placeholder="Search part, filename, vehicle, UID..." />
+          </div>
+
+          <!-- Scrollable Vehicle Folder Chips -->
+          <div class="review-folder-chips" id="review-folder-chips"></div>
+
+          <!-- Active Folder Context & Bulk Actions (shown when a specific folder is selected) -->
+          <div class="review-folder-banner" id="review-folder-banner" style="display:none;"></div>
+        </div>
+
+        <!-- Quick 1-by-1 Triage Stage (Mobile Thumb-Friendly) -->
+        <div id="review-triage-stage" class="review-triage-stage"></div>
+
+        <!-- Grid Gallery Stage -->
+        <div id="review-grid-stage" class="review-grid-stage" style="display:none;"></div>
+
+        <!-- Pagination Bar -->
+        <div id="review-pagination-bar" class="review-pagination-bar"></div>
+      </div>
+
       <!-- STAFF TAB 1: AI CAMERA & ON-HAND PHOTO FOLDER INTAKE -->
-      <div class="staff-section active" id="staff-intake">
+      <div class="staff-section" id="staff-intake">
         <div class="grid-2">
           <div class="surface-card">
             <h3 style="margin-top:0;">Step 1: Drop On-Hand Photo Folder, Upload Angles or Snap Part</h3>
@@ -845,7 +931,7 @@
               <div class="eyebrow-label">0-PRODUCT CLEAN SLATE • STANDARD EBAY US (EBAY.COM) ONLY • CROSSLIST OFFERUP/FB • CRAIGSLIST 98467 AUTO-FILL</div>
               <h3 style="margin:0.15rem 0 0.4rem;">Autonomous 1-Variant Intake + Full Taxonomy/Metafields + Dual-Photo QR Pipeline</h3>
               <p style="font-size:0.83rem;color:var(--text-secondary);margin:0 0 0.65rem;">
-                Every part routes strictly to <strong>Standard eBay US (<code>ebay.com</code> <code>SiteID=US</code> — never eBay Motors)</strong>, maps exact <strong>Shopify + Google Merchant + eBay US categories &amp; metafields</strong> (<code>custom_label_0</code> YMM, <code>custom_label_1</code> Pickup vs Parcel), exposes clean single-variant stock &amp; carrier dimensions to <strong>Crosslist (OfferUp + Personal FB Marketplace auto-delist)</strong>, attaches <code>&lt;SKU&gt;.qr.png</code> as the final Shopify image, and queues 1-click auto-fill for <strong>Seattle/Tacoma Craigslist <code>pts</code> (\$0 fee, ZIP <code>98467</code>)</strong>.
+                Every part routes strictly to <strong>Standard eBay US (<code>ebay.com</code> <code>SiteID=US</code> — never eBay Motors)</strong>, maps exact <strong>Shopify + Google Merchant + eBay US categories &amp; metafields</strong> (<code>custom_label_0</code> YMM, <code>custom_label_1</code> Pickup vs Parcel), exposes clean single-variant stock &amp; carrier dimensions to <strong>Crosslist (OfferUp + Personal FB Marketplace auto-delist)</strong>, attaches <code>&lt;SKU&gt;.qr.png</code> as the final Shopify image, and queues 1-click auto-fill for <strong>Seattle/Tacoma Craigslist <code>pts</code> ($0 fee, ZIP <code>98467</code>)</strong>.
               </p>
               <div style="display:flex;gap:0.55rem;flex-wrap:wrap;align-items:center;">
                 <a href="/craigslist-autofill.user.js" target="_blank" class="btn btn-primary btn-sm">⚡ Install Craigslist Tacoma Auto-Fill Script ($0 pts • ZIP 98467)</a>
@@ -1378,6 +1464,50 @@
     </div>
   </div>
 
+  <!-- Visual Review Photo Zoom & Vehicle Re-Tag Modal -->
+  <div class="modal-backdrop" id="review-zoom-modal" role="dialog" aria-modal="true" aria-labelledby="review-zoom-title">
+    <div class="modal-dialog review-zoom-dialog">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;">
+        <div>
+          <span class="badge badge-dark mono" id="review-zoom-uid">P0001</span>
+          <span class="badge badge-warn" id="review-zoom-folder" style="margin-left:0.35rem;">Vehicle</span>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" id="btn-close-review-zoom">✕ Close</button>
+      </div>
+      <div class="review-zoom-img-wrap">
+        <img id="review-zoom-img" alt="Zoomed automotive part photo" />
+      </div>
+      <h4 id="review-zoom-title" style="margin:0.75rem 0 0.25rem;word-break:break-word;"></h4>
+      <div id="review-zoom-meta" style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.85rem;word-break:break-word;"></div>
+
+      <div class="grid-2" style="margin-bottom:0.75rem;">
+        <div class="form-group" style="margin:0;">
+          <label for="review-zoom-tag-select">Vehicle Folder Tag (Re-tag Unidentified Parts)</label>
+          <select id="review-zoom-tag-select" class="select"></select>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label for="review-zoom-tag-custom">Or Custom Year / Make / Model</label>
+          <input type="text" id="review-zoom-tag-custom" class="input" placeholder="e.g. 2008 Honda Civic" />
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:0.85rem;">
+        <label for="review-zoom-notes">Optional Tech Note (Bin, Condition, Part Name)</label>
+        <input type="text" id="review-zoom-notes" class="input" placeholder="e.g. Shelf B2, clean lens, keep for listing..." />
+      </div>
+
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.85rem;">
+        <button type="button" class="btn btn-outline btn-sm" id="btn-review-zoom-save-meta">Save Tag / Note</button>
+        <a id="review-zoom-drive-link" href="#" target="_blank" rel="noopener" class="btn btn-outline btn-sm">Open Full-Res Original in Drive ↗</a>
+      </div>
+
+      <div class="review-big-actions">
+        <button type="button" class="btn-review-remove" id="btn-review-zoom-remove">✕ REMOVE<small>Sold / Disposed</small></button>
+        <button type="button" class="btn-review-keep" id="btn-review-zoom-keep">✓ KEEP<small>In Stock</small></button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="toast-stack" id="toast-stack"></div>
 
@@ -1411,6 +1541,7 @@
       <div>
         <h4>Operations</h4>
         <ul class="footer-links">
+          <li><button type="button" onclick="activateStaffMode('staff-review')">Visual Photo Review (KEEP / REMOVE)</button></li>
           <li><button type="button" onclick="activateStaffMode('staff-intake')">Employee Camera Intake</button></li>
           <li><button type="button" onclick="activateStaffMode('staff-approvals')">Staff Appointment Approvals</button></li>
           <li><button type="button" onclick="activateStaffMode('staff-sync')">Multi-Platform Sync &amp; Policies</button></li>

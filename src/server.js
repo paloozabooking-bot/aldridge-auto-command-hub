@@ -13,7 +13,10 @@ const {
   validatePartCompliance,
   upsertCustomer,
   logSync,
-  seedAuditGroundTruthCatalog
+  seedAuditGroundTruthCatalog,
+  seedPhotoReviewCatalogIfNeeded,
+  getReviewCatalogMeta,
+  getPhotoReviewSummary
 } = require('./db');
 const { generateAllPolicies } = require('./policies');
 const {
@@ -426,6 +429,7 @@ const server = http.createServer(async (req, res) => {
         returnClaims,
         syncLogs,
         policies,
+        reviewSummary: getPhotoReviewSummary(),
         audit: getAuditSummaryPayload(baseUrl),
         weightDimensionAudit: {
           total_active_skus: activeItems.length,
@@ -537,10 +541,15 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/health') {
       const cfg = getSettings();
       const activeCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'active'").get().c;
+      const revSummary = getPhotoReviewSummary();
       sendJson(res, 200, {
         ok: true,
         service: "Aldridge Auto's Command Hub + Mobile PWA",
         active_skus: activeCount,
+        review_gallery_total: revSummary.total,
+        review_gallery_pending: revSummary.pending,
+        review_gallery_keep: revSummary.keep,
+        review_gallery_remove: revSummary.remove,
         single_variant_only: true,
         photos_required: true,
         shop_install_in_description: true,
@@ -1642,6 +1651,230 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ==================== VISUAL PHOTO REVIEW GALLERY (IN STOCK vs SOLD/DISPOSED) ====================
+    if (method === 'GET' && pathname === '/api/review-photos') {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const folderParam = (urlObj.searchParams.get('folder') || 'all').trim();
+      const statusParam = (urlObj.searchParams.get('status') || 'pending').trim().toLowerCase();
+      const qParam = (urlObj.searchParams.get('q') || '').trim().toLowerCase();
+      const page = Math.max(1, Number(urlObj.searchParams.get('page') || 1));
+      const limit = Math.min(200, Math.max(1, Number(urlObj.searchParams.get('limit') || 48)));
+      const offset = (page - 1) * limit;
+
+      const where = [];
+      const params = [];
+      if (folderParam && folderParam !== 'all') {
+        where.push("(CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END) = ?");
+        params.push(folderParam);
+      }
+      if (['pending', 'keep', 'remove'].includes(statusParam)) {
+        where.push('review_status = ?');
+        params.push(statusParam);
+      }
+      if (qParam) {
+        where.push('(LOWER(photo_uid) LIKE ? OR LOWER(original_name) LIKE ? OR LOWER(title_hint) LIKE ? OR LOWER(vehicle_folder) LIKE ? OR LOWER(vehicle_tag_override) LIKE ? OR LOWER(notes) LIKE ?)');
+        const like = `%${qParam}%`;
+        params.push(like, like, like, like, like, like);
+      }
+
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const totalFiltered = db.prepare(`SELECT COUNT(*) AS c FROM photo_review_items ${whereSql}`).get(...params).c;
+      const rows = db.prepare(`
+        SELECT *,
+          CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
+        FROM photo_review_items
+        ${whereSql}
+        ORDER BY photo_uid ASC
+        LIMIT ? OFFSET ?
+      `).all(...params, limit, offset);
+
+      const summary = getPhotoReviewSummary();
+      const items = rows.map((r) => ({
+        ...r,
+        drive_url: r.copied_drive_id
+          ? `https://drive.google.com/file/d/${r.copied_drive_id}/view`
+          : (r.drive_file_id ? `https://drive.google.com/file/d/${r.drive_file_id}/view` : '')
+      }));
+
+      sendJson(res, 200, {
+        master_drive_folder_id: summary.master_drive_folder_id,
+        master_drive_folder_url: summary.master_drive_folder_url,
+        summary,
+        page,
+        limit,
+        total_filtered: Number(totalFiltered || 0),
+        total_pages: Math.max(1, Math.ceil(Number(totalFiltered || 0) / limit)),
+        items
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/review-photos/bulk-status') {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const now = new Date().toISOString();
+      let updated = 0;
+
+      // Mode B: Client localStorage reconciliation map { decisions: { P0001: { status, vehicle_tag_override, notes } } }
+      if (b.decisions && typeof b.decisions === 'object') {
+        const stmt = db.prepare(`
+          UPDATE photo_review_items
+          SET review_status = ?,
+              vehicle_tag_override = COALESCE(?, vehicle_tag_override),
+              notes = COALESCE(?, notes),
+              updated_at = ?
+          WHERE photo_uid = ?
+        `);
+        db.exec('BEGIN;');
+        try {
+          for (const [uid, dec] of Object.entries(b.decisions)) {
+            if (!dec || !['pending', 'keep', 'remove'].includes(String(dec.status || '').toLowerCase())) continue;
+            const info = stmt.run(
+              String(dec.status).toLowerCase(),
+              typeof dec.vehicle_tag_override === 'string' ? dec.vehicle_tag_override.trim() : null,
+              typeof dec.notes === 'string' ? dec.notes.trim() : null,
+              now,
+              uid
+            );
+            updated += Number(info.changes || 0);
+          }
+          db.exec('COMMIT;');
+        } catch (err) {
+          db.exec('ROLLBACK;');
+          throw err;
+        }
+        sendJson(res, 200, { ok: true, updated, summary: getPhotoReviewSummary() });
+        return;
+      }
+
+      // Mode A: Bulk mark specific UIDs or entire folder
+      const nextStatus = String(b.status || '').toLowerCase();
+      if (!['pending', 'keep', 'remove'].includes(nextStatus)) {
+        return sendJson(res, 400, { error: 'Invalid status. Expected keep, remove, or pending.' });
+      }
+      if (Array.isArray(b.uids) && b.uids.length > 0) {
+        const stmt = db.prepare('UPDATE photo_review_items SET review_status = ?, updated_at = ? WHERE photo_uid = ?');
+        db.exec('BEGIN;');
+        try {
+          for (const uid of b.uids) {
+            const info = stmt.run(nextStatus, now, String(uid));
+            updated += Number(info.changes || 0);
+          }
+          db.exec('COMMIT;');
+        } catch (err) {
+          db.exec('ROLLBACK;');
+          throw err;
+        }
+      } else if (b.folder && b.folder !== 'all') {
+        const fromStatus = String(b.from_status || 'pending').toLowerCase();
+        if (['pending', 'keep', 'remove'].includes(fromStatus)) {
+          const info = db.prepare(`
+            UPDATE photo_review_items
+            SET review_status = ?, updated_at = ?
+            WHERE (CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END) = ?
+              AND review_status = ?
+          `).run(nextStatus, now, String(b.folder), fromStatus);
+          updated = Number(info.changes || 0);
+        } else {
+          const info = db.prepare(`
+            UPDATE photo_review_items
+            SET review_status = ?, updated_at = ?
+            WHERE (CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END) = ?
+          `).run(nextStatus, now, String(b.folder));
+          updated = Number(info.changes || 0);
+        }
+      }
+      sendJson(res, 200, { ok: true, updated, summary: getPhotoReviewSummary() });
+      return;
+    }
+
+    if (method === 'GET' && (pathname === '/api/review-photos/export.json' || pathname === '/api/review-photos/export.csv')) {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const statusFilter = (urlObj.searchParams.get('status') || 'all').trim().toLowerCase();
+      const whereSql = ['pending', 'keep', 'remove'].includes(statusFilter) ? 'WHERE review_status = ?' : '';
+      const params = ['pending', 'keep', 'remove'].includes(statusFilter) ? [statusFilter] : [];
+      const rows = db.prepare(`
+        SELECT *,
+          CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
+        FROM photo_review_items
+        ${whereSql}
+        ORDER BY effective_folder ASC, photo_uid ASC
+      `).all(...params);
+      const summary = getPhotoReviewSummary();
+
+      if (pathname.endsWith('.json')) {
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="aldridge_photo_review_${statusFilter}.json"`
+        });
+        res.end(JSON.stringify({
+          exported_at: new Date().toISOString(),
+          master_drive_folder_url: summary.master_drive_folder_url,
+          counts: { total: summary.total, pending: summary.pending, keep: summary.keep, remove: summary.remove },
+          items: rows
+        }, null, 2));
+        return;
+      }
+
+      const csvEsc = (v) => {
+        const s = String(v ?? '');
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const headers = [
+        'photo_uid', 'review_status', 'effective_folder', 'original_vehicle_folder',
+        'original_name', 'title_hint', 'copy_count', 'drive_file_id', 'copied_drive_id',
+        'drive_url', 'notes', 'updated_at'
+      ];
+      const lines = [headers.join(',')];
+      for (const r of rows) {
+        const driveUrl = r.copied_drive_id
+          ? `https://drive.google.com/file/d/${r.copied_drive_id}/view`
+          : `https://drive.google.com/file/d/${r.drive_file_id}/view`;
+        lines.push([
+          r.photo_uid, r.review_status, r.effective_folder, r.vehicle_folder,
+          r.original_name, r.title_hint, r.copy_count, r.drive_file_id, r.copied_drive_id,
+          driveUrl, r.notes, r.updated_at
+        ].map(csvEsc).join(','));
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="aldridge_photo_review_${statusFilter}.csv"`
+      });
+      res.end(lines.join('\n'));
+      return;
+    }
+
+    const reviewItemMatch = pathname.match(/^\/api\/review-photos\/([A-Za-z0-9_-]+)$/);
+    if (method === 'POST' && reviewItemMatch) {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const uid = reviewItemMatch[1];
+      const existing = db.prepare('SELECT * FROM photo_review_items WHERE photo_uid = ?').get(uid);
+      if (!existing) return sendJson(res, 404, { error: 'Review photo not found' });
+
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const nextStatus = b.status !== undefined ? String(b.status).toLowerCase() : existing.review_status;
+      if (!['pending', 'keep', 'remove'].includes(nextStatus)) {
+        return sendJson(res, 400, { error: 'Invalid status. Expected keep, remove, or pending.' });
+      }
+      const nextTag = b.vehicle_tag_override !== undefined ? String(b.vehicle_tag_override || '').trim() : existing.vehicle_tag_override;
+      const nextNotes = b.notes !== undefined ? String(b.notes || '').trim() : existing.notes;
+      const now = new Date().toISOString();
+
+      db.prepare(`
+        UPDATE photo_review_items
+        SET review_status = ?, vehicle_tag_override = ?, notes = ?, updated_at = ?
+        WHERE photo_uid = ?
+      `).run(nextStatus, nextTag, nextNotes, now, uid);
+
+      const updated = db.prepare(`
+        SELECT *,
+          CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
+        FROM photo_review_items WHERE photo_uid = ?
+      `).get(uid);
+      sendJson(res, 200, { ok: true, item: updated, summary: getPhotoReviewSummary() });
+      return;
+    }
+
     // Uploaded Intake Part Photos & Self-Healing QR Info Cards (/uploads/SKU.1.jpg, /uploads/SKU.qr.png)
     if ((method === 'GET' || method === 'HEAD') && pathname.startsWith('/uploads/')) {
       const safeUploadRel = path.basename(decodeURIComponent(pathname.replace('/uploads/', '')));
@@ -1669,6 +1902,28 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendJson(res, 404, { error: 'Uploaded photo not found' });
+      return;
+    }
+
+    // Visual Review Gallery Thumbnails (/review-thumbs/P0001.jpg) with immutable mobile cache headers
+    if ((method === 'GET' || method === 'HEAD') && pathname.startsWith('/review-thumbs/')) {
+      const safeThumb = path.basename(decodeURIComponent(pathname.replace('/review-thumbs/', '')));
+      const thumbPath = path.join(PUBLIC_DIR, 'review-thumbs', safeThumb);
+      if (thumbPath.startsWith(path.join(PUBLIC_DIR, 'review-thumbs')) && fs.existsSync(thumbPath) && fs.statSync(thumbPath).isFile()) {
+        const stat = fs.statSync(thumbPath);
+        res.writeHead(200, {
+          'Content-Type': 'image/jpeg',
+          'Content-Length': stat.size,
+          'Cache-Control': 'public, max-age=604800, immutable'
+        });
+        if (method === 'HEAD') {
+          res.end();
+        } else {
+          fs.createReadStream(thumbPath).pipe(res);
+        }
+        return;
+      }
+      sendJson(res, 404, { error: 'Review thumbnail not found' });
       return;
     }
 
