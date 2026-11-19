@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=11" />
+  <link rel="stylesheet" href="/styles.css?v=12" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -789,6 +789,17 @@
             </select>
 
             <input type="search" id="review-search-input" class="input" placeholder="Search part, filename, vehicle, UID..." />
+          </div>
+
+          <!-- 1-Click Generic Camera Filename Filter & Bulk-Remove Toolbar -->
+          <div class="review-generic-toolbar" id="review-generic-toolbar">
+            <button type="button" class="btn btn-outline btn-sm review-generic-toggle-btn" id="btn-review-hide-generic" aria-pressed="false" title="Hide photos whose filenames are raw camera timestamps, IMG_*, PXL_*, Screenshot_*, DSC_*, or random codes">
+              👁 Hide Generic Camera Filenames
+            </button>
+            <button type="button" class="btn btn-outline btn-sm review-generic-bulk-btn" id="btn-review-bulk-remove-generic" title="Bulk-mark any remaining PENDING photos with raw camera or non-descriptive filenames as REMOVE (100% of KEEP items untouched)">
+              🧹 Bulk-Remove Generic Camera Filenames
+            </button>
+            <span class="review-generic-status-note" id="review-generic-status-note">Only descriptive part filenames remain in Pending • All KEEP items preserved</span>
           </div>
 
           <!-- Scrollable Vehicle Folder Chips -->
@@ -1655,6 +1666,6 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=11"></script>
+  <script src="/app.js?v=12"></script>
 </body>
 </html>

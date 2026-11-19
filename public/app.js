@@ -2530,6 +2530,7 @@ const reviewState = {
   mode: 'triage', // 'triage' | 'grid'
   folder: 'all',
   status: 'pending',
+  hideGeneric: false,
   q: '',
   page: 1,
   limit: 48,
@@ -2585,22 +2586,51 @@ async function syncLocalReviewDecisionsIfNeeded(serverSummary) {
   if (!localKeys.length) return false;
 
   const localDecidedCount = localKeys.filter((k) => localMap[k]?.status === 'keep' || localMap[k]?.status === 'remove').length;
+  const localKeepEntries = {};
+  let localKeepCount = 0;
+  for (const k of localKeys) {
+    if (localMap[k]?.status === 'keep') {
+      localKeepEntries[k] = localMap[k];
+      localKeepCount += 1;
+    }
+  }
   const serverDecidedCount = Number(serverSummary?.keep || 0) + Number(serverSummary?.remove || 0);
 
   // If Render restarted on ephemeral disk or client has offline decisions ahead of server, reconcile them cleanly
   if (localDecidedCount > serverDecidedCount) {
     setReviewSyncBadge('↻ Restoring Phone Saves...', true);
     try {
-      await api('/api/review-photos/bulk-status', {
+      const res = await api('/api/review-photos/bulk-status', {
         method: 'POST',
-        body: JSON.stringify({ decisions: localMap })
+        body: JSON.stringify({ decisions: localMap, preserve_keep: true })
       });
       setReviewSyncBadge('✓ Phone + Cloud Synced');
-      showToast(`Restored ${localDecidedCount} saved KEEP/REMOVE decisions from your device!`);
-      return true;
+      if (Number(res.updated || 0) > 0) {
+        showToast(`Restored ${res.updated} saved KEEP/REMOVE decisions from your device!`);
+        return true;
+      }
+      return false;
     } catch (_) {
       setReviewSyncBadge('Saved on Phone (Offline)', true);
       return false;
+    }
+  }
+
+  // Even when server has more total decided items (e.g. after auto-removing non-descriptive pending files),
+  // safely merge any local KEEP decisions made on this device without reverting server REMOVE items.
+  if (localKeepCount > 0) {
+    try {
+      const res = await api('/api/review-photos/bulk-status', {
+        method: 'POST',
+        body: JSON.stringify({ decisions: localKeepEntries, keep_only: true })
+      });
+      if (Number(res.updated || 0) > 0) {
+        setReviewSyncBadge('✓ Phone KEEP Synced');
+        showToast(`Synced ${res.updated} additional KEEP item(s) from your device!`);
+        return true;
+      }
+    } catch (_) {
+      // Ignore offline failure
     }
   }
   return false;
@@ -2623,6 +2653,7 @@ async function loadReviewGallery(resetPage = false) {
     const qs = new URLSearchParams({
       folder: reviewState.folder,
       status: reviewState.status,
+      hide_generic: reviewState.hideGeneric ? '1' : '0',
       q: reviewState.q,
       page: String(reviewState.page),
       limit: String(reviewState.limit)
@@ -2714,6 +2745,34 @@ function renderReviewChrome() {
   // Layout mode buttons
   document.getElementById('btn-rev-mode-triage')?.classList.toggle('active', reviewState.mode === 'triage');
   document.getElementById('btn-rev-mode-grid')?.classList.toggle('active', reviewState.mode === 'grid');
+
+  // 1-click Generic Camera Filename Filter & Bulk-Remove controls
+  const genericPending = Number(sum.generic_pending || 0);
+  const genericTotal = Number(sum.generic_total || 0);
+  const hideGenBtn = document.getElementById('btn-review-hide-generic');
+  if (hideGenBtn) {
+    hideGenBtn.classList.toggle('active', reviewState.hideGeneric);
+    hideGenBtn.setAttribute('aria-pressed', reviewState.hideGeneric ? 'true' : 'false');
+    hideGenBtn.textContent = reviewState.hideGeneric
+      ? '✓ Hiding Generic Camera Filenames (Descriptive Only)'
+      : '👁 Hide Generic Camera Filenames';
+  }
+  const bulkRemGenBtn = document.getElementById('btn-review-bulk-remove-generic');
+  if (bulkRemGenBtn) {
+    bulkRemGenBtn.textContent = genericPending > 0
+      ? `🧹 Bulk-Remove Generic Camera Filenames (${genericPending.toLocaleString()} pending)`
+      : '🧹 Bulk-Remove Generic Camera Filenames (0 pending)';
+  }
+  const genNote = document.getElementById('review-generic-status-note');
+  if (genNote) {
+    if (reviewState.hideGeneric) {
+      genNote.textContent = `Filter ON: Hiding raw camera/code filenames (${genericTotal.toLocaleString()} total generic) • Descriptive part names only`;
+    } else if (genericPending > 0) {
+      genNote.textContent = `${genericPending.toLocaleString()} pending generic filename(s) detected • 1-click hide or bulk-remove (KEEP untouched)`;
+    } else {
+      genNote.textContent = `✓ 0 generic camera filenames in Pending • Only descriptive part names left (${pending.toLocaleString()})`;
+    }
+  }
 
   // Folder dropdown
   const sel = document.getElementById('review-folder-select');
@@ -2854,6 +2913,7 @@ function renderReviewTriageCard(container) {
         <h4 class="review-triage-title">${esc(item.title_hint || item.original_name)}</h4>
         <div class="review-triage-sub">
           File: <span class="mono">${esc(item.original_name)}</span>
+          ${item.is_generic_filename ? ' • <span class="review-generic-badge">Generic Filename</span>' : ''}
           ${item.copy_count > 1 ? ` • <span class="badge badge-dark">${item.copy_count} dupes merged</span>` : ''}
           ${item.notes ? ` • Note: <strong>${esc(item.notes)}</strong>` : ''}
         </div>
@@ -2955,7 +3015,7 @@ function renderReviewGridCards(container) {
           <div class="review-card-name" title="${esc(item.title_hint || item.original_name)}">${esc(item.title_hint || item.original_name)}</div>
           <div class="review-card-meta">
             <span class="mono">${esc(item.photo_uid)}</span>
-            <span>${item.copy_count > 1 ? `×${item.copy_count} merged` : 'Unique'}</span>
+            ${item.is_generic_filename ? '<span class="review-generic-badge">Generic</span>' : `<span>${item.copy_count > 1 ? `×${item.copy_count} merged` : 'Unique'}</span>`}
           </div>
         </div>
         <div class="review-card-actions">
@@ -3127,6 +3187,44 @@ async function bulkDecideCurrentFolder(targetStatus) {
   }
 }
 
+function toggleHideGenericFilenames() {
+  reviewState.hideGeneric = !reviewState.hideGeneric;
+  showToast(
+    reviewState.hideGeneric
+      ? 'Filter ON: Hiding generic camera/code filenames (showing descriptive part filenames only).'
+      : 'Filter OFF: Showing all matching filenames in this view.'
+  );
+  loadReviewGallery(true);
+}
+
+async function bulkRemoveGenericFilenames() {
+  const genericPending = Number(reviewState.summary?.generic_pending || 0);
+  const scopeLabel = reviewState.folder && reviewState.folder !== 'all' ? `folder "${reviewState.folder}"` : 'all folders';
+  if (genericPending === 0) {
+    showToast('All clear — 0 pending generic camera filenames remaining (100% of KEEP items untouched).');
+    return;
+  }
+  const ok = window.confirm(
+    `Mark all remaining PENDING photos with raw camera or non-descriptive filenames (e.g. timestamps, IMG_*, PXL_*, Screenshot_*, DSC_*, random codes) in ${scopeLabel} as REMOVE?\n\n100% of items you marked KEEP will stay untouched.`
+  );
+  if (!ok) return;
+  try {
+    const res = await api('/api/review-photos/bulk-remove-generic', {
+      method: 'POST',
+      body: JSON.stringify({ folder: reviewState.folder || 'all' })
+    });
+    const count = Number(res.removed_count || 0);
+    if (count > 0) {
+      showToast(`Bulk-removed ${count.toLocaleString()} generic camera/code filename(s) from Pending (100% of KEEP untouched).`);
+    } else {
+      showToast('All clear — 0 pending generic camera filenames found in this scope.');
+    }
+    await loadReviewGallery(true);
+  } catch (err) {
+    showToast('Bulk-remove generic filenames failed: ' + err.message);
+  }
+}
+
 function selectReviewFolder(folderName) {
   reviewState.folder = folderName || 'all';
   loadReviewGallery(true);
@@ -3211,6 +3309,8 @@ function bindReviewGalleryEvents() {
   document.getElementById('btn-rev-mode-triage')?.addEventListener('click', () => setReviewLayoutMode('triage'));
   document.getElementById('btn-rev-mode-grid')?.addEventListener('click', () => setReviewLayoutMode('grid'));
   document.getElementById('btn-review-undo')?.addEventListener('click', undoLastReviewDecision);
+  document.getElementById('btn-review-hide-generic')?.addEventListener('click', toggleHideGenericFilenames);
+  document.getElementById('btn-review-bulk-remove-generic')?.addEventListener('click', bulkRemoveGenericFilenames);
 
   document.querySelectorAll('#review-status-pills .review-filter-pill').forEach((btn) => {
     btn.addEventListener('click', () => setReviewStatusFilter(btn.dataset.status));

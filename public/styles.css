@@ -1582,3 +1582,64 @@ button, input, select, textarea {
   }
 }
 
+.review-generic-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--border-light);
+}
+
+.review-generic-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
+.review-generic-toggle-btn.active {
+  background: var(--brand-navy);
+  color: #fff;
+  border-color: var(--brand-navy);
+}
+
+.review-generic-bulk-btn {
+  border-color: #dc2626;
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.review-generic-bulk-btn:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #b91c1c;
+  color: #b91c1c;
+}
+
+.review-generic-status-note {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.review-generic-badge {
+  display: inline-block;
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  vertical-align: middle;
+}
+
+@media (max-width: 680px) {
+  .review-generic-status-note {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
+

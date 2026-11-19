@@ -1452,6 +1452,103 @@ function seedPhotoReviewCatalogIfNeeded(force = false) {
   }
 }
 
+function isNonDescriptiveAutoFilename(originalName) {
+  const raw = String(originalName || '').trim();
+  if (!raw) return true;
+  const noExt = raw.replace(/\.[a-z0-9]{2,5}$/i, '').trim();
+  const stem = noExt.replace(/\s*\(\d+\)\s*$/, '').trim();
+  if (!stem) return true;
+
+  // 1. Raw camera timestamps (e.g. 20260416_160417, 2025-11-24_17-03-27, 20251124-170327-001)
+  if (/^(19|20)\d{6}[_-]\d{4,6}(?:[_-]\d+)?$/i.test(stem)) return true;
+  if (/^\d{8}[_-]\d{4,9}(?:[_-]\d+)?$/i.test(stem)) return true;
+  if (/^(19|20)\d{2}[-_]\d{2}[-_]\d{2}[_T -]\d{2}[-_]\d{2}(?:[-_]\d{2})?/i.test(stem)) return true;
+
+  // 2. Generic camera/device/screenshot/messenger/social prefixes
+  if (/^(IMG|PXL|DSC|DSCN|DCIM|MVIMG|VID|MOV|PHOTO|PIC|CAMERA|SAM|WP|CIMG|GOPR|DJI|RIMG|Screenshot|Screen[_ -]?Shot|Messenger_creation|FB_IMG|WhatsApp[_ -]?Image|Received|Snapchat|Untitled|Image|Scan)[_ -]?(\d|[a-f0-9-]{6,}|$)/i.test(stem)) {
+    return true;
+  }
+
+  // 3. Pure numeric or Facebook CDN numeric IDs
+  if (/^\d[\d._-]*$/.test(stem)) return true;
+  if (/^\d+_\d+_\d+/.test(stem)) return true;
+
+  // 4. UUIDs or hex hashes
+  if (/^[a-f0-9]{8,}(?:-[a-f0-9]{4,}){0,4}$/i.test(stem)) return true;
+
+  // 5. Random / non-descriptive internal SKU or code-only filenames (e.g. ALD-2KXI2B_1, ALD-OH-019.1)
+  if (/^ALD[-_](OH[-_])?[A-Z0-9]{2,10}(?:[._-]\d+)?$/i.test(stem)) return true;
+
+  // 6. Fallback: require at least one real alphabetical descriptive word (>=3 chars, letters only)
+  const words = stem
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .filter((tok) => /^[a-zA-Z]{3,}$/.test(tok));
+  if (words.length === 0) return true;
+
+  return false;
+}
+
+function autoRemoveNonDescriptivePendingPhotos({
+  folder = 'all',
+  note = 'Auto-removed: non-descriptive camera/code filename'
+} = {}) {
+  const where = ["review_status = 'pending'"];
+  const params = [];
+  if (folder && folder !== 'all') {
+    where.push("(CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END) = ?");
+    params.push(String(folder));
+  }
+  const rows = db.prepare(`
+    SELECT photo_uid, original_name, notes
+    FROM photo_review_items
+    WHERE ${where.join(' AND ')}
+  `).all(...params);
+
+  const toRemove = rows.filter((r) => isNonDescriptiveAutoFilename(r.original_name));
+  const now = new Date().toISOString();
+  let removedCount = 0;
+
+  if (toRemove.length > 0) {
+    const stmt = db.prepare(`
+      UPDATE photo_review_items
+      SET review_status = 'remove',
+          notes = CASE WHEN notes = '' THEN ? ELSE notes END,
+          updated_at = ?
+      WHERE photo_uid = ? AND review_status = 'pending'
+    `);
+    db.exec('BEGIN;');
+    try {
+      for (const r of toRemove) {
+        const info = stmt.run(note, now, r.photo_uid);
+        removedCount += Number(info.changes || 0);
+      }
+      db.exec('COMMIT;');
+    } catch (err) {
+      db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  return {
+    removed_count: removedCount,
+    checked_pending: rows.length
+  };
+}
+
+function ensureNonDescriptivePendingFilteredOnce() {
+  const flagKey = 'review_nondescriptive_autofilt_v1';
+  const existing = db.prepare('SELECT value_json FROM business_settings WHERE key = ?').get(flagKey);
+  if (existing) return null;
+  const result = autoRemoveNonDescriptivePendingPhotos();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT OR REPLACE INTO business_settings (key, value_json, updated_at)
+    VALUES (?, ?, ?)
+  `).run(flagKey, JSON.stringify({ applied_at: now, ...result }), now);
+  return result;
+}
+
 function getPhotoReviewSummary() {
   const totals = db.prepare(`
     SELECT
@@ -1476,6 +1573,27 @@ function getPhotoReviewSummary() {
       total DESC,
       folder_name ASC
   `).all();
+
+  const allMetaRows = db.prepare(`
+    SELECT
+      original_name,
+      review_status,
+      CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS folder_name
+    FROM photo_review_items
+  `).all();
+  let genericPending = 0;
+  let genericTotal = 0;
+  const folderGenericPending = new Map();
+  for (const r of allMetaRows) {
+    if (isNonDescriptiveAutoFilename(r.original_name)) {
+      genericTotal += 1;
+      if (r.review_status === 'pending') {
+        genericPending += 1;
+        folderGenericPending.set(r.folder_name, (folderGenericPending.get(r.folder_name) || 0) + 1);
+      }
+    }
+  }
+
   const meta = getReviewCatalogMeta();
   const folders = folderRows.map((r) => {
     const fId = meta.folders_drive_map?.[r.folder_name] || r.drive_folder_id || '';
@@ -1485,6 +1603,7 @@ function getPhotoReviewSummary() {
       pending: Number(r.pending || 0),
       keep: Number(r.keep || 0),
       remove: Number(r.remove || 0),
+      generic_pending: Number(folderGenericPending.get(r.folder_name) || 0),
       drive_folder_id: fId,
       drive_folder_url: fId ? `https://drive.google.com/drive/folders/${fId}` : meta.master_drive_folder_url
     };
@@ -1494,6 +1613,8 @@ function getPhotoReviewSummary() {
     pending: Number(totals?.pending || 0),
     keep: Number(totals?.keep || 0),
     remove: Number(totals?.remove || 0),
+    generic_pending: genericPending,
+    generic_total: genericTotal,
     duplicates_filtered: meta.duplicates_filtered,
     master_drive_folder_id: meta.master_drive_folder_id,
     master_drive_folder_url: meta.master_drive_folder_url,
@@ -1508,6 +1629,7 @@ if (getSettings().clean_slate_mode) {
   seedAuditGroundTruthCatalog(false);
 }
 seedPhotoReviewCatalogIfNeeded(false);
+ensureNonDescriptivePendingFilteredOnce();
 
 module.exports = {
   db,
@@ -1526,7 +1648,9 @@ module.exports = {
   seedAuditGroundTruthCatalog,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
-  getPhotoReviewSummary
+  getPhotoReviewSummary,
+  isNonDescriptiveAutoFilename,
+  autoRemoveNonDescriptivePendingPhotos
 };
 
 

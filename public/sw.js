@@ -1,9 +1,9 @@
-const CACHE_NAME = 'aldridge-autos-hub-v11';
+const CACHE_NAME = 'aldridge-autos-hub-v12';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=11',
-  '/app.js?v=11',
+  '/styles.css?v=12',
+  '/app.js?v=12',
   '/manifest.webmanifest',
   '/assets/aldridge-crest.jpg?v=11',
   '/assets/app-icon.jpg?v=11',

@@ -16,7 +16,9 @@ const {
   seedAuditGroundTruthCatalog,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
-  getPhotoReviewSummary
+  getPhotoReviewSummary,
+  isNonDescriptiveAutoFilename,
+  autoRemoveNonDescriptivePendingPhotos
 } = require('./db');
 const { generateAllPolicies } = require('./policies');
 const {
@@ -1672,6 +1674,7 @@ const server = http.createServer(async (req, res) => {
       const folderParam = (urlObj.searchParams.get('folder') || 'all').trim();
       const statusParam = (urlObj.searchParams.get('status') || 'pending').trim().toLowerCase();
       const qParam = (urlObj.searchParams.get('q') || '').trim().toLowerCase();
+      const hideGeneric = ['1', 'true', 'yes'].includes((urlObj.searchParams.get('hide_generic') || '').trim().toLowerCase());
       const page = Math.max(1, Number(urlObj.searchParams.get('page') || 1));
       const limit = Math.min(200, Math.max(1, Number(urlObj.searchParams.get('limit') || 48)));
       const offset = (page - 1) * limit;
@@ -1693,19 +1696,35 @@ const server = http.createServer(async (req, res) => {
       }
 
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-      const totalFiltered = db.prepare(`SELECT COUNT(*) AS c FROM photo_review_items ${whereSql}`).get(...params).c;
-      const rows = db.prepare(`
-        SELECT *,
-          CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
-        FROM photo_review_items
-        ${whereSql}
-        ORDER BY photo_uid ASC
-        LIMIT ? OFFSET ?
-      `).all(...params, limit, offset);
+      let totalFiltered = 0;
+      let rows = [];
+      if (hideGeneric) {
+        const allMatching = db.prepare(`
+          SELECT *,
+            CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
+          FROM photo_review_items
+          ${whereSql}
+          ORDER BY photo_uid ASC
+        `).all(...params);
+        const descriptiveOnly = allMatching.filter((r) => !isNonDescriptiveAutoFilename(r.original_name));
+        totalFiltered = descriptiveOnly.length;
+        rows = descriptiveOnly.slice(offset, offset + limit);
+      } else {
+        totalFiltered = db.prepare(`SELECT COUNT(*) AS c FROM photo_review_items ${whereSql}`).get(...params).c;
+        rows = db.prepare(`
+          SELECT *,
+            CASE WHEN vehicle_tag_override != '' THEN vehicle_tag_override ELSE vehicle_folder END AS effective_folder
+          FROM photo_review_items
+          ${whereSql}
+          ORDER BY photo_uid ASC
+          LIMIT ? OFFSET ?
+        `).all(...params, limit, offset);
+      }
 
       const summary = getPhotoReviewSummary();
       const items = rows.map((r) => ({
         ...r,
+        is_generic_filename: isNonDescriptiveAutoFilename(r.original_name),
         drive_url: r.copied_drive_id
           ? `https://drive.google.com/file/d/${r.copied_drive_id}/view`
           : (r.drive_file_id ? `https://drive.google.com/file/d/${r.drive_file_id}/view` : '')
@@ -1715,11 +1734,37 @@ const server = http.createServer(async (req, res) => {
         master_drive_folder_id: summary.master_drive_folder_id,
         master_drive_folder_url: summary.master_drive_folder_url,
         summary,
+        hide_generic: hideGeneric,
         page,
         limit,
         total_filtered: Number(totalFiltered || 0),
         total_pages: Math.max(1, Math.ceil(Number(totalFiltered || 0) / limit)),
         items
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/review-photos/bulk-remove-generic') {
+      seedPhotoReviewCatalogIfNeeded(false);
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const folder = String(b.folder || 'all').trim() || 'all';
+      const result = autoRemoveNonDescriptivePendingPhotos({ folder });
+      if (result.removed_count > 0) {
+        logSync(
+          'internal',
+          'review_gallery',
+          'bulk_remove_generic',
+          folder,
+          'success',
+          `Bulk-removed ${result.removed_count} pending photo(s) with non-descriptive camera/code filenames (100% of KEEP items untouched).`
+        );
+      }
+      sendJson(res, 200, {
+        ok: true,
+        folder,
+        removed_count: result.removed_count,
+        checked_pending: result.checked_pending,
+        summary: getPhotoReviewSummary()
       });
       return;
     }
@@ -1732,25 +1777,40 @@ const server = http.createServer(async (req, res) => {
 
       // Mode B: Client localStorage reconciliation map { decisions: { P0001: { status, vehicle_tag_override, notes } } }
       if (b.decisions && typeof b.decisions === 'object') {
-        const stmt = db.prepare(`
-          UPDATE photo_review_items
-          SET review_status = ?,
-              vehicle_tag_override = COALESCE(?, vehicle_tag_override),
-              notes = COALESCE(?, notes),
-              updated_at = ?
-          WHERE photo_uid = ?
-        `);
+        const keepOnly = Boolean(b.keep_only);
+        const preserveKeep = Boolean(b.preserve_keep);
+        const stmt = keepOnly
+          ? db.prepare(`
+              UPDATE photo_review_items
+              SET review_status = 'keep',
+                  vehicle_tag_override = COALESCE(?, vehicle_tag_override),
+                  notes = COALESCE(?, notes),
+                  updated_at = ?
+              WHERE photo_uid = ? AND review_status != 'keep'
+            `)
+          : db.prepare(`
+              UPDATE photo_review_items
+              SET review_status = CASE WHEN ? = 1 AND review_status = 'keep' AND ? != 'keep' THEN review_status ELSE ? END,
+                  vehicle_tag_override = COALESCE(?, vehicle_tag_override),
+                  notes = COALESCE(?, notes),
+                  updated_at = ?
+              WHERE photo_uid = ?
+            `);
         db.exec('BEGIN;');
         try {
           for (const [uid, dec] of Object.entries(b.decisions)) {
-            if (!dec || !['pending', 'keep', 'remove'].includes(String(dec.status || '').toLowerCase())) continue;
-            const info = stmt.run(
-              String(dec.status).toLowerCase(),
-              typeof dec.vehicle_tag_override === 'string' ? dec.vehicle_tag_override.trim() : null,
-              typeof dec.notes === 'string' ? dec.notes.trim() : null,
-              now,
-              uid
-            );
+            const st = String(dec?.status || '').toLowerCase();
+            if (!dec || !['pending', 'keep', 'remove'].includes(st)) continue;
+            if (keepOnly && st !== 'keep') continue;
+            const tagOverride = typeof dec.vehicle_tag_override === 'string' && dec.vehicle_tag_override.trim() !== ''
+              ? dec.vehicle_tag_override.trim()
+              : null;
+            const noteVal = typeof dec.notes === 'string' && dec.notes.trim() !== ''
+              ? dec.notes.trim()
+              : null;
+            const info = keepOnly
+              ? stmt.run(tagOverride, noteVal, now, uid)
+              : stmt.run(preserveKeep ? 1 : 0, st, st, tagOverride, noteVal, now, uid);
             updated += Number(info.changes || 0);
           }
           db.exec('COMMIT;');
