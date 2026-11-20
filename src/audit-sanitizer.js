@@ -252,7 +252,9 @@ const PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS = new Set([
   'ALD-E9QGQ8', 'ALD-BFEVH2', 'ALD-KBGEF7', 'ALD-N897ZE', 'ALD-UV7C3K',
   'ALD-C14537', 'ALD-UIG6N9', 'ALD-P9EK3B', 'ALD-EHJDO3', 'ALD-9T4S88',
   'ALD-8LUJOS', 'ALD-VSYFP4', 'ALD-DDVLKF',
-  'ALD-HCFDPM', 'ALD-1R4U4A', 'ALD-L3GWNO'
+  'ALD-HCFDPM', 'ALD-1R4U4A', 'ALD-L3GWNO',
+  // Visually verified SRS/airbag modules & steering wheel airbag caught on photo audit:
+  'ALD-9FJP71', 'ALD-EUCT8U', 'ALD-H51N50', 'ALD-IBRLF3'
 ]);
 
 const CONFIRMED_SOLD_OR_GHOST_SKUS = new Set([

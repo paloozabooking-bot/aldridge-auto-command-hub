@@ -366,7 +366,7 @@
           <div class="table-wrap" style="margin-bottom:0.75rem;">
             <table class="data-table">
               <thead>
-                <tr><th>Recommended Repair &amp; Live Stock</th><th>Option A vs Option B</th><th>Labor ($${Number(quote.labor_rate || 135).toFixed(0)}/hr)</th><th>Subtotal</th><th>Status</th><th>Action</th></tr>
+                <tr><th>Recommended Repair &amp; Live Stock</th><th>Option A vs Option B</th><th>Labor ($${Number(quote.labor_rate || 174.99).toFixed(2)}/hr)</th><th>Subtotal</th><th>Status</th><th>Action</th></tr>
               </thead>
               <tbody>${quoteLinesHtml}</tbody>
             </table>
@@ -622,7 +622,7 @@
     const title = prompt('Repair / Service Line Title:', 'Brake Pad & Rotor Service');
     if (!title) return;
     const partPrice = Number(prompt('New Order Part Price ($):', '145') || 0);
-    const hrs = Number(prompt('Labor Hours (@ $135/hr):', String(laborHours || 1.5)) || 1);
+    const hrs = Number(prompt('Labor Hours (@ $174.99/hr):', String(laborHours || 1.5)) || 1);
     const res = await fetch(`/api/quotes/${quoteId}/lines`, {
       method: 'POST',
       headers: staffHeaders(),

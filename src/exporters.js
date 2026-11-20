@@ -14,7 +14,7 @@ const {
 const { generateAllPolicies } = require('./policies');
 const { csvEscape, xmlEscape, parseCsv } = require('./exporters-csv-utils');
 const { isQrCardUrl, generatePartQrCardPng } = require('./qr-card');
-const { resolvePartTaxonomyAndMetafields } = require('./taxonomy');
+const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn, resolveCountryOfOrigin } = require('./taxonomy');
 const {
   PROHIBITED_CAT_SKUS,
   PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS,
@@ -92,14 +92,14 @@ function isMarketplaceSafeItem(item) {
 }
 
 function sanitizeMpnField(rawMpn) {
-  const val = String(rawMpn || '').trim();
-  if (!val || /^does\s+not\s+apply$/i.test(val) || /^n\/?a$/i.test(val)) return '';
-  return isCounterfeitMpn(val) ? '' : val;
+  const clean = sanitizeVerifiedMpn(rawMpn);
+  if (!clean) return '';
+  return isCounterfeitMpn(clean) ? '' : clean;
 }
 
 function resolveExportMpn(rawMpn) {
-  const clean = sanitizeMpnField(rawMpn);
-  return clean || 'Does Not Apply';
+  // STRICT ANTI-PLACEHOLDER RULE: NEVER output "Does Not Apply" or fake hex/year-make tokens as MPN.
+  return sanitizeMpnField(rawMpn);
 }
 
 function normalizeExportCondition(rawCondition) {
@@ -136,11 +136,10 @@ function formatDimensionsIn(item) {
 
 function computeInstallEstimate(item, settings) {
   const base = Number(item.price_we_pull || 0);
-  const storedInstall = Number(item.price_pull_install || 0);
   const hours = Number(item.install_labor_hours || 1.5);
-  const rate = Number(settings?.labor_rate_hourly || 135);
-  const installTotal = storedInstall > base ? storedInstall : Math.round((base + hours * rate) * 100) / 100;
-  return { installTotal, hours };
+  const rate = Number(settings?.labor_rate_hourly || 174.99);
+  const computedInstall = Math.round((base + hours * rate) * 100) / 100;
+  return { installTotal: computedInstall, hours, rate };
 }
 
 function stripOffEbayContactText(text) {
@@ -163,15 +162,17 @@ function renderShopifyHtml(item, settings, baseUrl) {
   const policies = generateAllPolicies(settings);
   const tpl = policies.shopify_direct_html_template || policies.ebay_motors_html_template;
   const mpnOut = resolveExportMpn(item.oem_part_number);
+  const mpnLabel = mpnOut || 'OEM Factory Part (Match Photos & VIN)';
+  const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours } = computeInstallEstimate(item, settings);
+  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const phone = settings.phone || '(253) 245-4206';
 
   const installCalloutHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
       <strong style="color:#0369a1;">🔧 OPTIONAL CERTIFIED SHOP BAY INSTALLATION (INFO-ONLY — SINGLE-UNIT PART):</strong><br/>
-      Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> <em>(includes this tested OEM part + ~${hours.toFixed(1)} hrs certified technician labor at 5115 66th St W, Bldg B)</em>.<br/>
+      Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> <em>(includes this inspected OEM part + ~${hours.toFixed(1)} hrs certified technician labor at $${rate.toFixed(2)}/hr at 5115 66th St W, Bldg B)</em>.<br/>
       <span style="font-size:12px;color:#334155;">To prevent double-booking this 1-of-1 part, purchase the part here first to lock it in, then schedule your bay installation on our <a href="${pwaUrl}" style="color:#0369a1;font-weight:700;">Live Website &amp; Mobile App (${pwaUrl.replace(/^https?:\/\//i, '')})</a> or call/text <strong>${phone}</strong>.</span>
     </div>`;
 
@@ -187,8 +188,8 @@ function renderShopifyHtml(item, settings, baseUrl) {
   return tpl
     .replaceAll('{{BUSINESS_NAME}}', settings.business_name)
     .replaceAll('{{SKU}}', item.sku)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnOut)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', item.interchange_number || 'Does Not Apply')
+    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
+    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
     .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
     .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
     .replaceAll('{{TITLE}}', item.title)
@@ -198,8 +199,8 @@ function renderShopifyHtml(item, settings, baseUrl) {
     .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
     .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
     .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
-    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM #')
-    .replaceAll('{{FITMENT_NOTES}}', item.fitment_notes || 'Match MPN & photos prior to purchase (Returns Not Accepted for remorse/fitment).')
+    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
+    .replaceAll('{{FITMENT_NOTES}}', item.fitment_notes || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).')
     .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
     .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
     .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
@@ -211,14 +212,16 @@ function renderShopifyHtml(item, settings, baseUrl) {
 function renderEbayHtml(item, settings) {
   const tpl = generateAllPolicies(settings).ebay_motors_html_template;
   const mpnOut = resolveExportMpn(item.oem_part_number);
+  const mpnLabel = mpnOut || 'OEM Factory Part (Match Photos & VIN)';
+  const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours } = computeInstallEstimate(item, settings);
+  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
 
   // 100% eBay Policy Compliant Callout — ZERO external URLs, domains, or phone numbers!
   const installCalloutEbayHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
       <strong style="color:#0369a1;">OPTIONAL CERTIFIED IN-HOUSE SHOP INSTALLATION (UNIVERSITY PLACE, WA 98467):</strong><br/>
-      Informational Turnkey Part + Certified Bay Installation Estimate: <strong>$${installTotal.toFixed(2)}</strong> <em>(~${hours.toFixed(1)} hrs certified technician labor at our 5.0★ University Place, WA 98467 shop)</em>. Listed strictly as 1 single physical unit so inventory is never double-booked — local Pierce County buyers may message us directly via <strong>eBay Messages</strong> regarding counter pickup or bay installation availability!
+      Informational Turnkey Part + Certified Bay Installation Estimate: <strong>$${installTotal.toFixed(2)}</strong> <em>(~${hours.toFixed(1)} hrs certified technician labor at $${rate.toFixed(2)}/hr at our 5.0★ University Place, WA 98467 shop)</em>. Listed strictly as 1 single physical unit so inventory is never double-booked — local Pierce County buyers may message us directly via <strong>eBay Messages</strong> regarding counter pickup or bay installation availability!
     </div>`;
 
   const shipLabel = heavyPickupOnly
@@ -228,8 +231,8 @@ function renderEbayHtml(item, settings) {
   return tpl
     .replaceAll('{{BUSINESS_NAME}}', settings.business_name)
     .replaceAll('{{SKU}}', item.sku)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnOut)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', item.interchange_number || 'Does Not Apply')
+    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
+    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
     .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
     .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
     .replaceAll('{{TITLE}}', stripOffEbayContactText(item.title))
@@ -239,8 +242,8 @@ function renderEbayHtml(item, settings) {
     .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
     .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
     .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
-    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM #')
-    .replaceAll('{{FITMENT_NOTES}}', stripOffEbayContactText(item.fitment_notes || 'Match MPN & photos prior to purchase (Returns Not Accepted for remorse/fitment).'))
+    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
+    .replaceAll('{{FITMENT_NOTES}}', stripOffEbayContactText(item.fitment_notes || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).'))
     .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
     .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
     .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
@@ -251,22 +254,24 @@ function renderEbayHtml(item, settings) {
 function renderLocalMarketplacePacket(item, settings, baseUrl) {
   const tpl = generateAllPolicies(settings).local_marketplace_template;
   const mpnOut = resolveExportMpn(item.oem_part_number);
+  const mpnLabel = mpnOut || 'Verified OEM (Match Photos/VIN)';
+  const interchangeLabel = sanitizeMpnField(item.interchange_number) || item.hollander_number || 'Match Donor Vehicle';
   const condOut = normalizeExportCondition(item.condition);
   const handlingFee = Number(settings.handling_fee_default ?? 10).toFixed(2);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours } = computeInstallEstimate(item, settings);
+  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
 
   const shipOrPickupLine = heavyPickupOnly
     ? `$${Number(item.price_we_pull || 0).toFixed(2)} — LOCAL PICKUP ONLY in University Place, WA 98467 (70+ lb / oversized / hazmat assembly at 5115 66th St W, Bldg B)`
     : `$${Number(item.price_we_pull || 0).toFixed(2)} (+ Calculated Parcel Shipping + $${handlingFee} handling buffer if shipped, or FREE Shop Counter Pickup in University Place, WA 98467!)`;
 
-  const installLine = `OPTIONAL CERTIFIED SHOP INSTALLATION (INFO CALLOUT): ~$${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs certified bay labor in University Place, WA 98467 — purchase single-unit part to reserve)!`;
+  const installLine = `OPTIONAL CERTIFIED SHOP INSTALLATION (INFO CALLOUT): ~$${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs certified bay labor @ $${rate.toFixed(2)}/hr in University Place, WA 98467 — purchase single-unit part to reserve)!`;
 
   return tpl
     .replaceAll('{{TITLE}}', item.title)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnOut)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', item.interchange_number || item.hollander_number || 'Does Not Apply')
+    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
+    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
     .replaceAll('{{SKU}}', item.sku)
     .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
     .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
@@ -443,7 +448,7 @@ function importInventoryCsv(csvText) {
         : 1;
       const laborHours = parseFloat(row.install_labor_hours || 1.5) || 1.5;
       const pricePullInstall = parseFloat(
-        row.price_pull_install || (priceWePull + laborHours * Number(settings.labor_rate_hourly || 135)).toFixed(2)
+        row.price_pull_install || (priceWePull + laborHours * Number(settings.labor_rate_hourly || 174.99)).toFixed(2)
       ) || 0;
 
       const photos = [];
@@ -726,7 +731,7 @@ function generateEbayMotorsCsv(items, settings, baseUrl) {
       tax.brand,
       tax.mpn,
       tax.mpn,
-      [item.interchange_number, item.hollander_number].filter(Boolean).join(', ') || 'Does Not Apply',
+      [sanitizeMpnField(item.interchange_number), item.hollander_number].filter(Boolean).join(', '),
       item.placement_on_vehicle || 'Vehicle Specific',
       picUrl,
       renderEbayHtml(item, settings),
@@ -760,18 +765,19 @@ function generateGoogleMerchantXml(items, settings, baseUrl) {
     const imgUrl = resolveExportPhotoUrl(photos[0], baseUrl, settings);
     const avail = item.quantity > 0 ? 'in_stock' : 'out_of_stock';
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const { installTotal } = computeInstallEstimate(item, settings);
+    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+    const mpnTag = tax.mpn ? `\n      <g:mpn>${xmlEscape(tax.mpn)}</g:mpn>` : '';
+    const mpnDesc = tax.mpn ? ` | OEM MPN: ${tax.mpn}` : '';
     return `    <item>
       <g:id>${xmlEscape(item.sku)}</g:id>
       <g:title>${xmlEscape(item.title)}</g:title>
-      <g:description>${xmlEscape(`${item.description} | Optional Certified Shop Bay Installation in University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed | Fits: ${tax.customLabel0} | MPN: ${tax.mpn}`)}</g:description>
+      <g:description>${xmlEscape(`${item.description} | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr) | Fits: ${tax.customLabel0}${mpnDesc}`)}</g:description>
       <g:link>${xmlEscape(`${pwaUrl}/?sku=${encodeURIComponent(item.sku)}`)}</g:link>
       <g:image_link>${xmlEscape(imgUrl)}</g:image_link>
       <g:condition>${xmlEscape(tax.condition)}</g:condition>
       <g:availability>${avail}</g:availability>
       <g:price>${Number(item.price_we_pull || 0).toFixed(2)} USD</g:price>
-      <g:brand>${xmlEscape(tax.brand)}</g:brand>
-      <g:mpn>${xmlEscape(tax.mpn)}</g:mpn>
+      <g:brand>${xmlEscape(tax.brand)}</g:brand>${mpnTag}
       <g:identifier_exists>${tax.identifierExists ? 'yes' : 'no'}</g:identifier_exists>
       <g:google_product_category>${xmlEscape(tax.googleProductCategory)}</g:google_product_category>
       <g:custom_label_0>${xmlEscape(tax.customLabel0)}</g:custom_label_0>
@@ -810,25 +816,27 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
     if (!isMarketplaceSafeItem(item)) continue;
     const photos = getValidPhotos(item);
     if (!photos.length) continue;
+    const tax = resolvePartTaxonomyAndMetafields(item, settings);
     const imgUrl = resolveExportPhotoUrl(photos[0], baseUrl, settings);
     const mpnOut = resolveExportMpn(item.oem_part_number);
     const condOut = normalizeExportCondition(item.condition);
     const cond = condOut === 'New' ? 'new' : 'used';
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const { installTotal } = computeInstallEstimate(item, settings);
+    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+    const mpnClause = mpnOut ? ` OEM MPN: ${mpnOut}.` : '';
     rows.push([
       item.sku,
       item.title.slice(0, 150),
-      `${item.title}. Single-unit OEM part (1 in stock). MPN: ${mpnOut}. Optional Certified Shop Installation in University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed. ${heavyPickupOnly ? 'Local Pickup Only in University Place, WA 98467.' : 'Calculated Parcel + $10.00 handling or Free Local Pickup in University Place, WA 98467.'} Returns Not Accepted (Defect-Only).`,
+      `${item.title}. Single-unit inspected Used OEM part (1 in stock).${mpnClause} Fits: ${tax.customLabel0}. Optional Certified Shop Installation at 5115 66th St W, Bldg B, University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr). ${heavyPickupOnly ? 'Local Pickup Only in University Place, WA 98467.' : 'Calculated Parcel + $10.00 handling or Free Local Pickup in University Place, WA 98467.'} Returns Not Accepted (Defect-Only).`,
       item.quantity > 0 && item.status === 'active' ? 'in stock' : 'out of stock',
       cond,
       `${Number(item.price_we_pull || 0).toFixed(2)} USD`,
       `${pwaUrl}/?sku=${encodeURIComponent(item.sku)}`,
       imgUrl,
-      item.brand || 'OEM',
+      tax.brand || item.brand || 'OEM',
       mpnOut,
       item.status === 'active' ? Math.max(1, Number(item.quantity || 1)) : 0,
-      'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts'
+      tax.googleProductCategory || 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts'
     ].map(csvEscape).join(','));
   }
   return rows.join('\n') + '\n';
@@ -856,9 +864,10 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
       : `Calculated Parcel + $${handlingFee.toFixed(2)} Handling`;
     const returnPolicy = 'Returns Not Accepted (Defect-Only)';
     const basePrice = Number(item.price_we_pull || 0).toFixed(2);
-    const { installTotal } = computeInstallEstimate(item, settings);
-    // Compliant marketplace description (includes Certified Shop Install price at 5115 66th St W Bldg B, zero external URLs/phones so eBay aabcas + OfferUp + FB Marketplace channels stay safe)
-    const compliantDesc = `${stripOffEbayContactText(item.title)} | MPN: ${mpnOut} | Single-Unit OEM Part (1 in stock) | Fits: ${tax.customLabel0} | Spec: ${item.weight_lbs} lbs (${formatDimensionsIn(item)} in) | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: ~$${installTotal.toFixed(2)} turnkey installed | ${shippingPolicy} | ${returnPolicy} | Security ID: ${item.security_mark_code}`;
+    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+    const mpnSegment = mpnOut ? ` | OEM MPN: ${mpnOut}` : '';
+    // Compliant marketplace description (includes Certified Shop Install price at 5115 66th St W Bldg B @ $174.99/hr, zero external URLs/phones so eBay aabcas + OfferUp + FB Marketplace channels stay safe)
+    const compliantDesc = `${stripOffEbayContactText(item.title)}${mpnSegment} | Single-Unit Inspected OEM Part (1 in stock) | Fits: ${tax.customLabel0} | Spec: ${item.weight_lbs} lbs (${formatDimensionsIn(item)} in) | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: ~$${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr) | ${shippingPolicy} | ${returnPolicy} | Security ID: ${item.security_mark_code}`;
 
     if (mode === 'crosslist') {
       rows.push([
@@ -942,8 +951,8 @@ function generateTiktokShopCsv(items, settings, baseUrl) {
     const photos = getValidPhotos(item);
     const imgUrl = photos[0] ? resolveExportPhotoUrl(photos[0], baseUrl, settings) : '';
     const pricePlusHandling = (Number(item.price_we_pull || 0) + Number(settings.handling_fee_default || 10)).toFixed(2);
-    const { installTotal } = computeInstallEstimate(item, settings);
-    const desc = `${stripOffEbayContactText(item.description || item.title)} | Single-unit OEM part (1 in stock). Optional Certified Shop Bay Installation in University Place, WA 98467: $${installTotal.toFixed(2)} installed. Security ID: ${item.security_mark_code}.`;
+    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+    const desc = `${stripOffEbayContactText(item.description || item.title)} | Single-unit OEM part (1 in stock). Optional Certified Shop Bay Installation in University Place, WA 98467: $${installTotal.toFixed(2)} installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr). Security ID: ${item.security_mark_code}.`;
     rows.push([
       item.sku, item.title, 'Automotive & Motorcycle > Auto Replacement Parts', item.brand || 'OEM',
       resolveExportMpn(item.oem_part_number), normalizeExportCondition(item.condition),
@@ -970,7 +979,7 @@ function generateCarPartHollanderCsv(items) {
     }
     const { installTotal } = computeInstallEstimate(item, getSettings());
     rows.push([
-      donorStock, item.sku, item.hollander_number || item.interchange_number || 'Does Not Apply',
+      donorStock, item.sku, item.hollander_number || sanitizeMpnField(item.interchange_number),
       resolveExportMpn(item.oem_part_number), item.fitment_years || '', item.fitment_make || '',
       item.fitment_model || '', item.category, 'Used',
       Number(item.price_we_pull || 0).toFixed(2),
@@ -1094,9 +1103,222 @@ async function resolveShopifyAccessToken(settingsOverride = null, { forceRefresh
   };
 }
 
-async function syncAllToShopifyCoMaster() {
+function buildShopifyProductMetafields(item, settings, tax) {
+  const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+  const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
+  const weightLbs = Number(item.weight_lbs || 8);
+  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const donorVehicle = [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim() || tax.customLabel0;
+  const condLabel = normalizeExportCondition(item.condition) === 'New' ? 'New OEM' : 'Used OEM';
+  const fulfillmentLabel = heavyPickupOnly
+    ? 'Local Pickup Only — University Place, WA 98467'
+    : 'Calculated Parcel Shipping + Free Local Pickup (98467)';
+
+  const raw = [
+    { namespace: 'mm-google-shopping', key: 'google_product_category', value: tax.googleProductCategory, type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'condition', value: tax.condition, type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'mpn', value: tax.mpn, type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'custom_label_0', value: tax.customLabel0, type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'custom_label_1', value: tax.customLabel1, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'oem_mpn', value: tax.mpn, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'oem_part_number', value: tax.mpn, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'donor_vehicle', value: donorVehicle, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'fitment_years', value: String(item.fitment_years || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'part_condition', value: condLabel, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'fulfillment_type', value: fulfillmentLabel, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'shop_install_price', value: `$${installTotal.toFixed(2)} (Part + ~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr)`, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'package_dimensions', value: `${dimsLabel} (${weightLbs} lbs)`, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'bin_location', value: String(item.bin_location || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'security_mark', value: String(item.security_mark_code || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'ebay_us_category_id', value: tax.ebayUsCategoryId, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'shopify_taxonomy_id', value: tax.shopifyTaxonomyId, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'return_policy', value: 'Returns Not Accepted (Defect-Only)', type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'crosslist_offerup_fb_sync', value: 'enabled_auto_delist_on_zero', type: 'single_line_text_field' }
+  ];
+
+  // Shopify metafieldsSet rejects empty string values — omit blank optional keys (e.g., unstamped MPN).
+  return raw.filter((m) => String(m.value || '').trim().length > 0);
+}
+
+async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRef }) {
+  let resp = await fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      'X-Shopify-Access-Token': tokenRef.token
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+
+  if (resp.status === 429) {
+    const retryAfterSec = parseFloat(resp.headers.get('retry-after') || '2') || 2;
+    await new Promise((r) => setTimeout(r, Math.ceil(retryAfterSec * 1000) + 300));
+    resp = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        'X-Shopify-Access-Token': tokenRef.token
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+  } else if (resp.status === 401 && authMode === 'client_credentials') {
+    const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+    tokenRef.token = refreshed.token;
+    resp = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        'X-Shopify-Access-Token': tokenRef.token
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+  }
+  return resp;
+}
+
+async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, settings, productId, inventoryItemId, item, tax }) {
+  const countryCode = resolveCountryOfOrigin(item);
+  const results = {
+    country_code_of_origin: countryCode,
+    origin_updated: false,
+    category_updated: false,
+    category_gid: tax.shopifyTaxonomyId,
+    metafields_count: 0,
+    warnings: []
+  };
+
+  // 1. Set Country of Origin on Shopify InventoryItem (REST)
+  if (inventoryItemId) {
+    try {
+      const invResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/inventory_items/${inventoryItemId}.json`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            inventory_item: {
+              id: Number(inventoryItemId),
+              country_code_of_origin: countryCode,
+              tracked: true
+            }
+          })
+        },
+        { authMode, settings, tokenRef }
+      );
+      if (invResp.ok) {
+        results.origin_updated = true;
+      } else {
+        const txt = await invResp.text().catch(() => '');
+        results.warnings.push(`origin HTTP ${invResp.status}: ${txt.slice(0, 120)}`);
+      }
+    } catch (err) {
+      results.warnings.push(`origin err: ${err.message}`);
+    }
+  }
+
+  // 2. Assign Shopify Standard Product Taxonomy Category + Structured Metafields via GraphQL
+  const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
+  const productGid = `gid://shopify/Product/${productId}`;
+  const metafieldsList = buildShopifyProductMetafields(item, settings, tax);
+
+  const runCategoryMutation = async (catGid) => {
+    const resp = await shopifyFetchWithRetry(
+      graphqlUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `mutation SetCategory($product: ProductUpdateInput!) {
+            productUpdate(product: $product) {
+              product { id category { id fullName } }
+              userErrors { field message }
+            }
+          }`,
+          variables: { product: { id: productGid, category: catGid } }
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (!resp.ok) return { ok: false, err: `HTTP ${resp.status}` };
+    const data = await resp.json();
+    const uerrs = data?.data?.productUpdate?.userErrors || [];
+    if (data.errors?.length || uerrs.length) {
+      return { ok: false, err: JSON.stringify(data.errors || uerrs).slice(0, 160) };
+    }
+    return { ok: true, category: data?.data?.productUpdate?.product?.category || null };
+  };
+
+  try {
+    let catRes = await runCategoryMutation(tax.shopifyTaxonomyId);
+    if (!catRes.ok && tax.shopifyTaxonomyId !== 'gid://shopify/TaxonomyCategory/vp-2') {
+      // Fallback to verified root Motor Vehicle Parts taxonomy node if sub-node ID differs by Shopify taxonomy release
+      catRes = await runCategoryMutation('gid://shopify/TaxonomyCategory/vp-2');
+      if (catRes.ok) results.category_gid = 'gid://shopify/TaxonomyCategory/vp-2';
+    }
+    if (catRes.ok) {
+      results.category_updated = true;
+    } else {
+      results.warnings.push(`category: ${catRes.err}`);
+    }
+  } catch (err) {
+    results.warnings.push(`category err: ${err.message}`);
+  }
+
+  try {
+    const mfInput = metafieldsList.map((m) => ({
+      ownerId: productGid,
+      namespace: m.namespace,
+      key: m.key,
+      type: m.type,
+      value: String(m.value)
+    }));
+    const mfResp = await shopifyFetchWithRetry(
+      graphqlUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+              metafields { namespace key value }
+              userErrors { field message code }
+            }
+          }`,
+          variables: { metafields: mfInput }
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (mfResp.ok) {
+      const mfData = await mfResp.json();
+      const uerrs = mfData?.data?.metafieldsSet?.userErrors || [];
+      const savedMfs = mfData?.data?.metafieldsSet?.metafields || [];
+      results.metafields_count = savedMfs.length;
+      if (mfData.errors?.length || uerrs.length) {
+        results.warnings.push(`metafields: ${JSON.stringify(mfData.errors || uerrs).slice(0, 160)}`);
+      }
+    } else {
+      results.warnings.push(`metafields HTTP ${mfResp.status}`);
+    }
+  } catch (err) {
+    results.warnings.push(`metafields err: ${err.message}`);
+  }
+
+  return results;
+}
+
+async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   const settings = getSettings();
-  const items = db.prepare('SELECT * FROM inventory_items').all().filter(isMarketplaceSafeItem);
+  const allDbItems = db.prepare('SELECT * FROM inventory_items').all();
+  const items = allDbItems.filter(isMarketplaceSafeItem);
+  const blockedSkusSet = new Set([
+    ...PROHIBITED_CAT_SKUS,
+    ...PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS,
+    ...allDbItems
+      .filter((r) => r.status === 'compliance_blocked' || !validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
+      .map((r) => String(r.sku || '').trim().toUpperCase())
+  ]);
+
   const auth = await resolveShopifyAccessToken(settings);
   if (!auth.shopDomain || !auth.token) {
     logSync(
@@ -1119,23 +1341,16 @@ async function syncAllToShopifyCoMaster() {
   }
 
   const domain = auth.shopDomain;
-  let activeAccessToken = auth.token;
+  const tokenRef = { token: auth.token };
   const existingHandles = new Set();
   const existingSkus = new Map();
-  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,variants,images`;
+  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,status,variants,images`;
   while (nextUrl) {
-    let preResp = await fetch(nextUrl, {
-      headers: { 'X-Shopify-Access-Token': activeAccessToken, 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(10000)
-    });
-    if (preResp.status === 401 && auth.authMode === 'client_credentials') {
-      const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
-      activeAccessToken = refreshed.token;
-      preResp = await fetch(nextUrl, {
-        headers: { 'X-Shopify-Access-Token': activeAccessToken, 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(10000)
-      });
-    }
+    const preResp = await shopifyFetchWithRetry(
+      nextUrl,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      { authMode: auth.authMode, settings, tokenRef }
+    );
     if (!preResp.ok) {
       throw new Error(`Shopify Admin API authentication check failed (HTTP ${preResp.status})`);
     }
@@ -1149,6 +1364,8 @@ async function syncAllToShopifyCoMaster() {
         if (v.sku) {
           existingSkus.set(String(v.sku).trim().toUpperCase(), {
             product_id: String(p.id || ''),
+            handle: String(p.handle || ''),
+            status: String(p.status || 'active'),
             variant_id: String(v.id || ''),
             inventory_item_id: String(v.inventory_item_id || ''),
             clean_cdn_images: cleanCdnImages
@@ -1162,42 +1379,167 @@ async function syncAllToShopifyCoMaster() {
   }
 
   let pushed = 0;
+  let updatedCount = 0;
+  let draftedBlocked = 0;
   let skippedProtected = 0;
   const errors = [];
 
+  // 1. COMPLIANCE ENFORCEMENT: Immediately draft & zero any prohibited SRS/airbag/catalytic SKUs on Shopify!
+  for (const blockedSku of blockedSkusSet) {
+    const liveBlocked = existingSkus.get(blockedSku);
+    if (!liveBlocked || liveBlocked.status === 'draft' || liveBlocked.status === 'archived') continue;
+    try {
+      const draftResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/products/${liveBlocked.product_id}.json`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            product: {
+              id: Number(liveBlocked.product_id),
+              status: 'draft',
+              tags: 'COMPLIANCE-BLOCKED, SRS-PROHIBITED-DO-NOT-PUBLISH'
+            }
+          })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (draftResp.ok) {
+        draftedBlocked++;
+        if (liveBlocked.inventory_item_id) {
+          try {
+            const lvlResp = await shopifyFetchWithRetry(
+              `https://${domain}/admin/api/2025-01/inventory_levels.json?inventory_item_ids=${liveBlocked.inventory_item_id}`,
+              { method: 'GET', headers: { Accept: 'application/json' } },
+              { authMode: auth.authMode, settings, tokenRef }
+            );
+            if (lvlResp.ok) {
+              const lvlData = await lvlResp.json();
+              for (const lvl of lvlData.inventory_levels || []) {
+                if (Number(lvl.available || 0) > 0) {
+                  await shopifyFetchWithRetry(
+                    `https://${domain}/admin/api/2025-01/inventory_levels/set.json`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                      body: JSON.stringify({
+                        location_id: lvl.location_id,
+                        inventory_item_id: Number(liveBlocked.inventory_item_id),
+                        available: 0
+                      })
+                    },
+                    { authMode: auth.authMode, settings, tokenRef }
+                  );
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        logSync('outbound', 'shopify_co_master', 'compliance_draft_blocked', blockedSku, 'success', `Drafted prohibited SRS/compliance SKU ${blockedSku} on ${domain} (Product ID ${liveBlocked.product_id}).`);
+      } else {
+        errors.push(`draft-blocked ${blockedSku}: HTTP ${draftResp.status}`);
+      }
+      await new Promise((r) => setTimeout(r, 260));
+    } catch (err) {
+      errors.push(`draft-blocked ${blockedSku}: ${err.message}`);
+    }
+  }
+
+  // 2. Push new active SKUs (and when updateExisting=true, PUT-enrich ALL existing active Shopify products!)
   for (const item of items) {
     try {
       const handle = item.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const skuUpper = String(item.sku || '').toUpperCase();
       const matchedExisting = existingSkus.get(skuUpper);
-      if (existingHandles.has(handle) || matchedExisting) {
-        if (matchedExisting) {
-          const curPhotos = getValidPhotos(item);
-          const needsCdn = matchedExisting.clean_cdn_images?.length > 0 && !curPhotos.some((u) => /cdn\.shopify\.com/i.test(u));
-          if (!item.shopify_product_id || needsCdn) {
-            const nextPhotosJson = needsCdn ? JSON.stringify(matchedExisting.clean_cdn_images) : item.photos_json;
-            db.prepare(`
-              UPDATE inventory_items
-              SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
-              WHERE id = ?
-            `).run(
-              matchedExisting.product_id,
-              matchedExisting.variant_id,
-              matchedExisting.inventory_item_id,
-              nextPhotosJson,
-              new Date().toISOString(),
-              item.id
-            );
-          }
-        }
-        skippedProtected++;
-        continue;
-      }
-
       const tax = resolvePartTaxonomyAndMetafields(item, settings);
       const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
       const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
       const tags = [...tax.seoTags, `Dims:${dimsLabel}`].join(', ');
+
+      if (matchedExisting) {
+        // Always backfill Shopify IDs & clean non-QR CDN URLs into SQLite
+        const curPhotos = getValidPhotos(item);
+        const needsCdn = matchedExisting.clean_cdn_images?.length > 0 && !curPhotos.some((u) => /cdn\.shopify\.com/i.test(u));
+        if (!item.shopify_product_id || needsCdn) {
+          const nextPhotosJson = needsCdn ? JSON.stringify(matchedExisting.clean_cdn_images) : item.photos_json;
+          db.prepare(`
+            UPDATE inventory_items
+            SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
+            WHERE id = ?
+          `).run(
+            matchedExisting.product_id,
+            matchedExisting.variant_id,
+            matchedExisting.inventory_item_id,
+            nextPhotosJson,
+            new Date().toISOString(),
+            item.id
+          );
+        }
+
+        if (!updateExisting) {
+          skippedProtected++;
+          continue;
+        }
+
+        // FULL ENRICHMENT PUT UPDATE (intentionally omits `images` so <SKU>.qr.png stays untouched in final gallery slot!)
+        const updatePayload = {
+          product: {
+            id: Number(matchedExisting.product_id),
+            title: item.title,
+            body_html: renderShopifyHtml(item, settings),
+            vendor: tax.brand || settings.business_name,
+            product_type: tax.partType,
+            tags,
+            status: 'active',
+            variants: [
+              {
+                id: Number(matchedExisting.variant_id),
+                sku: item.sku,
+                price: Number(item.price_we_pull || 0).toFixed(2),
+                inventory_management: 'shopify',
+                inventory_policy: 'deny',
+                weight: Number(item.weight_lbs || 8),
+                weight_unit: 'lb',
+                requires_shipping: !heavyPickupOnly
+              }
+            ]
+          }
+        };
+
+        const putResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${matchedExisting.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(updatePayload)
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (!putResp.ok) {
+          const errTxt = await putResp.text().catch(() => '');
+          throw new Error(`Shopify PUT HTTP ${putResp.status}: ${errTxt.slice(0, 140)}`);
+        }
+
+        await syncShopifyProductGraphqlAndOrigin({
+          domain,
+          tokenRef,
+          authMode: auth.authMode,
+          settings,
+          productId: matchedExisting.product_id,
+          inventoryItemId: matchedExisting.inventory_item_id,
+          item,
+          tax
+        });
+
+        updatedCount++;
+        await new Promise((r) => setTimeout(r, 340));
+        continue;
+      }
+
+      if (existingHandles.has(handle)) {
+        skippedProtected++;
+        continue;
+      }
 
       // STRICT SINGLE VARIANT ONLY (Default Title, 1 in stock)
       const variants = [
@@ -1213,18 +1555,7 @@ async function syncAllToShopifyCoMaster() {
         }
       ];
 
-      const metafields = [
-        { namespace: 'mm-google-shopping', key: 'google_product_category', value: tax.googleProductCategory, type: 'single_line_text_field' },
-        { namespace: 'mm-google-shopping', key: 'condition', value: tax.condition, type: 'single_line_text_field' },
-        { namespace: 'mm-google-shopping', key: 'mpn', value: tax.mpn, type: 'single_line_text_field' },
-        { namespace: 'mm-google-shopping', key: 'custom_label_0', value: tax.customLabel0, type: 'single_line_text_field' },
-        { namespace: 'mm-google-shopping', key: 'custom_label_1', value: tax.customLabel1, type: 'single_line_text_field' },
-        { namespace: 'custom', key: 'oem_part_number', value: tax.mpn, type: 'single_line_text_field' },
-        { namespace: 'custom', key: 'ebay_us_category_id', value: tax.ebayUsCategoryId, type: 'single_line_text_field' },
-        { namespace: 'custom', key: 'shopify_taxonomy_id', value: tax.shopifyTaxonomyId, type: 'single_line_text_field' },
-        { namespace: 'custom', key: 'package_dimensions', value: dimsLabel, type: 'single_line_text_field' },
-        { namespace: 'custom', key: 'crosslist_offerup_fb_sync', value: 'enabled_auto_delist_on_zero', type: 'single_line_text_field' }
-      ];
+      const metafields = buildShopifyProductMetafields(item, settings, tax);
 
       const uploadsDir = path.join(DATA_DIR, 'uploads');
       const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
@@ -1278,40 +1609,15 @@ async function syncAllToShopifyCoMaster() {
       };
 
       const endpoint = `https://${domain}/admin/api/2025-01/products.json`;
-      let resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': activeAccessToken
+      const resp = await shopifyFetchWithRetry(
+        endpoint,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(payload)
         },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(12000)
-      });
-
-      if (resp.status === 429) {
-        await new Promise((r) => setTimeout(r, 2200));
-        resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': activeAccessToken
-          },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(12000)
-        });
-      } else if (resp.status === 401 && auth.authMode === 'client_credentials') {
-        const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
-        activeAccessToken = refreshed.token;
-        resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': activeAccessToken
-          },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(12000)
-        });
-      }
+        { authMode: auth.authMode, settings, tokenRef }
+      );
 
       if (!resp.ok) {
         throw new Error(`Shopify HTTP ${resp.status}`);
@@ -1338,17 +1644,45 @@ async function syncAllToShopifyCoMaster() {
           new Date().toISOString(),
           item.id
         );
+
+        await syncShopifyProductGraphqlAndOrigin({
+          domain,
+          tokenRef,
+          authMode: auth.authMode,
+          settings,
+          productId: String(data.product.id),
+          inventoryItemId: String(primaryVar.inventory_item_id || ''),
+          item,
+          tax
+        });
       }
       pushed++;
-      await new Promise((r) => setTimeout(r, 520));
+      await new Promise((r) => setTimeout(r, 420));
     } catch (err) {
       errors.push(`${item.sku}: ${err.message}`);
     }
   }
 
-  const finalCount = existingHandles.size + pushed;
-  logSync('outbound', 'shopify_co_master', 'live_api_push', 'ALL', errors.length ? 'partial' : 'success', `Created ${pushed} new single-variant products on ${domain} via ${auth.authMode} (${skippedProtected} existing SKUs untouched, ${errors.length} errors; total live=${finalCount}).`);
-  return { mode: 'live_api', auth_mode: auth.authMode, synced_count: pushed, skipped_protected: skippedProtected, total_live_shopify_products: finalCount, errors };
+  const finalActiveCount = items.length;
+  logSync(
+    'outbound',
+    'shopify_co_master',
+    updateExisting ? 'live_api_full_enrichment_sync' : 'live_api_push',
+    'ALL',
+    errors.length ? 'partial' : 'success',
+    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
+  );
+  return {
+    mode: 'live_api',
+    auth_mode: auth.authMode,
+    update_existing: Boolean(updateExisting),
+    synced_count: pushed,
+    updated_count: updatedCount,
+    drafted_blocked_count: draftedBlocked,
+    skipped_protected: skippedProtected,
+    total_active_catalog_skus: finalActiveCount,
+    errors
+  };
 }
 
 function markInventoryChannelDelisted(item, reason, extra = {}) {
@@ -1576,18 +1910,7 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
     }
   ];
 
-  const metafields = [
-    { namespace: 'mm-google-shopping', key: 'google_product_category', value: tax.googleProductCategory, type: 'single_line_text_field' },
-    { namespace: 'mm-google-shopping', key: 'condition', value: tax.condition, type: 'single_line_text_field' },
-    { namespace: 'mm-google-shopping', key: 'mpn', value: tax.mpn, type: 'single_line_text_field' },
-    { namespace: 'mm-google-shopping', key: 'custom_label_0', value: tax.customLabel0, type: 'single_line_text_field' },
-    { namespace: 'mm-google-shopping', key: 'custom_label_1', value: tax.customLabel1, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'oem_part_number', value: tax.mpn, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'ebay_us_category_id', value: tax.ebayUsCategoryId, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'shopify_taxonomy_id', value: tax.shopifyTaxonomyId, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'package_dimensions', value: dimsLabel, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'crosslist_offerup_fb_sync', value: 'enabled_auto_delist_on_zero', type: 'single_line_text_field' }
-  ];
+  const metafields = buildShopifyProductMetafields(item, cfg, tax);
 
   const targetDir = uploadsDir || path.join(DATA_DIR, 'uploads');
   const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
@@ -1653,30 +1976,16 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   };
 
   const endpoint = `https://${domain}/admin/api/2025-01/products.json`;
-  let activeAccessToken = auth.token;
-  let resp = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': activeAccessToken
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(15000)
-  });
-
-  if (resp.status === 401 && auth.authMode === 'client_credentials') {
-    const refreshed = await resolveShopifyAccessToken(cfg, { forceRefresh: true });
-    activeAccessToken = refreshed.token;
-    resp = await fetch(endpoint, {
+  const tokenRef = { token: auth.token };
+  const resp = await shopifyFetchWithRetry(
+    endpoint,
+    {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': activeAccessToken
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000)
-    });
-  }
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload)
+    },
+    { authMode: auth.authMode, settings: cfg, tokenRef }
+  );
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
@@ -1709,6 +2018,16 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
       new Date().toISOString(),
       item.id
     );
+    await syncShopifyProductGraphqlAndOrigin({
+      domain,
+      tokenRef,
+      authMode: auth.authMode,
+      settings: cfg,
+      productId: String(data.product.id),
+      inventoryItemId: String(primaryVar.inventory_item_id || ''),
+      item,
+      tax
+    });
     logSync('outbound', 'shopify_direct_camera', 'auto_publish_live', item.sku, 'success', `Published single-variant ${item.sku} directly to https://${domain}/products/${data.product.handle} (Product ID ${data.product.id}, ${cleanCdnImages.length} clean CDN images; QR card isolated to Shopify only).`);
     return {
       pushed: true,
@@ -1854,6 +2173,130 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
   };
 }
 
+async function inspectLiveShopifyProducts(skus = []) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings);
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return { ok: false, error: 'Shopify Admin API not configured', products: [] };
+  }
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+  const targetSkus = (Array.isArray(skus) && skus.length ? skus : ['ALD-KEEP-P0818', 'ALD-KEEP-P0294', 'ALD-KEEP-P0544', 'ALD-KEEP-P0691', 'ALD-PKNW51'])
+    .map((s) => String(s || '').trim().toUpperCase())
+    .filter(Boolean);
+
+  const out = [];
+  for (const sku of targetSkus) {
+    const dbRow = db.prepare('SELECT * FROM inventory_items WHERE UPPER(sku) = ?').get(sku);
+    let productId = dbRow?.shopify_product_id || '';
+    if (!productId) {
+      const handle = sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const searchResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/products.json?handle=${encodeURIComponent(handle)}&limit=1`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (searchResp.ok) {
+        const sData = await searchResp.json();
+        productId = String(sData?.products?.[0]?.id || '');
+      }
+    }
+    if (!productId) {
+      out.push({ sku, found: false });
+      continue;
+    }
+
+    const pResp = await shopifyFetchWithRetry(
+      `https://${domain}/admin/api/2025-01/products/${productId}.json`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      { authMode: auth.authMode, settings, tokenRef }
+    );
+    if (!pResp.ok) {
+      out.push({ sku, found: false, http_status: pResp.status });
+      continue;
+    }
+    const p = (await pResp.json()).product || {};
+    const v = (p.variants || [])[0] || {};
+
+    let countryOfOrigin = '';
+    if (v.inventory_item_id) {
+      const invResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/inventory_items/${v.inventory_item_id}.json`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (invResp.ok) {
+        const invData = await invResp.json();
+        countryOfOrigin = invData?.inventory_item?.country_code_of_origin || '';
+      }
+    }
+
+    let category = null;
+    const metafields = {};
+    const gqlResp = await shopifyFetchWithRetry(
+      `https://${domain}/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `query InspectProd($id: ID!) {
+            product(id: $id) {
+              id
+              category { id fullName }
+              metafields(first: 30) {
+                edges { node { namespace key value } }
+              }
+            }
+          }`,
+          variables: { id: `gid://shopify/Product/${productId}` }
+        })
+      },
+      { authMode: auth.authMode, settings, tokenRef }
+    );
+    if (gqlResp.ok) {
+      const gqlData = await gqlResp.json();
+      category = gqlData?.data?.product?.category || null;
+      for (const edge of gqlData?.data?.product?.metafields?.edges || []) {
+        if (edge?.node) {
+          metafields[`${edge.node.namespace}.${edge.node.key}`] = edge.node.value;
+        }
+      }
+    }
+
+    const imgs = (p.images || []).map((im) => ({
+      position: im.position,
+      src: im.src,
+      alt: im.alt,
+      is_qr: isQrCardUrl(im.src) || /scan qr/i.test(String(im.alt || ''))
+    }));
+
+    out.push({
+      sku,
+      found: true,
+      shopify_product_id: String(p.id),
+      handle: p.handle,
+      status: p.status,
+      title: p.title,
+      vendor: p.vendor,
+      product_type: p.product_type,
+      category,
+      country_code_of_origin: countryOfOrigin,
+      price: v.price,
+      inventory_quantity: v.inventory_quantity,
+      weight_lbs: v.weight,
+      weight_unit: v.weight_unit,
+      requires_shipping: v.requires_shipping,
+      tags: p.tags,
+      metafields,
+      images_count: imgs.length,
+      qr_in_final_slot: imgs.length > 0 ? Boolean(imgs[imgs.length - 1].is_qr) : false,
+      body_html_preview: String(p.body_html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 320)
+    });
+  }
+
+  return { ok: true, shop_domain: domain, count: out.length, products: out };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -1874,6 +2317,7 @@ module.exports = {
   renderLocalMarketplacePacket,
   resolveShopifyAccessToken,
   ensureShopifyWebhooksRegistered,
+  inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook

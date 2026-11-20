@@ -312,11 +312,11 @@ function generatePrintablePackingSlipHtml(item, settings) {
   const displayHost = publicBase.replace(/^https?:\/\//i, '');
   const trackingUrl = buildQrTrackingUrl(item, settings, 'qr_packing_slip');
   const qrSvg = renderScannableQrSvg(trackingUrl, 190);
-  const mpn = item.oem_part_number || 'Does Not Apply';
+  const mpn = item.oem_part_number && !/^does\s+not\s+apply$/i.test(item.oem_part_number) ? item.oem_part_number : 'Verify via Photos';
   const partPrice = Number(item.price_we_pull || 0).toFixed(2);
   const installPrice = Number(item.price_pull_install || 0) > Number(item.price_we_pull || 0)
     ? Number(item.price_pull_install).toFixed(2)
-    : (Number(item.price_we_pull || 0) + Number(item.install_labor_hours || 1.5) * Number(settings?.labor_rate_hourly || 135)).toFixed(2);
+    : (Number(item.price_we_pull || 0) + Number(item.install_labor_hours || 1.5) * Number(settings?.labor_rate_hourly || 174.99)).toFixed(2);
 
   return `<!DOCTYPE html>
 <html lang="en">

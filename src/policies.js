@@ -29,7 +29,7 @@ Parts returned with missing, broken, painted-over, or mismatched security marks,
 Return shipping, crating, and transit insurance back to ${addr} are the SOLE RESPONSIBILITY OF THE BUYER. Original outbound shipping and the $${handlingFee} packaging/handling buffer are non-refundable unless ${name} shipped a different SKU than ordered.
 
 4. FITMENT, VIN PROGRAMMING & LABOR EXCLUSION
-Buyer is solely responsible for matching OEM Part Numbers prior to purchase (when MPN is "Does Not Apply", match multi-angle photos & message us your valid 17-digit VIN to confirm fitment). Many modern OEM modules, transmissions, throttle bodies, and keys require dealer/OEM scan-tool programming at buyer's expense. This policy covers the PART ONLY and never reimburses third-party installation labor, fluids, programming, towing, or rental vehicles (except in-house labor performed by ${name} in our University Place service bays).
+Buyer is solely responsible for matching OEM Part Numbers prior to purchase (when an OEM MPN is not stamped on the part, match multi-angle photos & message us your valid 17-digit VIN to confirm fitment). Many modern OEM modules, transmissions, throttle bodies, and keys require dealer/OEM scan-tool programming at buyer's expense. This policy covers the PART ONLY and never reimburses third-party installation labor, fluids, programming, towing, or rental vehicles (except in-house labor performed by ${name} in our University Place service bays).
 
 5. HARD SAFETY & EMISSIONS COMPLIANCE BLOCKS
 ${name} strictly prohibits and never sells SRS airbags, clocksprings/spiral cables, seatbelt retractors/pretensioners, pyrotechnic inflators, or used catalytic converters, and rejects fabricated or invalid-checksum VINs.`,
@@ -61,7 +61,7 @@ Every shipped parcel order includes a ${handlingDays}-business-day handling buff
   • Immediate payment locks in your 1-of-1 OEM part and removes it across all connected channels simultaneously.
 
 2. CERTIFIED SHOP INSTALLATION APPOINTMENTS
-  • Certified Shop Installation prices shown inside product descriptions are turnkey estimates (Part + Certified Shop Labor at $${Number(settings.labor_rate_hourly || 135).toFixed(2)}/hr; shop fluids, alignments, or dealer module programming billed only if required).
+  • Certified Shop Installation prices shown inside product descriptions are turnkey estimates (Part + Certified Shop Labor at $${Number(settings.labor_rate_hourly || 174.99).toFixed(2)}/hr; shop fluids, alignments, or dealer module programming billed only if required).
 
 3. TCPA SMS & EMAIL MARKETING CONSENT
   • By opting into ${name} Text (SMS) or Email alerts on our website, mobile app, intake counter, or U-Haul/Repair check-in, you consent to receive appointment updates, order readiness alerts, and periodic shop/parts specials. Message & data rates may apply. Reply STOP anytime to unsubscribe from SMS or click Unsubscribe in any email. Your phone number and email are never sold to third parties.`,

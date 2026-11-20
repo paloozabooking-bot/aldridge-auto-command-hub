@@ -444,7 +444,7 @@ function renderPartsCards(items, containerId) {
     const partPrice = Number(item.price_we_pull || 0);
     const installEst = Number(item.price_pull_install || 0) > partPrice
       ? Number(item.price_pull_install)
-      : Math.round(partPrice + Number(item.install_labor_hours || 1.5) * Number(state.data?.settings?.labor_rate_hourly || 135));
+      : Math.round(partPrice + Number(item.install_labor_hours || 1.5) * Number(state.data?.settings?.labor_rate_hourly || 174.99));
 
     const primaryLabel = isLocalPickupOnly
       ? '<strong>Single-Variant OEM Part</strong> (Local Counter Pickup — 98467)'
@@ -462,7 +462,7 @@ function renderPartsCards(items, containerId) {
         <div class="part-body">
           <div class="part-sku-line">
             <span>SKU: ${esc(item.sku)}</span>
-            <span>OEM #: ${esc(item.oem_part_number || 'Does Not Apply')}</span>
+            <span>${item.oem_part_number ? `OEM #: ${esc(item.oem_part_number)}` : 'Verified Used OEM'}</span>
           </div>
           <h3 class="part-title">${esc(item.title)}</h3>
           <div class="part-fitment">
@@ -754,7 +754,7 @@ function renderStaffInventoryTable() {
         </td>
         <td>
           <strong>${esc(i.title)}</strong><br/>
-          <span class="mono" style="font-size:0.76rem;color:var(--text-muted);">OEM: ${esc(i.oem_part_number || 'Does Not Apply')} | Fit: ${esc(i.custom_label_0 || `${i.fitment_years} ${i.fitment_make} ${i.fitment_model}`)} | eBay US Cat: #${esc(i.ebay_us_category_id || '6030')}</span>
+          <span class="mono" style="font-size:0.76rem;color:var(--text-muted);">${i.oem_part_number ? `OEM: ${esc(i.oem_part_number)}` : 'Verified OEM'} | Fit: ${esc(i.custom_label_0 || `${i.fitment_years} ${i.fitment_make} ${i.fitment_model}`)} | eBay US Cat: #${esc(i.ebay_us_category_id || '6030')}</span>
         </td>
         <td class="mono">
           ${esc(i.bin_location || 'UNSET')}<br/>
@@ -1127,7 +1127,7 @@ function populateSettingsVaultForm(s) {
   document.getElementById('set-hours-we').value = s.hours_weekend || '';
   document.getElementById('set-handling-fee').value = s.handling_fee_default ?? 10;
   document.getElementById('set-handling-days').value = s.handling_days_default ?? 3;
-  document.getElementById('set-labor-rate').value = s.labor_rate_hourly ?? 135;
+  document.getElementById('set-labor-rate').value = s.labor_rate_hourly ?? 174.99;
   document.getElementById('set-fb').value = s.social_links?.facebook || '';
   const fbMktEl = document.getElementById('set-fb-marketplace');
   if (fbMktEl) fbMktEl.value = s.social_links?.facebook_marketplace || '';
@@ -1627,7 +1627,7 @@ const PLATFORM_SETTINGS_MATRIX = [
   {
     platform: '3. Vendoo',
     badge: '644 Parcel SKUs Ready',
-    rules: '• Import File: Use aldridge_parcel_644_vendoo.csv (644 verified <70 lb SKUs w/ exact Weight_lb & L×W×H dimensions) or aldridge_combined_962_vendoo.csv.\n• Default Template: Condition = Used, Brand = OEM, MPN = Does Not Apply when blank, Zip = 98467, Handling = +$10.00, Auto-Delist on Sale = ON.\n• Channel Scope: Secondary parcel channels only — let Shopify Marketplace Connect manage eBay Motors directly so fitment & two-tier sync stay clean.'
+    rules: '• Import File: Use aldridge_parcel_644_vendoo.csv (verified <70 lb SKUs w/ exact Weight_lb & L×W×H dimensions) or /api/exports/crosslist.csv.\n• Default Template: Condition = Used, Brand = OEM, Verified Stamped OEM MPN (blank if unstamped — never fake hashes), Zip = 98467, Handling = +$10.00, Auto-Delist on Sale = ON.\n• Channel Scope: Secondary parcel channels only — let Shopify Marketplace Connect manage eBay Motors directly so fitment & two-tier sync stay clean.'
   },
   {
     platform: '4. Crosslist (Safety Guardrail Config)',
@@ -2449,7 +2449,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       hours_weekend: document.getElementById('set-hours-we').value,
       handling_fee_default: Number(document.getElementById('set-handling-fee').value || 10),
       handling_days_default: Number(document.getElementById('set-handling-days').value || 3),
-      labor_rate_hourly: Number(document.getElementById('set-labor-rate').value || 135),
+      labor_rate_hourly: Number(document.getElementById('set-labor-rate').value || 174.99),
       social_links: {
         facebook: document.getElementById('set-fb').value,
         facebook_marketplace: document.getElementById('set-fb-marketplace')?.value || '',

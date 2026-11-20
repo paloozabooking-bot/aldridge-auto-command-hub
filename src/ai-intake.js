@@ -355,11 +355,11 @@ function buildStructuredIntakeProposal({ ai, donor, pullStatus, condition, setti
 
   const priceWePull = Math.round(Number(ai.suggested_price_usd || 145));
   const laborHours = Number(ai.install_labor_hours || 1.5);
-  const hourlyRate = Number(settings.labor_rate_hourly || 135);
-  const pricePullInstall = Math.round(priceWePull + laborHours * hourlyRate);
+  const hourlyRate = Number(settings.labor_rate_hourly || 174.99);
+  const pricePullInstall = Number((priceWePull + laborHours * hourlyRate).toFixed(2));
 
   const mileageNote = donor && donor.mileage ? ` Pulled from a ${donor.mileage.toLocaleString()}-mile ${donor.year} ${donor.make} ${donor.model} (${donor.engine}).` : '';
-  const mpnLabel = cleanOem ? `MPN #${cleanOem}` : 'MPN: Does Not Apply';
+  const mpnLabel = cleanOem ? `MPN #${cleanOem}` : 'Match Photos / Connectors';
   const shipSummary = shippingClass === 'local_pickup_only'
     ? 'Local Pickup Only in University Place, WA 98467 (70+ lb / oversized / hazmat assembly).'
     : 'Ships Calculated Parcel + $10.00 handling buffer, or Free Counter Pickup in University Place, WA 98467.';
@@ -608,7 +608,7 @@ function generatePrintableBinLabelHtml(item, settings) {
       </div>
     </div>
     <div class="title">${item.title}</div>
-    <div class="oem">OEM #: ${item.oem_part_number || 'Does Not Apply'} • ${item.weight_lbs} lbs • $${Number(item.price_we_pull || 0).toFixed(2)}</div>
+    <div class="oem">${item.oem_part_number ? `OEM #: ${item.oem_part_number}` : 'Verified Used OEM'} • ${item.weight_lbs} lbs • $${Number(item.price_we_pull || 0).toFixed(2)}</div>
     <div class="app-scan">SCAN QR OR VISIT ${displayHost.toUpperCase()} • ADD TO HOME SCREEN</div>
   </div>
   <div class="actions">

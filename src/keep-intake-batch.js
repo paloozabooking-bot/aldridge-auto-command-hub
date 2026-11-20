@@ -604,7 +604,7 @@ function inferSpecAndBuildItem(group, donors, settings) {
   const conditionId = condition === 'New' ? 1000 : 3000;
   const priceWePull = matchedRule ? matchedRule.price : 85;
   const laborHours = matchedRule ? matchedRule.laborHours : 1.0;
-  const laborRate = Number(settings.labor_rate_hourly || 135);
+  const laborRate = Number(settings.labor_rate_hourly || 174.99);
   const pricePullInstall = laborHours > 0
     ? Number((priceWePull + laborHours * laborRate).toFixed(2))
     : priceWePull;

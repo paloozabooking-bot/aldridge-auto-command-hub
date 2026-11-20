@@ -347,7 +347,7 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'draft',
     office_reviewed_by TEXT DEFAULT '',
     office_reviewed_at TEXT DEFAULT '',
-    labor_rate REAL NOT NULL DEFAULT 135.00,
+    labor_rate REAL NOT NULL DEFAULT 174.99,
     shop_supply_fee_rate REAL NOT NULL DEFAULT 0.07,
     shop_supply_fee REAL NOT NULL DEFAULT 0,
     tax_rate REAL NOT NULL DEFAULT 0.101,
@@ -389,9 +389,9 @@ db.exec(`
     option_b_part_price REAL NOT NULL DEFAULT 0,
     part_price REAL NOT NULL DEFAULT 0,
     labor_hours REAL NOT NULL DEFAULT 1.0,
-    labor_rate REAL NOT NULL DEFAULT 135.00,
-    labor_total REAL NOT NULL DEFAULT 135.00,
-    line_subtotal REAL NOT NULL DEFAULT 135.00,
+    labor_rate REAL NOT NULL DEFAULT 174.99,
+    labor_total REAL NOT NULL DEFAULT 174.99,
+    line_subtotal REAL NOT NULL DEFAULT 174.99,
     customer_decision TEXT NOT NULL DEFAULT 'pending',
     decided_at TEXT DEFAULT '',
     inventory_locked INTEGER NOT NULL DEFAULT 0,
@@ -521,7 +521,7 @@ const DEFAULT_SETTINGS = {
   hours_weekend: 'Sat: 12:00 PM – 6:00 PM • Sun: 1:00 PM – 4:00 PM (U-Haul Sat–Sun: 2–5 PM + 24hr Return)',
   logo_url: '/assets/aldridge-crest.jpg?v=11',
   theme_preset: 'pnw_navy_orange',
-  labor_rate_hourly: 135.00,
+  labor_rate_hourly: 174.99,
   shop_supply_fee_rate: 0.07,
   shop_supply_fee_cap: 45.00,
   parts_markup_used_oem: 1.00,
@@ -537,7 +537,7 @@ const DEFAULT_SETTINGS = {
   public_pwa_url: 'https://aldridgeautosupply.com',
   legacy_archive_db: 'data/archive_905_legacy.db',
   default_condition: 'Used',
-  blank_mpn_fallback: 'Does Not Apply',
+  blank_mpn_fallback: '',
   return_policy_mode: 'ReturnsNotAccepted_DefectOnly',
   self_pull_yard_fee: 5.00,
   shopify_domain: 'aldridgesales.myshopify.com',
@@ -702,12 +702,18 @@ function getSettings() {
   const mergedListingName = !saved.google_listing_name || saved.google_listing_name === "Aldridge Auto's"
     ? DEFAULT_SETTINGS.google_listing_name
     : saved.google_listing_name;
+  const savedLabor = Number(saved.labor_rate_hourly || 0);
+  const lockedLaborRate = (!savedLabor || savedLabor === 135 || savedLabor === 125)
+    ? 174.99
+    : savedLabor;
   return applyEnvOverrides({
     ...DEFAULT_SETTINGS,
     ...saved,
     email: mergedEmail,
     google_listing_name: mergedListingName,
     logo_url: mergedLogo,
+    labor_rate_hourly: lockedLaborRate,
+    blank_mpn_fallback: '',
     single_variant_only: true,
     photos_required: true,
     uhaul_synced_data: { ...DEFAULT_SETTINGS.uhaul_synced_data, ...(saved.uhaul_synced_data || {}) },
@@ -1476,7 +1482,7 @@ function seedAuditGroundTruthCatalog(forceReplace = false) {
         updated_at = excluded.updated_at
     `);
 
-    const hourlyRate = Number(settings.labor_rate_hourly || 135);
+    const hourlyRate = Number(settings.labor_rate_hourly || 174.99);
     for (const item of cleanActiveItems) {
       const category = inferPartCategory(item.title);
       const isHeavyLocalPickup = !item.requires_shipping || Number(item.weight_lbs) >= 70;

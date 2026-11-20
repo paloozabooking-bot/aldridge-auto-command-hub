@@ -503,7 +503,7 @@ function findMatchingInventoryParts({ query = '', year = 0, make = '', model = '
         title: row.title,
         category: row.category,
         brand: row.brand,
-        oem_part_number: row.oem_part_number || 'Does Not Apply',
+        oem_part_number: row.oem_part_number || '',
         fitment_years: row.fitment_years,
         fitment_make: row.fitment_make,
         fitment_model: row.fitment_model,
@@ -1069,7 +1069,7 @@ function createDviInspectionWithRo({
   const dviNumber = 'DVI-' + Math.floor(10000 + Math.random() * 89999);
   const quoteNumber = 'QT-' + Math.floor(10000 + Math.random() * 89999);
   const shareToken = crypto.randomBytes(16).toString('hex');
-  const laborRate = Number(settings.labor_rate_hourly || 135);
+  const laborRate = Number(settings.labor_rate_hourly || 174.99);
 
   const woRes = db.prepare(`
     INSERT INTO work_orders (
@@ -1120,7 +1120,7 @@ function addQuoteLineItem(quoteId, payload = {}) {
   }
   const settings = getSettings();
   const now = new Date().toISOString();
-  const laborRate = Number(payload.labor_rate || quote.labor_rate || settings.labor_rate_hourly || 135);
+  const laborRate = Number(payload.labor_rate || quote.labor_rate || settings.labor_rate_hourly || 174.99);
   const laborHours = Math.max(0, Number(payload.labor_hours ?? 1.0));
   const laborTotal = Number((laborHours * laborRate).toFixed(2));
 
@@ -1777,7 +1777,7 @@ function renderInvoiceHtml(quoteId) {
   </div>
   <div style="display:flex;justify-content:space-between;background:#f8fafc;padding:12px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;">
     <div><strong>Customer:</strong> ${esc(quote.customer?.name || 'Customer')}<br/>${esc(quote.customer?.phone || '')} ${quote.customer?.email ? `• ${esc(quote.customer.email)}` : ''}</div>
-    <div style="text-align:right;"><strong>Vehicle:</strong> ${esc(vehLabel)}<br/><strong>Labor Rate:</strong> $${Number(quote.labor_rate || 135).toFixed(2)}/hr</div>
+    <div style="text-align:right;"><strong>Vehicle:</strong> ${esc(vehLabel)}<br/><strong>Labor Rate:</strong> $${Number(quote.labor_rate || 174.99).toFixed(2)}/hr</div>
   </div>
   <table>
     <thead>
@@ -1787,7 +1787,7 @@ function renderInvoiceHtml(quoteId) {
   </table>
   <div class="totals">
     <div><span>Parts Subtotal:</span><span>$${Number(quote.parts_subtotal || 0).toFixed(2)}</span></div>
-    <div><span>Labor Subtotal ($${Number(quote.labor_rate || 135).toFixed(2)}/hr):</span><span>$${Number(quote.labor_subtotal || 0).toFixed(2)}</span></div>
+    <div><span>Labor Subtotal ($${Number(quote.labor_rate || 174.99).toFixed(2)}/hr):</span><span>$${Number(quote.labor_subtotal || 0).toFixed(2)}</span></div>
     <div><span>Shop Supplies (${Math.round(Number(quote.shop_supply_fee_rate || 0.07) * 100)}%, cap $${Number(cfg.shop_supply_fee_cap || 45).toFixed(0)}):</span><span>$${Number(quote.shop_supply_fee || 0).toFixed(2)}</span></div>
     <div><span>Tacoma / University Place WA Tax (${(Number(quote.tax_rate || 0.101) * 100).toFixed(1)}%):</span><span>$${Number(quote.tax_amount || 0).toFixed(2)}</span></div>
     <div class="grand"><span>Total:</span><span>$${Number(quote.total_amount || 0).toFixed(2)}</span></div>

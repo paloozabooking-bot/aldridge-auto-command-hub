@@ -42,11 +42,13 @@ const {
   renderLocalMarketplacePacket,
   resolveShopifyAccessToken,
   ensureShopifyWebhooksRegistered,
+  inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook
 } = require('./exporters');
 const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
+const { enrichAllActiveInventoryInDb } = require('./catalog-enrichment');
 const {
   decodeVin,
   analyzePartIntake,
@@ -447,7 +449,7 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/bootstrap') {
       const settings = getSettings();
       const donorMap = buildDonorMap();
-      const items = db.prepare('SELECT * FROM inventory_items ORDER BY id DESC').all().map((r) => hydrateInventoryItem(r, donorMap));
+      const items = db.prepare("SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
       const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC').all();
       const specials = db.prepare('SELECT * FROM specials WHERE active = 1 ORDER BY id DESC').all();
       const appointments = db.prepare('SELECT * FROM appointments ORDER BY id DESC LIMIT 100').all().map((a) => ({
@@ -712,7 +714,7 @@ const server = http.createServer(async (req, res) => {
         category: 'pts',
         fee: '$0',
         brand: tax.brand,
-        mpn_or_fitment: tax.mpn !== 'Does Not Apply' ? tax.mpn : tax.customLabel0,
+        mpn_or_fitment: tax.mpn || tax.customLabel0,
         ymm: tax.customLabel0,
         cl_body: clBody,
         photo_data_urls: photoDataUrls
@@ -868,7 +870,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/inventory') {
       if (method === 'GET') {
         const donorMap = buildDonorMap();
-        const rows = db.prepare('SELECT * FROM inventory_items ORDER BY id DESC').all().map((r) => hydrateInventoryItem(r, donorMap));
+        const rows = db.prepare("SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
         sendJson(res, 200, rows);
         return;
       }
@@ -936,7 +938,7 @@ const server = http.createServer(async (req, res) => {
         const cleanOem = (!rawMpn || /^does\s+not\s+apply$/i.test(rawMpn) || isCounterfeitMpn(rawMpn)) ? '' : rawMpn;
         const pricePart = Number(b.price_we_pull || 0);
         const laborHours = Number(b.install_labor_hours || 1.5);
-        const priceInstallInfo = Number(b.price_pull_install || Math.round(pricePart + laborHours * Number(settings.labor_rate_hourly || 135)));
+        const priceInstallInfo = Number(b.price_pull_install || Math.round(pricePart + laborHours * Number(settings.labor_rate_hourly || 174.99)));
 
         const r = db.prepare(`
           INSERT INTO inventory_items (
@@ -975,7 +977,7 @@ const server = http.createServer(async (req, res) => {
           ? { pushed: false, skipped: true }
           : await pushSingleItemToShopify(created, settings, UPLOADS_DIR);
         created = hydrateInventoryItem(db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(r.lastInsertRowid));
-        logSync('outbound', 'all_channels', 'intake_publish_sku', sku, 'success', `Camera Intake published Single-Variant ${sku} (${created.title}) [${photos.length} clean photo(s) + ${qrCard.fileName} Shopify final QR card, ${condStr}, MPN: ${cleanOem || 'Does Not Apply'}, ${shippingClass}, ShopInstallCallout=$${priceInstallInfo.toFixed(2)}, Shopify Live=${Boolean(shopifySync.pushed)}] with Security ID ${secCode}.`);
+        logSync('outbound', 'all_channels', 'intake_publish_sku', sku, 'success', `Camera Intake published Single-Variant ${sku} (${created.title}) [${photos.length} clean photo(s) + ${qrCard.fileName} Shopify final QR card, ${condStr}, MPN: ${cleanOem || 'unstamped'}, ${shippingClass}, ShopInstallCallout=$${priceInstallInfo.toFixed(2)}, Shopify Live=${Boolean(shopifySync.pushed)}] with Security ID ${secCode}.`);
         sendJson(res, 201, {
           ...created,
           single_variant_only: true,
@@ -1175,24 +1177,30 @@ const server = http.createServer(async (req, res) => {
     // Co-Master Shopify Sync, Crosslist Auto-Sync & Webhook Receiver
     if (method === 'POST' && pathname === '/api/sync/shopify') {
       const raw = await readRawBody(req);
+      let opts = {};
       if (raw) {
         try {
-          const parsed = JSON.parse(raw);
+          opts = JSON.parse(raw);
           const patch = {};
-          if (parsed.shopify_admin_token && String(parsed.shopify_admin_token).trim()) {
-            patch.shopify_admin_token = String(parsed.shopify_admin_token).trim();
+          if (opts.shopify_admin_token && String(opts.shopify_admin_token).trim()) {
+            patch.shopify_admin_token = String(opts.shopify_admin_token).trim();
           }
-          if (parsed.shopify_client_id && String(parsed.shopify_client_id).trim()) {
-            patch.shopify_client_id = String(parsed.shopify_client_id).trim();
+          if (opts.shopify_client_id && String(opts.shopify_client_id).trim()) {
+            patch.shopify_client_id = String(opts.shopify_client_id).trim();
           }
-          if (parsed.shopify_domain && String(parsed.shopify_domain).trim()) {
-            patch.shopify_domain = String(parsed.shopify_domain).trim();
+          if (opts.shopify_domain && String(opts.shopify_domain).trim()) {
+            patch.shopify_domain = String(opts.shopify_domain).trim();
           }
           if (Object.keys(patch).length > 0) updateSettings(patch);
         } catch (_) {}
       }
-      const result = await syncAllToShopifyCoMaster();
-      sendJson(res, 200, result);
+      const enrichmentSummary = opts.enrich !== false ? enrichAllActiveInventoryInDb() : null;
+      const updateExisting = Boolean(opts.update_existing || opts.updateExisting);
+      const result = await syncAllToShopifyCoMaster({ updateExisting });
+      if (updateExisting && result.mode === 'live_api' && (!result.errors || result.errors.length === 0)) {
+        updateSettings({ shopify_enrichment_synced_v2: new Date().toISOString() });
+      }
+      sendJson(res, 200, { ...result, enrichment: enrichmentSummary });
       return;
     }
 
@@ -1293,6 +1301,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (method === 'GET' && pathname === '/api/shopify/product-sample') {
+      const rawSkus = String(urlObj.searchParams.get('skus') || '').trim();
+      const skuList = rawSkus ? rawSkus.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      const result = await inspectLiveShopifyProducts(skuList);
+      sendJson(res, 200, result);
+      return;
+    }
+
     // U-Haul Official Dealer Page Sync
     if (method === 'POST' && pathname === '/api/uhaul/sync') {
       const body = JSON.parse((await readRawBody(req)) || '{}');
@@ -1336,7 +1352,7 @@ const server = http.createServer(async (req, res) => {
         hydratedOrderItems.push({
           sku: dbItem.sku,
           title: dbItem.title,
-          oem_part_number: dbItem.oem_part_number || 'Does Not Apply',
+          oem_part_number: dbItem.oem_part_number || '',
           security_mark_code: dbItem.security_mark_code,
           qty,
           unit_price: unitPrice,
@@ -1601,7 +1617,7 @@ const server = http.createServer(async (req, res) => {
       const now = new Date().toISOString();
       const woNumber = 'WO-' + Math.floor(10000 + Math.random() * 89999);
       const laborHours = Number(b.labor_hours || 1.5);
-      const laborRate = Number(settings.labor_rate_hourly || 135);
+      const laborRate = Number(settings.labor_rate_hourly || 174.99);
       let partsTotal = 0;
       const partsUsed = [];
 
@@ -2700,9 +2716,23 @@ async function autoSyncKeepItemsOnStartup() {
     const keepCount = db.prepare("SELECT COUNT(*) c FROM photo_review_items WHERE review_status = 'keep'").get().c;
     if (!keepCount) return;
 
-    // 1. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
+    const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
+
+    // 1. Ingest any un-ingested KEEP items into inventory_items, then run full anti-placeholder enrichment
+    // (locks $174.99/hr, quarantines SRS/airbag SKUs, assigns verified OEM MPNs, weights/dims & rich descriptions).
+    const result = await runKeepBatchIntakeAndPublish({
+      pushShopify: false,
+      baseUrl,
+      uploadsDir: UPLOADS_DIR
+    });
+    const enrichRes = enrichAllActiveInventoryInDb();
+    console.log(
+      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Enriched Active SKUs=${enrichRes.enriched_active_skus} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
+    );
+
+    // 2. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
     // exchange grant_type=client_credentials at https://${shopDomain}/admin/oauth/access_token
-    // for a fresh access_token BEFORE running startup auto-sync.
+    // for a fresh access_token BEFORE running Shopify webhooks & Co-Master sync.
     let shopifyAuthReady = false;
     const rawToken = String(cfg.shopify_admin_token || process.env.SHOPIFY_ADMIN_TOKEN || '').trim();
     const clientId = String(cfg.shopify_client_id || process.env.SHOPIFY_CLIENT_ID || '').trim();
@@ -2722,32 +2752,32 @@ async function autoSyncKeepItemsOnStartup() {
       }
     }
 
+    if (!shopifyAuthReady) return;
+
+    // 3. Programmatically register any missing Shopify webhooks immediately
+    try {
+      const whRes = await ensureShopifyWebhooksRegistered({ registerMissing: true, baseUrl });
+      console.log(
+        `[Startup Shopify Webhooks] ${whRes.address} -> registered=${whRes.registered.length}/${whRes.required_topics.length} (created=${whRes.created.length}, already=${whRes.already_registered.length}, errors=${whRes.errors.length})`
+      );
+    } catch (whErr) {
+      console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
+    }
+
+    // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment sync across all live Shopify products
+    const latestCfg = getSettings();
+    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v2;
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
-    const activeCount = db.prepare(
-      "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0"
-    ).get().c;
-    const shouldPushShopify = shopifyAuthReady && (activeCount === 0 || unsyncedShopifyCount > 0);
 
-    const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
-    const result = await runKeepBatchIntakeAndPublish({
-      pushShopify: shouldPushShopify,
-      baseUrl,
-      uploadsDir: UPLOADS_DIR
-    });
-    console.log(
-      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Active SKUs=${result.total_active_inventory_skus} (created=${result.skus_created}, updated=${result.skus_updated}, merged_angles=${result.multi_angle_photos_merged}, compliance_blocked=${result.compliance_blocked.length}) | QR=${result.qr_cards_generated} | Shopify=${result.shopify_sync?.mode || 'staged'} (${result.shopify_sync?.synced_count ?? 0})`
-    );
-
-    if (shopifyAuthReady) {
-      try {
-        const whRes = await ensureShopifyWebhooksRegistered({ registerMissing: true, baseUrl });
-        console.log(
-          `[Startup Shopify Webhooks] ${whRes.address} -> registered=${whRes.registered.length}/${whRes.required_topics.length} (created=${whRes.created.length}, already=${whRes.already_registered.length}, errors=${whRes.errors.length})`
-        );
-      } catch (whErr) {
-        console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
+    if (needsFullEnrichmentSync || unsyncedShopifyCount > 0) {
+      const syncRes = await syncAllToShopifyCoMaster({ updateExisting: needsFullEnrichmentSync });
+      console.log(
+        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | errors=${(syncRes.errors || []).length}`
+      );
+      if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
+        updateSettings({ shopify_enrichment_synced_v2: new Date().toISOString() });
       }
     }
   } catch (err) {

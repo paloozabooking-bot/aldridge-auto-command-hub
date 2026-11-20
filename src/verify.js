@@ -158,14 +158,14 @@ async function runVerification() {
 
     // 6. Verify Cross-Platform Exporters (Shopify CSV, Vendoo CSV, eBay Motors CSV, All Feeds)
     const shopifyCsv = await (await fetch(`${base}/api/exports/shopify.csv`)).text();
-    assert.ok(shopifyCsv.includes('Does Not Apply'), 'Shopify CSV sets blank MPN = Does Not Apply');
+    assert.ok(!shopifyCsv.includes('Does Not Apply'), 'Shopify CSV never emits Does Not Apply placeholder');
     assert.ok(shopifyCsv.includes(',used,'), 'Shopify CSV sets Google Shopping / Condition = used');
     assert.ok(shopifyCsv.includes('Returns Not Accepted (Defect-Only)'), 'Shopify CSV embeds Defect-Only return metafield');
     assert.ok(shopifyCsv.includes('Local Pickup Only — University Place, WA 98467 (70+ lb)'), 'Shopify CSV marks 70+ lb Local Pickup Only');
     assert.ok(shopifyCsv.includes(`${createdParcel.sku}.2.jpg`), 'Shopify CSV preserves secondary .2.jpg angle row');
 
     const vendooCsv = await (await fetch(`${base}/api/exports/vendoo.csv`)).text();
-    assert.ok(vendooCsv.includes('Does Not Apply'), 'Vendoo CSV sets blank MPN = Does Not Apply');
+    assert.ok(!vendooCsv.includes('Does Not Apply'), 'Vendoo CSV never emits Does Not Apply placeholder');
     assert.ok(vendooCsv.includes('Calculated Parcel + $10.00 Handling'), 'Vendoo CSV locks Calculated Parcel + $10.00 Handling');
     assert.ok(vendooCsv.includes('Local Pickup Only — University Place, WA 98467'), 'Vendoo CSV locks 70+ lb Local Pickup Only');
     assert.ok(vendooCsv.includes('Returns Not Accepted (Defect-Only)'), 'Vendoo CSV locks Defect-Only Returns');
@@ -174,12 +174,12 @@ async function runVerification() {
     const ebayCsv = await (await fetch(`${base}/api/exports/ebay_motors.csv`)).text();
     assert.ok(
       ebayCsv.includes(',3000,Used —') &&
-        ebayCsv.includes('Does Not Apply') &&
+        !ebayCsv.includes('Does Not Apply') &&
         ebayCsv.includes('Calculated,UPSGround,10.00') &&
         ebayCsv.includes('ReturnsNotAccepted') &&
         ebayCsv.includes('US_Pickup') &&
         ebayCsv.includes('University Place, WA 98467'),
-      'eBay Motors CSV enforces Condition 3000 Used, Does Not Apply MPN, Calculated + $10.00 handling, US_Pickup in 98467, and ReturnsNotAccepted'
+      'eBay Motors CSV enforces Condition 3000 Used, zero Does Not Apply placeholders, Calculated + $10.00 handling, US_Pickup in 98467, and ReturnsNotAccepted'
     );
 
     const feedEndpoints = [
