@@ -15,7 +15,24 @@ const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn, resolveCountryOfO
 
 const SHOP_LABOR_RATE_LOCKED = 174.99;
 
-// Grounded SKU enrichment map: verified from Clean Launch Exports CSVs (37 SKUs) + direct visual photo inspection (21 SKUs) + specific outlier fixes
+// Strip internal Google Drive photo links from any customer-facing text (fitment_notes, description, body_html, exports)
+function stripDriveUrlsFromPublicText(text) {
+  return String(text || '')
+    .replace(/\s*\|\s*Drive\s+Photo\s+Ref\s*:\s*https?:\/\/[^\s|<"]+/gi, '')
+    .replace(/\bDrive\s+Photo\s+Ref\s*:\s*https?:\/\/[^\s|<"]+/gi, '')
+    .replace(/https?:\/\/drive\.google\.com\/[^\s|<",)]+/gi, '')
+    .replace(/\s*\|\s*\|/g, ' |')
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// Visually verified duplicate physical part photos (quarantined to prevent double-sales)
+const DUPLICATE_PHYSICAL_PART_SKUS = new Set([
+  'ALD-04TOY-INTERIOR-D-P-P0458' // Exact perceptual-hash duplicate photo (P0458.jpg == P0319.jpg) of 2004 Toyota 4Runner ECM 89661-35822 (ALD-04TOY-GAS-TANK-P0319)
+]);
+
+// Grounded SKU enrichment map: verified from Clean Launch Exports CSVs + direct 131-SKU visual photo audit
 const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-12TOY-COOLANT-RESE-P0840': {
     title: '2010-2020 Toyota 4Runner 4.0L V6 Radiator Coolant Overflow Reservoir Tank OEM 16470-31050',
@@ -31,7 +48,7 @@ const VERIFIED_SKU_ENRICHMENTS = {
     price: 55,
     laborHours: 0.6,
     origin: 'JP',
-    notes: 'Visually verified P0840.jpg: genuine DENSO-molded translucent white Toyota coolant overflow recovery tank with 3 intact mounting ears, factory cap, and overflow hose.'
+    notes: 'Visually verified genuine DENSO-molded translucent white Toyota coolant overflow recovery tank with 3 intact mounting ears, factory cap, and overflow hose.'
   },
   // === 37 Clean Launch Exports Verified Legacy SKUs ===
   'ALD-1UK1V6': { title: '1998 Chevrolet S10 Engine Control Module (ECM/PCM) OEM', years: '1998-2000', make: 'Chevrolet', model: 'S-10', trim: '2WD / 4WD', engine: '2.2L / 4.3L', price: 150, laborHours: 1.0, origin: 'US' },
@@ -44,7 +61,7 @@ const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-84PFJ8': { title: '2012-2017 Fiat 500 Pop Dashboard Trim Bezel Panel OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 110, laborHours: 0.8, origin: 'MX' },
   'ALD-88IUR4': { title: '1998-2004 Chevrolet S10 Front Parking Turn Signal Light Lamp OEM', years: '1998-2004', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', price: 35, laborHours: 0.5, origin: 'US' },
   'ALD-95CL32': { title: '2003-2009 Toyota 4Runner SR5 4x4 Rear Bench Seat Assembly OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 4x4', engine: '4.0L 1GR-FE V6', price: 180, laborHours: 1.0, origin: 'JP' },
-  'ALD-AS41YA': { title: '1998-2003 Chevrolet S10 5-Speed Manual Transmission Assembly OEM', years: '1998-2003', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', price: 475, laborHours: 5.0, origin: 'US' },
+  'ALD-AS41YA': { title: '1998-2003 Chevrolet S10 5-Speed Manual Transmission Shifter Lever Knob & Boot OEM', years: '1998-2003', make: 'Chevrolet', model: 'S-10', trim: 'Pickup 5-Speed Manual', engine: '2.2L / 4.3L', price: 65, laborHours: 0.6, origin: 'US', notes: 'Visually verified 5-speed manual shift lever stick with embossed 1-2-3-4-5-R knob and intact black rubber floor boot.' },
   'ALD-BVZI50': { title: '1998-2004 Chevrolet S10 Front Headlight Headlamp Assembly OEM', years: '1998-2004', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', price: 100, laborHours: 0.8, origin: 'US' },
   'ALD-DJWYZO': { title: '1998-2002 Subaru Forester AWD Rear Seat Backrest Assembly OEM', years: '1998-2002', make: 'Subaru', model: 'Forester', trim: 'AWD', engine: '2.5L EJ25 H4', price: 150, laborHours: 0.8, origin: 'JP' },
   'ALD-F9LJ83': { title: '2003-2009 Toyota 4Runner SR5 4x4 Front CV Axle Drive Shaft OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 4x4', engine: '4.0L 1GR-FE V6', price: 75, laborHours: 2.0, origin: 'JP' },
@@ -72,7 +89,100 @@ const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-ZCWYEV': { title: '2003-2009 Toyota 4Runner SR5 4x4 Engine Bay Fuse Relay Box OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 4x4', engine: '4.0L 1GR-FE V6', price: 75, laborHours: 1.0, origin: 'JP' },
   'ALD-ZX8PU8': { title: '2012-2017 Fiat 500 Pop Electronic Control Module OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 100, laborHours: 1.0, origin: 'MX' },
 
-  // === 19 Directly Photo-Inspected & OEM-Stamped SKUs ===
+  // === Directly Photo-Inspected & Visual Audit Corrected SKUs (131-SKU Contact Sheet Audit) ===
+  'ALD-04TOY-CENTER-CONSO-P0339': {
+    title: '2003-2009 Toyota 4Runner Instrument Cluster Dash Bezel Trim w/ Air Vent OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Sport / Limited', engine: '4.0L 1GR-FE V6 / 4.7L V8',
+    price: 95, laborHours: 0.6, origin: 'JP', placement: 'Dashboard Left / Instrument Cluster Surround',
+    notes: 'Visually verified dash bezel trim surround featuring 3 silver-ringed gauge pods, left dash A/C vent louver, and dimmer switch housing.'
+  },
+  'ALD-04TOY-CHARCOAL-CAN-P0523': {
+    title: '2003-2009 Toyota 4Runner Center Floor Console Assembly w/ Shifter Bezel & Armrest OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 155, laborHours: 1.0, origin: 'JP', placement: 'Interior Center Floor',
+    notes: 'Visually verified complete charcoal/gray center floor console housing with padded armrest lid, rear window switch cutouts, cupholder bay, and gated automatic shifter trim plate.'
+  },
+  'ALD-04TOY-DRIVE-AXLE-P0528': {
+    title: '2003-2009 Toyota 4Runner 4WD Complete Front Differential Assembly WITH Both CV Drive Axles & ADD Actuator OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Sport / Limited 4WD', engine: '4.0L 1GR-FE V6',
+    price: 595, laborHours: 4.5, origin: 'JP', placement: 'Front Drivetrain Assembly (Complete)',
+    notes: 'Visually verified COMPLETE 4WD front differential carrier assembly INCLUDING factory ADD (Automatic Disconnecting Differential) actuator, mounting brackets, AND both left & right CV drive axle half-shafts. 30-day verified mechanical defect-only warranty (buyer must verify axle gear ratio by VIN prior to installation).'
+  },
+  'ALD-04TOY-DRIVER-SEAT-P0306': {
+    title: '2003-2009 Toyota 4Runner Interior Junction Block Fuse Box Assembly OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 95, laborHours: 0.8, origin: 'JP', placement: 'Interior Dash Lower Left',
+    notes: 'Visually verified genuine Toyota interior junction block fuse box with intact blade fuses, relays, and multi-pin wiring harness connectors.'
+  },
+  'ALD-04TOY-FRONT-DIFFER-P0287': {
+    title: '2003-2009 Toyota 4Runner Theft Warning Security Control Module OEM 08190-35820',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    brand: 'Toyota OEM', mpn: '08190-35820', interchange: '137000-3000',
+    price: 65, laborHours: 0.6, origin: 'PH', placement: 'Interior Under Dash',
+    notes: 'Visually verified stamped TOYOTA THEFT WARNING 08190-35820 / 137000-3000 12V Security Control Module (Made in the Philippines) with factory mounting bracket.'
+  },
+  'ALD-04TOY-AC-CONDENSER-P0762': {
+    title: '2003-2009 Toyota 4Runner 4.0L V6 4WD Automatic Transmission Assembly OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited 4WD', engine: '4.0L 1GR-FE V6',
+    price: 950, laborHours: 5.5, origin: 'JP', placement: 'Center Drivetrain (4WD)',
+    notes: 'Visually verified complete OEM 4WD automatic transmission assembly with clean cast aluminum bellhousing and transfer-case mating tailhousing. Local Pickup Only in University Place, WA 98467 or certified in-bay installation.'
+  },
+  'ALD-04TOY-AIR-INTAKE-B-P0297': {
+    title: '2003-2009 Toyota 4Runner Chassis Body Electronic Control Module OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 95, laborHours: 0.6, origin: 'JP', placement: 'Interior Dash / Kick Panel',
+    notes: 'Visually verified black Toyota/DENSO molded electronic control module with intact mounting tabs and white multi-pin connector port.'
+  },
+  'ALD-04TOY-CLIMATE-CONT-P0322': {
+    title: '2003-2009 Toyota 4Runner Transponder Key Immobilizer ECU Control Module w/ Bracket OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 85, laborHours: 0.8, origin: 'JP', placement: 'Interior Dash / Immobilizer Bay',
+    notes: 'Visually verified genuine Toyota Transponder Key Immobilizer ECU module mounted in factory steel bracket.'
+  },
+  'ALD-04TOY-ENGINE-ECU-C-P0301': {
+    title: '2003-2009 Toyota 4Runner Automatic Transmission Floor Shifter Assembly w/ Knob OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 95, laborHours: 1.0, origin: 'JP', placement: 'Center Floor Console',
+    notes: 'Visually verified complete automatic transmission floor shifter assembly with black shift knob, shift-lock mechanism, and mounting base.'
+  },
+  'ALD-04TOY-FRONT-BRAKE-P0470': {
+    title: '2003-2009 Toyota 4Runner HVAC A/C Heater Climate Control Unit w/ Digital Display OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 115, laborHours: 0.8, origin: 'JP', placement: 'Center Dashboard',
+    notes: 'Visually verified 3-dial automatic HVAC climate control module with top silver-bezel digital clock/temp display and rear defrost / A/C push buttons.'
+  },
+  'ALD-04TOY-FUEL-TANK-ST-P0310': {
+    title: '2003-2009 Toyota 4Runner Engine Bay Fuse & Relay Box Assembly w/ Cover OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 85, laborHours: 0.8, origin: 'JP', placement: 'Engine Bay Left',
+    notes: 'Visually verified under-hood engine bay fuse and relay distribution box complete with relays, fuses, fuse puller, and top/bottom covers.'
+  },
+  'ALD-04TOY-GAS-TANK-P0319': {
+    title: '2004 Toyota 4Runner 4.0L V6 Engine Control Module (ECM/ECU) DENSO OEM 89661-35822',
+    years: '2004', make: 'Toyota', model: '4Runner', trim: 'SR5 / Sport / Limited 4.0L', engine: '4.0L 1GR-FE V6',
+    brand: 'Toyota DENSO OEM', mpn: '89661-35822', interchange: '275000-1402',
+    price: 185, laborHours: 1.0, origin: 'JP', placement: 'Behind Glove Box',
+    notes: 'Visually verified stamped TOYOTA ENGINE CONTROL 89661-35822 / DENSO 275000-1402 12V ECM computer with factory steel mounting brackets.'
+  },
+  'ALD-04TOY-HORNS-SET-OF-P0226': {
+    title: '2003-2009 Toyota 4Runner Rear Cargo Quarter Interior Trim Panel Gray OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 95, laborHours: 0.8, origin: 'JP', placement: 'Rear Cargo Interior Quarter',
+    notes: 'Visually verified gray molded rear cargo area interior quarter trim panel with wheel-well contour and integrated storage pocket.'
+  },
+  'ALD-04TOY-RADIATOR-P0324': {
+    title: '2003-2009 Toyota 4Runner Complete Dashboard Pad & Instrument Carrier Shell Gray/Black OEM',
+    years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6',
+    price: 225, laborHours: 3.5, origin: 'JP', placement: 'Front Cabin Full Dashboard',
+    notes: 'Visually verified complete two-tone gray/black dashboard upper pad and instrument carrier assembly (SRS airbag removed — compliant). Local Pickup Only in University Place, WA 98467.'
+  },
+  'ALD-12TOY-ABS-MODULE-P1027': {
+    title: '2010-2020 Toyota 4Runner Hydraulic Brake Booster Master Cylinder & ABS Pump Module OEM',
+    years: '2010-2020', make: 'Toyota', model: '4Runner', trim: 'SR5 / Trail / Limited', engine: '4.0L 1GR-FE V6',
+    price: 185, laborHours: 2.0, origin: 'JP', placement: 'Engine Bay Firewall',
+    notes: 'Visually verified integrated Toyota electric hydraulic brake booster, master cylinder reservoir, and ABS pump actuator module.'
+  },
+
   'ALD-KEEP-P0818': { title: '2000-2004 Subaru Outback Front Right Passenger Interior Door Trim Panel Tan OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'Limited / Base Wagon', engine: '2.5L EJ25 H4', price: 115, laborHours: 0.8, origin: 'JP', placement: 'Front Right Passenger Interior Door', notes: 'Tan/Beige vinyl & leatherette interior door card with armrest handle and speaker grille. Clean mounting clips.' },
   'ALD-KEEP-P0691': { title: '2000-2004 Subaru Outback Front Passenger Tan Leather Bucket Seat Assembly OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'Limited Leather', engine: '2.5L EJ25 H4', price: 195, laborHours: 1.0, origin: 'JP', placement: 'Front Right Passenger', notes: 'Tan leather bucket seat complete with adjustable headrest, seat tracks, and buckle latch.' },
   'ALD-KEEP-P0314': { title: '2000-2004 Subaru Outback Front Left Driver Complete Door Shell w/ Mirror Green/Silver OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'AWD Two-Tone Wagon', engine: '2.5L EJ25 H4', price: 325, laborHours: 2.5, origin: 'JP', placement: 'Front Left Driver', notes: 'Complete two-tone Green/Silver exterior door shell with OUTBACK lower body cladding, exterior handle, and side mirror.' },
@@ -95,7 +205,6 @@ const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-15FIA-MANUAL-REVIE-P0264': { title: '2012-2017 Fiat 500 Pop Rear 50/50 Split Folding Seat Backrest Pair w/ Headrests Charcoal OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 195, laborHours: 1.0, origin: 'MX', notes: 'Matched left and right rear folding seat backrest pair in black/charcoal cloth with round headrests.' },
 
   // === Specific Outlier & Non-Universal Fitment Fixes ===
-  'ALD-04TOY-AC-CONDENSER-P0762': { title: '2003-2009 Toyota 4Runner A/C Air Conditioning Condenser Core OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 / Limited', engine: '4.0L 1GR-FE V6', price: 125, laborHours: 2.0, origin: 'JP' },
   'ALD-9JGBGF': { title: '2010-2014 Subaru Outback Legacy Factory Stereo Radio Head Unit OEM', years: '2010-2014', make: 'Subaru', model: 'Outback', trim: 'Legacy / Outback', engine: '2.5L H4 / 3.6L H6', price: 145, laborHours: 1.0, origin: 'JP' },
   'ALD-00UNI-AERO-BLADE-W-P0131': { title: 'Aero Blade 22-Inch All-Season Beam Windshield Wiper Blades (J-Hook Fitment)', years: '22-Inch Blade', make: 'Aero', model: '22-Inch J-Hook Wiper Arm', condition: 'New', price: 22, laborHours: 0, origin: 'US', brand: 'Aero' },
   'ALD-00UNI-ANCO-18-INCH-P0005': { title: 'ANCO 18-Inch All-Season Windshield Wiper Blade (J-Hook / Pin Arm Fitment)', years: '18-Inch Blade', make: 'ANCO', model: '18-Inch Wiper Arm', condition: 'New', price: 22, laborHours: 0, origin: 'US', brand: 'ANCO' },
@@ -110,11 +219,16 @@ const VERIFIED_SKU_ENRICHMENTS = {
 };
 
 // Accurate part-type-specific packed weights (lb) and box dimensions (L x W x H in) — NEVER 0x0x0 or 2 lb defaults
+// IMPORTANT: More specific light components (door trim panel, shifter lever, dash bezel) MUST precede heavy assemblies (door shell, transmission)!
 const DIMENSION_RULES = [
+  { match: /\b(door\s*trim\s*panel|interior\s*door|door\s*panel|cargo\s*quarter\s*interior\s*trim)\b/i, weight: 12, l: 42, w: 24, h: 8, labor: 0.8 },
   { match: /\b(complete\s*door|door\s*shell|front\s*door|rear\s*door|passenger\s*door|driver\s*door)\b/i, weight: 82, l: 48, w: 44, h: 12, labor: 2.5 },
-  { match: /\b(door\s*trim\s*panel|interior\s*door|door\s*panel)\b/i, weight: 12, l: 40, w: 24, h: 8, labor: 0.8 },
+  { match: /\b(shifter\s*lever|floor\s*shifter|shifter\s*assembly)\b/i, weight: 5, l: 16, w: 10, h: 8, labor: 0.8 },
   { match: /\b(transmission\s*assembly|automatic\s*transmission|manual\s*transmission)\b/i, weight: 195, l: 38, w: 24, h: 22, labor: 5.5 },
+  { match: /\b(complete\s*front\s*differential.*both\s*(cv\s*)?drive\s*axles|front\s*differential.*cv\s*drive\s*axles)\b/i, weight: 115, l: 48, w: 24, h: 20, labor: 4.5 },
   { match: /\b(differential\s*assembly|front\s*differential|rear\s*differential|drive\s*axle)\b/i, weight: 82, l: 26, w: 20, h: 18, labor: 3.5 },
+  { match: /\b(complete\s*dashboard\s*pad|instrument\s*carrier\s*shell)\b/i, weight: 32, l: 58, w: 24, h: 18, labor: 3.5 },
+  { match: /\b(dash\s*bezel|cluster\s*dash\s*bezel|cluster\s*surround\s*bezel)\b/i, weight: 4.5, l: 24, w: 10, h: 6, labor: 0.6 },
   { match: /\b(rear\s*seat|bench\s*seat|car\s*seats|seat\s*pair|backrest\s*pair)\b/i, weight: 76, l: 52, w: 26, h: 18, labor: 1.0 },
   { match: /\b(front\s*seat|driver\s*seat|passenger\s*seat|bucket\s*seat|car\s*seat|\bseat\b)\b/i, weight: 72, l: 34, w: 24, h: 22, labor: 1.0 },
   { match: /\b(fender\s*panel|front\s*fender)\b/i, weight: 28, l: 54, w: 32, h: 12, labor: 2.0 },
@@ -290,6 +404,14 @@ function enrichAllActiveInventoryInDb() {
         continue;
       }
 
+      if (DUPLICATE_PHYSICAL_PART_SKUS.has(skuUpper)) {
+        const dupNote = 'PENDING VERIFICATION: Quarantined duplicate physical part photo (prevents double-sale of single-unit OEM part).';
+        pendingStmt.run(dupNote, now, row.id);
+        pendingVerificationCount++;
+        pendingSkus.push({ sku: row.sku, title: row.title, reasons: ['Duplicate physical part photo quarantined'] });
+        continue;
+      }
+
       const enrich = VERIFIED_SKU_ENRICHMENTS[skuUpper] || null;
       const title = normalizeVehicleTitleCasing(enrich?.title || row.title);
       const fitmentYears = String(enrich?.years || row.fitment_years || '').replace(/Multi-Fit|Universal/gi, '').trim();
@@ -332,15 +454,14 @@ function enrichAllActiveInventoryInDb() {
       const shippingClass = computeShippingClass(dims.weight_lbs, `${tax.partType} ${title}`, dims.length_in, dims.width_in, dims.height_in);
       const origin = enrich?.origin || resolveCountryOfOrigin({ title, brand, fitment_make: fitmentMake, description: enrich?.notes || '' });
 
-      // Preserve Drive URL source references from existing fitment_notes while removing generic boilerplate
-      const driveRefs = (String(row.fitment_notes || '').match(/https:\/\/drive\.google\.com\/[^\s|]+/g) || []);
+      // Strictly exclude internal Google Drive photo links from customer-facing fitment_notes & descriptions
       const fitmentNotesParts = [
         fitmentYears || fitmentMake ? `Verified Fitment: ${[fitmentYears, fitmentMake, fitmentModel, enrich?.trim || matchedDonor?.trim || '', fitmentEngine].filter(Boolean).join(' ')}` : '',
         cleanMpn ? `OEM MPN: ${cleanMpn}${cleanInterchange ? ` / ${cleanInterchange}` : ''}` : '',
         `Country of Origin: ${origin}`,
-        enrich?.notes || '',
-        driveRefs.length ? `Drive Photo Ref: ${driveRefs.join(', ')}` : ''
+        stripDriveUrlsFromPublicText(enrich?.notes || '')
       ].filter(Boolean);
+      const cleanFitmentNotes = stripDriveUrlsFromPublicText(fitmentNotesParts.join(' | '));
 
       const defectDisclosure = condition.toLowerCase() === 'new'
         ? 'New in-stock replacement part; inspect packaging and fitment before installation.'
@@ -358,7 +479,7 @@ function enrichAllActiveInventoryInDb() {
         fitment_make: fitmentMake,
         fitment_model: fitmentModel,
         fitment_engine: fitmentEngine,
-        fitment_notes: fitmentNotesParts.join(' | '),
+        fitment_notes: cleanFitmentNotes,
         defect_disclosure: defectDisclosure,
         price_we_pull: priceWePull,
         install_labor_hours: laborHours,
@@ -368,7 +489,7 @@ function enrichAllActiveInventoryInDb() {
         height_in: dims.height_in,
         shipping_class: shippingClass
       };
-      const richDescription = buildRichStructuredDescription(enrichedCandidate, { ...settings, labor_rate_hourly: laborRate });
+      const richDescription = stripDriveUrlsFromPublicText(buildRichStructuredDescription(enrichedCandidate, { ...settings, labor_rate_hourly: laborRate }));
 
       // MANDATORY ZERO-TOLERANCE VALIDATION GATE:
       // Any SKU lacking verified Year/Make/Model/Part Name/Weight/Dims is quarantined to pending_verification!
@@ -379,7 +500,7 @@ function enrichAllActiveInventoryInDb() {
           complianceBlockedCount++;
           blockedSkus.push(row.sku);
         } else {
-          const reasonNote = `${fitmentNotesParts.join(' | ')} | PENDING VERIFICATION: ${gate.reasons.join('; ')}`;
+          const reasonNote = `${cleanFitmentNotes} | PENDING VERIFICATION: ${gate.reasons.join('; ')}`;
           pendingStmt.run(reasonNote, now, row.id);
           pendingVerificationCount++;
           pendingSkus.push({ sku: row.sku, title, reasons: gate.reasons });
@@ -400,7 +521,7 @@ function enrichAllActiveInventoryInDb() {
         fitmentMake,
         fitmentModel,
         fitmentEngine,
-        fitmentNotesParts.join(' | '),
+        cleanFitmentNotes,
         richDescription,
         defectDisclosure,
         priceWePull,
@@ -431,7 +552,7 @@ function enrichAllActiveInventoryInDb() {
     'sanitize_enrich_174_99',
     'ALL',
     'success',
-    `Enriched ${updatedCount} verified single-variant OEM SKUs at $${laborRate.toFixed(2)}/hr labor; quarantined ${complianceBlockedCount} SRS SKUs (${blockedSkus.join(', ')}) and ${pendingVerificationCount} pending_verification SKUs lacking full YMM.`
+    `Enriched ${updatedCount} verified single-variant OEM SKUs at $${laborRate.toFixed(2)}/hr labor; quarantined ${complianceBlockedCount} SRS SKUs (${blockedSkus.join(', ')}) and ${pendingVerificationCount} pending_verification SKUs.`
   );
 
   return {
@@ -445,10 +566,92 @@ function enrichAllActiveInventoryInDb() {
   };
 }
 
+/**
+ * Universal Automated Catalog Integrity Auditor across all items.
+ * Enforces component vs. title, taxonomy, fitment, pricing, weight/dims, Drive-link exclusion, and zero-duplicate rules.
+ */
+function auditCatalogIntegrity() {
+  const settings = getSettings();
+  const rows = db.prepare('SELECT * FROM inventory_items ORDER BY sku').all();
+  const activeRows = rows.filter((r) => r.status === 'active');
+  const violations = [];
+  const seenPrimaryPhotos = new Map();
+
+  for (const r of activeRows) {
+    const sku = String(r.sku || '').trim();
+    const title = String(r.title || '').trim();
+    const tax = resolvePartTaxonomyAndMetafields(r, settings);
+    const weight = Number(r.weight_lbs || 0);
+    const maxDim = Math.max(Number(r.length_in || 0), Number(r.width_in || 0), Number(r.height_in || 0));
+    const price = Number(r.price_we_pull || 0);
+    const rowIssues = [];
+
+    const gate = validateInventoryItemForPublish(r);
+    if (!gate.valid) rowIssues.push(`publish_gate: ${gate.reasons.join('; ')}`);
+
+    if (/drive\.google\.com|Drive Photo Ref/i.test(`${r.fitment_notes || ''} ${r.description || ''}`)) {
+      rowIssues.push('drive_url_leak_in_public_text');
+    }
+    if (!String(tax.shopifyTaxonomyId || '').startsWith('gid://shopify/TaxonomyCategory/vp-1-4')) {
+      rowIssues.push(`invalid_taxonomy_prefix: ${tax.shopifyTaxonomyId}`);
+    }
+    // Component vs. Weight / Price / Taxonomy consistency rules
+    if (/door\s*trim\s*panel|interior\s*door\s*trim/i.test(title) && weight >= 40) {
+      rowIssues.push(`door_trim_panel_overweight: ${weight}lb (expected ~12lb, not door shell weight)`);
+    }
+    if (/shifter\s*lever|floor\s*shifter/i.test(title) && (weight >= 40 || price >= 250)) {
+      rowIssues.push(`shifter_mismatched_as_full_transmission: ${weight}lb / $${price}`);
+    }
+    if (/(fuse\s*box|control\s*module|ecm|ecu|bcm|immobilizer|theft\s*warning)/i.test(title) && weight >= 25) {
+      rowIssues.push(`electronic_module_overweight: ${weight}lb`);
+    }
+    if (/complete\s*front\s*differential.*both\s*(cv\s*)?drive\s*axles/i.test(title) && (weight < 90 || price < 500 || r.shipping_class !== 'local_pickup_only')) {
+      rowIssues.push(`complete_front_diff_bundle_underconfigured: ${weight}lb / $${price} / ${r.shipping_class}`);
+    }
+    const girthPlusLength = Number(r.length_in || 0) + 2 * (Number(r.width_in || 0) + Number(r.height_in || 0));
+    if ((weight >= 70 || girthPlusLength > 130) && r.shipping_class !== 'local_pickup_only') {
+      rowIssues.push(`heavy_or_oversized_not_local_pickup: ${weight}lb / girth+L=${girthPlusLength}in`);
+    }
+    if (/\bseat\b/i.test(title) && !/bolster|cushion|cover|belt|switch/i.test(title) && weight < 35) {
+      rowIssues.push(`seat_assembly_underweight: ${weight}lb`);
+    }
+    if (Number(r.quantity) !== 1) {
+      rowIssues.push(`non_single_unit_qty: ${r.quantity}`);
+    }
+
+    let photos = [];
+    try { photos = JSON.parse(r.photos_json || '[]'); } catch (_) {}
+    if (photos[0]) {
+      if (seenPrimaryPhotos.has(photos[0])) {
+        rowIssues.push(`duplicate_primary_photo_with_${seenPrimaryPhotos.get(photos[0])}`);
+      } else {
+        seenPrimaryPhotos.set(photos[0], sku);
+      }
+    }
+
+    if (rowIssues.length) {
+      violations.push({ sku, title, issues: rowIssues });
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    total_items: rows.length,
+    active_items: activeRows.length,
+    pending_verification: rows.filter((r) => r.status === 'pending_verification').length,
+    compliance_blocked: rows.filter((r) => r.status === 'compliance_blocked').length,
+    violations_count: violations.length,
+    violations
+  };
+}
+
 module.exports = {
   SHOP_LABOR_RATE_LOCKED,
+  DUPLICATE_PHYSICAL_PART_SKUS,
   VERIFIED_SKU_ENRICHMENTS,
+  stripDriveUrlsFromPublicText,
   resolvePartDimensionsAndWeight,
   buildRichStructuredDescription,
-  enrichAllActiveInventoryInDb
+  enrichAllActiveInventoryInDb,
+  auditCatalogIntegrity
 };

@@ -656,8 +656,7 @@ function inferSpecAndBuildItem(group, donors, settings) {
   const fitmentNotesParts = [
     'Match photos & OEM part number prior to purchase (Returns Not Accepted for remorse/fitment; Defect-Only evidence policy).',
     mergedNotes ? `Review Note: ${mergedNotes}` : '',
-    `Review UIDs: ${group.photos.map((p) => p.photo_uid).join(', ')}`,
-    driveUrls[0] ? `Drive Source: ${driveUrls[0]}` : ''
+    `Review UIDs: ${group.photos.map((p) => p.photo_uid).join(', ')}`
   ].filter(Boolean);
 
   const binLocation = donor?.stock_number

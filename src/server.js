@@ -61,7 +61,7 @@ const {
   handleShopifyWebhook
 } = require('./exporters');
 const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
-const { enrichAllActiveInventoryInDb } = require('./catalog-enrichment');
+const { enrichAllActiveInventoryInDb, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
   decodeVin,
@@ -979,6 +979,7 @@ const server = http.createServer(async (req, res) => {
         const cleanCategory = String(b.category || '').trim();
 
         // 5. PERMANENT ANTI-PLACEHOLDER VALIDATION GATE: Force incomplete/placeholder SKUs into pending_verification
+        const safePostFitNotes = stripDriveUrlsFromPublicText(b.fitment_notes || '');
         const pubGate = validateInventoryItemForPublish({
           title: cleanTitle,
           category: cleanCategory,
@@ -986,8 +987,8 @@ const server = http.createServer(async (req, res) => {
           fitment_years: b.fitment_years || '',
           fitment_make: b.fitment_make || '',
           fitment_model: b.fitment_model || '',
-          fitment_notes: b.fitment_notes || '',
-          description: b.description || '',
+          fitment_notes: safePostFitNotes,
+          description: stripDriveUrlsFromPublicText(b.description || ''),
           weight_lbs: weightLbs,
           length_in: lengthIn,
           width_in: widthIn,
@@ -996,8 +997,8 @@ const server = http.createServer(async (req, res) => {
         const initialStatus = pubGate.valid ? 'active' : pubGate.recommended_status;
         const initialQty = initialStatus === 'active' ? Math.max(1, Number(b.quantity ?? 1)) : 0;
         const finalFitmentNotes = pubGate.valid
-          ? (b.fitment_notes || '')
-          : `${b.fitment_notes || ''}${b.fitment_notes ? ' | ' : ''}PENDING VERIFICATION: ${pubGate.reasons.join('; ')}`;
+          ? safePostFitNotes
+          : `${safePostFitNotes}${safePostFitNotes ? ' | ' : ''}PENDING VERIFICATION: ${pubGate.reasons.join('; ')}`;
 
         const r = db.prepare(`
           INSERT INTO inventory_items (
@@ -1118,10 +1119,12 @@ const server = http.createServer(async (req, res) => {
         if (!existing) return sendJson(res, 404, { error: 'Item not found' });
         let nextQty = b.quantity !== undefined ? Number(b.quantity) : existing.quantity;
         let nextStatus = b.status || (nextQty <= 0 ? 'sold' : 'active');
-        const cleanedFitNotes = String(b.fitment_notes !== undefined ? b.fitment_notes : (existing.fitment_notes || ''))
-          .replace(/\s*\|\s*PENDING VERIFICATION:.*$/i, '')
-          .replace(/^PENDING VERIFICATION:.*$/i, '')
-          .trim();
+        const cleanedFitNotes = stripDriveUrlsFromPublicText(
+          String(b.fitment_notes !== undefined ? b.fitment_notes : (existing.fitment_notes || ''))
+            .replace(/\s*\|\s*PENDING VERIFICATION:.*$/i, '')
+            .replace(/^PENDING VERIFICATION:.*$/i, '')
+            .trim()
+        );
         const mergedCandidate = {
           ...existing,
           title: b.title !== undefined ? b.title : existing.title,
@@ -1549,6 +1552,11 @@ const server = http.createServer(async (req, res) => {
       const skuList = rawSkus ? rawSkus.split(',').map((s) => s.trim()).filter(Boolean) : [];
       const result = await inspectLiveShopifyProducts(skuList);
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/catalog/integrity-audit') {
+      sendJson(res, 200, auditCatalogIntegrity());
       return;
     }
 

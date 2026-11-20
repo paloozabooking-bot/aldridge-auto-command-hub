@@ -161,6 +161,29 @@ function resolveDirectPublicUrls(settings, baseUrl) {
   return { pwaUrl, shopifyUrl };
 }
 
+function stripDriveUrlsFromPublicText(text) {
+  return String(text || '')
+    .replace(/\s*\|\s*Drive\s+(Photo\s+Ref|Source)\s*:\s*https?:\/\/[^\s|<"]+/gi, '')
+    .replace(/\bDrive\s+(Photo\s+Ref|Source)\s*:\s*https?:\/\/[^\s|<"]+/gi, '')
+    .replace(/https?:\/\/drive\.google\.com\/[^\s|<",)]+/gi, '')
+    .replace(/\s*\|\s*\|/g, ' |')
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function buildExpectedShopifyImageAlt(item, isQr = false) {
+  const sku = String(item?.sku || '').trim();
+  const sec = String(item?.security_mark_code || '').trim();
+  if (isQr) {
+    return `${sku} Security Tag ${sec} - Scan QR for Aldridge Auto's App`.replace(/\s{2,}/g, ' ').trim().slice(0, 125);
+  }
+  const cleanTitle = String(item?.title || '').trim();
+  const suffix = sku ? ` (${sku})` : '';
+  const maxTitleLen = Math.max(20, 125 - suffix.length);
+  return `${cleanTitle.slice(0, maxTitleLen).trim()}${suffix}`.trim();
+}
+
 function renderShopifyHtml(item, settings, baseUrl) {
   const policies = generateAllPolicies(settings);
   const tpl = policies.shopify_direct_html_template || policies.ebay_motors_html_template;
@@ -188,6 +211,10 @@ function renderShopifyHtml(item, settings, baseUrl) {
     ? 'Local Pickup Only in University Place, WA 98467'
     : `Calculated Parcel + $${Number(settings.handling_fee_default ?? 10).toFixed(2)} Handling`;
 
+  const safeDesc = stripDriveUrlsFromPublicText(item.description || item.title);
+  const safeNotes = stripDriveUrlsFromPublicText(item.fitment_notes) || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).';
+  const safeDefect = stripDriveUrlsFromPublicText(item.defect_disclosure || 'Inspected & verified.');
+
   return tpl
     .replaceAll('{{BUSINESS_NAME}}', settings.business_name)
     .replaceAll('{{SKU}}', item.sku)
@@ -196,14 +223,14 @@ function renderShopifyHtml(item, settings, baseUrl) {
     .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
     .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
     .replaceAll('{{TITLE}}', item.title)
-    .replaceAll('{{DESCRIPTION}}', item.description || item.title)
+    .replaceAll('{{DESCRIPTION}}', safeDesc)
     .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DEFECT_DISCLOSURE}}', item.defect_disclosure || 'Inspected & verified.')
+    .replaceAll('{{DEFECT_DISCLOSURE}}', safeDefect)
     .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
     .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
     .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
     .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
-    .replaceAll('{{FITMENT_NOTES}}', item.fitment_notes || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).')
+    .replaceAll('{{FITMENT_NOTES}}', safeNotes)
     .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
     .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
     .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
@@ -239,14 +266,14 @@ function renderEbayHtml(item, settings) {
     .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
     .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
     .replaceAll('{{TITLE}}', stripOffEbayContactText(item.title))
-    .replaceAll('{{DESCRIPTION}}', stripOffEbayContactText(item.description || item.title))
+    .replaceAll('{{DESCRIPTION}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.description || item.title)))
     .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DEFECT_DISCLOSURE}}', stripOffEbayContactText(item.defect_disclosure || 'Inspected & verified.'))
+    .replaceAll('{{DEFECT_DISCLOSURE}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.defect_disclosure || 'Inspected & verified.')))
     .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
     .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
     .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
     .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
-    .replaceAll('{{FITMENT_NOTES}}', stripOffEbayContactText(item.fitment_notes || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).'))
+    .replaceAll('{{FITMENT_NOTES}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.fitment_notes) || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).'))
     .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
     .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
     .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
@@ -283,8 +310,8 @@ function renderLocalMarketplacePacket(item, settings, baseUrl) {
     .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
     .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
     .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DESCRIPTION}}', item.description || '')
-    .replaceAll('{{DEFECT_DISCLOSURE}}', item.defect_disclosure || 'Clean tested assembly.')
+    .replaceAll('{{DESCRIPTION}}', stripDriveUrlsFromPublicText(item.description || ''))
+    .replaceAll('{{DEFECT_DISCLOSURE}}', stripDriveUrlsFromPublicText(item.defect_disclosure || 'Clean tested assembly.'))
     .replaceAll('{{SHIPPING_OR_PICKUP_LINE}}', shipOrPickupLine)
     .replaceAll('{{PULL_INSTALL_LINE}}', installLine)
     .replaceAll('{{DIRECT_WEBSITE_URL}}', pwaUrl)
@@ -1444,7 +1471,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       .filter((s) => s && !blockedSkusSet.has(s))
   );
 
-  const auth = await resolveShopifyAccessToken(settings);
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: Boolean(updateExisting) });
   if (!auth.shopDomain || !auth.token) {
     logSync(
       'outbound',
@@ -1493,6 +1520,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
             status: String(p.status || 'active'),
             variant_id: String(v.id || ''),
             inventory_item_id: String(v.inventory_item_id || ''),
+            inventory_quantity: Number(v.inventory_quantity || 0),
             clean_cdn_images: cleanCdnImages
           });
         }
@@ -1503,67 +1531,78 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     nextUrl = m ? m[1] : null;
   }
 
+  async function zeroShopifyInventoryItem(inventoryItemId) {
+    if (!inventoryItemId) return;
+    try {
+      const lvlResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (lvlResp.ok) {
+        const lvlData = await lvlResp.json();
+        for (const lvl of lvlData.inventory_levels || []) {
+          if (Number(lvl.available || 0) > 0) {
+            await shopifyFetchWithRetry(
+              `https://${domain}/admin/api/2025-01/inventory_levels/set.json`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({
+                  location_id: lvl.location_id,
+                  inventory_item_id: Number(inventoryItemId),
+                  available: 0
+                })
+              },
+              { authMode: auth.authMode, settings, tokenRef }
+            );
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   let pushed = 0;
   let updatedCount = 0;
   let draftedBlocked = 0;
   let archivedPending = 0;
   let skippedProtected = 0;
+  let updatedImageAlts = 0;
   const errors = [];
 
   // 1. COMPLIANCE ENFORCEMENT: Immediately draft & zero any prohibited SRS/airbag/catalytic SKUs on Shopify!
   for (const blockedSku of blockedSkusSet) {
     const liveBlocked = existingSkus.get(blockedSku);
-    if (!liveBlocked || liveBlocked.status === 'draft' || liveBlocked.status === 'archived') continue;
+    if (!liveBlocked) continue;
+    const needsDraft = liveBlocked.status !== 'draft' && liveBlocked.status !== 'archived';
+    const needsZero = Number(liveBlocked.inventory_quantity || 0) > 0;
+    if (!needsDraft && !needsZero) continue;
     try {
-      const draftResp = await shopifyFetchWithRetry(
-        `https://${domain}/admin/api/2025-01/products/${liveBlocked.product_id}.json`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            product: {
-              id: Number(liveBlocked.product_id),
-              status: 'draft',
-              tags: 'COMPLIANCE-BLOCKED, SRS-PROHIBITED-DO-NOT-PUBLISH'
-            }
-          })
-        },
-        { authMode: auth.authMode, settings, tokenRef }
-      );
-      if (draftResp.ok) {
-        draftedBlocked++;
-        if (liveBlocked.inventory_item_id) {
-          try {
-            const lvlResp = await shopifyFetchWithRetry(
-              `https://${domain}/admin/api/2025-01/inventory_levels.json?inventory_item_ids=${liveBlocked.inventory_item_id}`,
-              { method: 'GET', headers: { Accept: 'application/json' } },
-              { authMode: auth.authMode, settings, tokenRef }
-            );
-            if (lvlResp.ok) {
-              const lvlData = await lvlResp.json();
-              for (const lvl of lvlData.inventory_levels || []) {
-                if (Number(lvl.available || 0) > 0) {
-                  await shopifyFetchWithRetry(
-                    `https://${domain}/admin/api/2025-01/inventory_levels/set.json`,
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                      body: JSON.stringify({
-                        location_id: lvl.location_id,
-                        inventory_item_id: Number(liveBlocked.inventory_item_id),
-                        available: 0
-                      })
-                    },
-                    { authMode: auth.authMode, settings, tokenRef }
-                  );
-                }
+      if (needsDraft) {
+        const draftResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${liveBlocked.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              product: {
+                id: Number(liveBlocked.product_id),
+                status: 'draft',
+                tags: 'COMPLIANCE-BLOCKED, SRS-PROHIBITED-DO-NOT-PUBLISH'
               }
-            }
-          } catch (_) {}
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (draftResp.ok) {
+          draftedBlocked++;
+          logSync('outbound', 'shopify_co_master', 'compliance_draft_blocked', blockedSku, 'success', `Drafted prohibited SRS/compliance SKU ${blockedSku} on ${domain} (Product ID ${liveBlocked.product_id}).`);
+        } else {
+          errors.push(`draft-blocked ${blockedSku}: HTTP ${draftResp.status}`);
         }
-        logSync('outbound', 'shopify_co_master', 'compliance_draft_blocked', blockedSku, 'success', `Drafted prohibited SRS/compliance SKU ${blockedSku} on ${domain} (Product ID ${liveBlocked.product_id}).`);
-      } else {
-        errors.push(`draft-blocked ${blockedSku}: HTTP ${draftResp.status}`);
+      }
+      if (needsZero) {
+        await zeroShopifyInventoryItem(liveBlocked.inventory_item_id);
       }
       await new Promise((r) => setTimeout(r, 260));
     } catch (err) {
@@ -1571,31 +1610,39 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     }
   }
 
-  // 1b. ZERO-PLACEHOLDER QUARANTINE: Archive any pending_verification SKU currently live on Shopify!
+  // 1b. ZERO-PLACEHOLDER & DUPLICATE QUARANTINE: Archive & zero any pending_verification SKU currently on Shopify!
   for (const pendSku of pendingVerificationSkusSet) {
     const livePend = existingSkus.get(pendSku);
-    if (!livePend || livePend.status === 'archived') continue;
+    if (!livePend) continue;
+    const needsArchive = livePend.status !== 'archived';
+    const needsZero = Number(livePend.inventory_quantity || 0) > 0;
+    if (!needsArchive && !needsZero) continue;
     try {
-      const archResp = await shopifyFetchWithRetry(
-        `https://${domain}/admin/api/2025-01/products/${livePend.product_id}.json`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            product: {
-              id: Number(livePend.product_id),
-              status: 'archived',
-              tags: 'PENDING-VERIFICATION, AWAITING-YMM-REVIEW'
-            }
-          })
-        },
-        { authMode: auth.authMode, settings, tokenRef }
-      );
-      if (archResp.ok) {
-        archivedPending++;
-        logSync('outbound', 'shopify_co_master', 'archive_pending_verification', pendSku, 'success', `Archived pending_verification SKU ${pendSku} on ${domain} (Product ID ${livePend.product_id}) until verified YMM/part details are completed.`);
-      } else {
-        errors.push(`archive-pending ${pendSku}: HTTP ${archResp.status}`);
+      if (needsArchive) {
+        const archResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${livePend.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              product: {
+                id: Number(livePend.product_id),
+                status: 'archived',
+                tags: 'PENDING-VERIFICATION, AWAITING-YMM-REVIEW'
+              }
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (archResp.ok) {
+          archivedPending++;
+          logSync('outbound', 'shopify_co_master', 'archive_pending_verification', pendSku, 'success', `Archived pending_verification SKU ${pendSku} on ${domain} (Product ID ${livePend.product_id}) until verified YMM/part details are completed.`);
+        } else {
+          errors.push(`archive-pending ${pendSku}: HTTP ${archResp.status}`);
+        }
+      }
+      if (needsZero) {
+        await zeroShopifyInventoryItem(livePend.inventory_item_id);
       }
       await new Promise((r) => setTimeout(r, 260));
     } catch (err) {
@@ -1678,6 +1725,33 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           throw new Error(`Shopify PUT HTTP ${putResp.status}: ${errTxt.slice(0, 140)}`);
         }
 
+        // Sanitize ALL existing Shopify image alt-texts to strictly match clean verified OEM title (or final QR tag alt)
+        try {
+          const putData = await putResp.json();
+          const liveImages = Array.isArray(putData?.product?.images) ? putData.product.images : [];
+          for (let imgIdx = 0; imgIdx < liveImages.length; imgIdx++) {
+            const img = liveImages[imgIdx];
+            if (!img?.id) continue;
+            const isQrImg =
+              isQrCardUrl(img.src) ||
+              /scan qr|security tag/i.test(String(img.alt || '')) ||
+              (liveImages.length > 1 && imgIdx === liveImages.length - 1 && /\.qr\.png/i.test(String(img.src || '')));
+            const expectedAlt = buildExpectedShopifyImageAlt(item, isQrImg);
+            if (String(img.alt || '').trim() !== expectedAlt) {
+              const imgResp = await shopifyFetchWithRetry(
+                `https://${domain}/admin/api/2025-01/products/${matchedExisting.product_id}/images/${img.id}.json`,
+                {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                  body: JSON.stringify({ image: { id: img.id, alt: expectedAlt } })
+                },
+                { authMode: auth.authMode, settings, tokenRef }
+              );
+              if (imgResp.ok) updatedImageAlts++;
+            }
+          }
+        } catch (_) {}
+
         await syncShopifyProductGraphqlAndOrigin({
           domain,
           tokenRef,
@@ -1719,9 +1793,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
       const rawPhotos = getShopifyGalleryPhotos(item, settings, uploadsDir);
       const images = rawPhotos.map((u, idx) => {
-        const altText = isQrCardUrl(u)
-          ? `${item.sku} Security Tag ${item.security_mark_code} - Scan QR for Aldridge Auto's App`.slice(0, 70)
-          : item.title.slice(0, 70);
+        const altText = buildExpectedShopifyImageAlt(item, isQrCardUrl(u));
         if (u.startsWith('/uploads/')) {
           const localFile = path.join(uploadsDir, path.basename(u));
           if (fs.existsSync(localFile)) {
@@ -2081,9 +2153,7 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   const images = [];
   let pos = 1;
   for (const str of rawPhotos) {
-    const altText = isQrCardUrl(str)
-      ? `${item.sku} Security Tag ${item.security_mark_code} - Scan QR for Aldridge Auto's App`.slice(0, 70)
-      : item.title.slice(0, 70);
+    const altText = buildExpectedShopifyImageAlt(item, isQrCardUrl(str));
     if (str.startsWith('data:image/')) {
       const m = str.match(/^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/);
       if (m) {
@@ -2214,7 +2284,7 @@ const REQUIRED_SHOPIFY_WEBHOOK_TOPICS = [
 
 async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl = '' } = {}) {
   const settings = getSettings();
-  const auth = await resolveShopifyAccessToken(settings);
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
   const targetOrigin = (baseUrl || settings.canonical_domain || 'https://aldridgeautosupply.com').replace(/\/+$/, '');
   const webhookAddress = `${targetOrigin}/api/webhooks/shopify`;
 
@@ -2433,7 +2503,16 @@ async function inspectLiveShopifyProducts(skus = []) {
       is_qr: isQrCardUrl(im.src) || /scan qr/i.test(String(im.alt || ''))
     }));
 
-    const rawHtmlText = String(p.body_html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const rawHtml = String(p.body_html || '');
+    const rawHtmlText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const expectedNonQrAlt = buildExpectedShopifyImageAlt({ sku, title: p.title, security_mark_code: dbRow?.security_mark_code || '' }, false);
+    const expectedQrAlt = buildExpectedShopifyImageAlt({ sku, title: p.title, security_mark_code: dbRow?.security_mark_code || '' }, true);
+    const allAltsClean = imgs.length > 0 && imgs.every((im) => {
+      const a = String(im.alt || '').trim();
+      if (im.is_qr) return a === expectedQrAlt || (a.includes(sku) && /Scan QR for Aldridge Auto's App/i.test(a));
+      return a === expectedNonQrAlt && !/tested oem auto part|manual review needed|oem driver seat/i.test(a);
+    });
+
     out.push({
       sku,
       found: true,
@@ -2454,11 +2533,14 @@ async function inspectLiveShopifyProducts(skus = []) {
       tags: p.tags,
       metafields,
       images_count: imgs.length,
+      image_alts: imgs.map((im) => im.alt || ''),
+      all_image_alts_clean: allAltsClean,
       first_photo_is_real: imgs.length > 0 ? !imgs[0].is_qr : false,
       qr_in_final_slot: imgs.length > 0 ? Boolean(imgs[imgs.length - 1].is_qr) : false,
       has_174_99_in_html: rawHtmlText.includes('174.99'),
       has_135_in_html: /\$135(\.00)?\s*\/\s*hr/i.test(rawHtmlText),
       has_pickup_address_in_html: /5115\s+66th\s+St\s+W/i.test(rawHtmlText) && /98467/.test(rawHtmlText),
+      has_drive_url_in_html: /drive\.google\.com|Drive Photo Ref/i.test(rawHtml),
       body_html_preview: rawHtmlText.slice(0, 320)
     });
   }
