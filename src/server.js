@@ -62,6 +62,7 @@ const {
 } = require('./exporters');
 const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
 const { enrichAllActiveInventoryInDb } = require('./catalog-enrichment');
+const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
   decodeVin,
   analyzePartIntake,
@@ -648,6 +649,9 @@ const server = http.createServer(async (req, res) => {
         qr_target_base_url: resolvePublicAppBaseUrl(cfg),
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
+        shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
+        sw_version: 'v19',
+        business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/intake/snap-and-publish',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
@@ -1264,6 +1268,18 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store'
       });
       res.end(html);
+      return;
+    }
+
+    if ((method === 'GET' || method === 'HEAD') && (pathname === '/business-plan' || pathname === '/business-plan/')) {
+      const html = renderExecutiveBusinessPlanHtml({
+        autoPrint: urlObj.searchParams.get('autoprint') === '1'
+      });
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
+      res.end(method === 'HEAD' ? '' : html);
       return;
     }
 

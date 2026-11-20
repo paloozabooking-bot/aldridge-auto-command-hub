@@ -127,7 +127,8 @@
           </div>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
             <button type="button" class="btn btn-outline btn-sm" onclick="window.refreshWave1Dashboard()">↻ Refresh Live SQLite</button>
-            <a href="/api/wave1/proof-one-pager" target="_blank" rel="noopener" class="btn btn-primary btn-sm">📄 Export Verified Proof-of-Concept One-Pager</a>
+            <a href="/api/wave1/proof-one-pager" target="_blank" rel="noopener" class="btn btn-primary btn-sm">📊 Export Proof One-Pager</a>
+            <a href="/business-plan" target="_blank" rel="noopener" class="btn btn-dark btn-sm">📄 Print / Save Business Plan PDF</a>
           </div>
         </div>
 

@@ -1,11 +1,11 @@
-const CACHE_NAME = 'aldridge-autos-hub-v18';
+const CACHE_NAME = 'aldridge-autos-hub-v19';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=18',
-  '/app.js?v=18',
-  '/dvi-portal.js?v=18',
-  '/wave1-studio.js?v=18',
+  '/styles.css?v=19',
+  '/app.js?v=19',
+  '/dvi-portal.js?v=19',
+  '/wave1-studio.js?v=19',
   '/manifest.webmanifest',
   '/assets/aldridge-crest.jpg?v=11',
   '/assets/app-icon.jpg?v=11',
@@ -36,7 +36,9 @@ self.addEventListener('fetch', (event) => {
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/uploads/') ||
-    url.pathname.startsWith('/review-thumbs/')
+    url.pathname.startsWith('/review-thumbs/') ||
+    url.pathname === '/business-plan' ||
+    url.pathname === '/business-plan/'
   ) {
     return;
   }
