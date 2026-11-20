@@ -83,6 +83,15 @@ const {
   processDueAbandonedCartAlerts
 } = require('./memberships-funnel');
 const {
+  SHOP_SERVICES_CATALOG,
+  SYMPTOM_PLAYBOOKS,
+  createPartSourcingQuote,
+  listPartSourcingRequests,
+  updatePartSourcingRequestByStaff,
+  runGuidedHelperRecommendation,
+  bookShopService
+} = require('./sourcing-services');
+const {
   decodeVin,
   analyzePartIntake,
   syncUhaulDealerPage,
@@ -675,7 +684,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v21',
+        sw_version: 'v22',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/intake/snap-and-publish',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
@@ -1497,7 +1506,7 @@ const server = http.createServer(async (req, res) => {
       const updateExisting = Boolean(opts.update_existing || opts.updateExisting);
       const result = await syncAllToShopifyCoMaster({ updateExisting });
       if (updateExisting && result.mode === 'live_api' && (!result.errors || result.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v5: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v6: new Date().toISOString() });
       }
       sendJson(res, 200, { ...result, enrichment: enrichmentSummary, deduplication: dedupeSummary });
       return;
@@ -1777,6 +1786,66 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
+
+      if (method === 'GET' && pathname === '/api/employee/sourcing-requests') {
+        sendJson(res, 200, { ...listPartSourcingRequests(), staff_user: empSession.staff_name });
+        return;
+      }
+
+      const empSrcMatch = pathname.match(/^\/api\/employee\/sourcing-requests\/(\d+)$/);
+      if (empSrcMatch && (method === 'PATCH' || method === 'POST')) {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const updated = updatePartSourcingRequestByStaff(Number(empSrcMatch[1]), b);
+        if (!updated) return sendJson(res, 404, { ok: false, error: 'Sourcing request not found' });
+        sendJson(res, 200, { ok: true, request: updated });
+        return;
+      }
+    }
+
+    // "If We Don't Have It, We Can Get It" 50%-Markup Parts Sourcing, Guided Helper & Instant Bookable Shop Services
+    if (method === 'GET' && pathname === '/api/services/catalog') {
+      const cfg = getSettings();
+      sendJson(res, 200, {
+        ok: true,
+        labor_rate_hourly: Number(cfg.labor_rate_hourly || 174.99),
+        sourcing_markup_pct: 50,
+        services: SHOP_SERVICES_CATALOG,
+        symptom_playbooks: Object.values(SYMPTOM_PLAYBOOKS)
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/services/book') {
+      try {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const result = await bookShopService(b, { baseUrl: getSettings().canonical_domain || baseUrl });
+        sendJson(res, 201, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err.message || 'Could not complete service booking.' });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/parts-sourcing/quote') {
+      try {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const result = createPartSourcingQuote(b);
+        sendJson(res, 201, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err.message || 'Could not generate instant part quote.' });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/guided-helper/recommend') {
+      try {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const result = runGuidedHelperRecommendation(b);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err.message || 'Could not evaluate vehicle symptoms.' });
+      }
+      return;
     }
 
     // U-Haul Official Dealer Page Sync
@@ -3237,7 +3306,7 @@ async function autoSyncKeepItemsOnStartup() {
 
     // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment + deduplication sync across all live Shopify products
     const latestCfg = getSettings();
-    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v5;
+    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v6;
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
@@ -3248,7 +3317,7 @@ async function autoSyncKeepItemsOnStartup() {
         `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | archived_duplicates=${syncRes.archived_duplicates_count || 0} | errors=${(syncRes.errors || []).length}`
       );
       if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v5: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v6: new Date().toISOString() });
       }
     }
   } catch (err) {

@@ -58,14 +58,14 @@ const VERIFIED_SKU_ENRICHMENTS = {
     origin: 'JP',
     notes: 'Visually verified genuine DENSO-molded translucent white Toyota coolant overflow recovery tank with 3 intact mounting ears, factory cap, and overflow hose.'
   },
-  // === 37 Clean Launch Exports Verified Legacy SKUs ===
-  'ALD-1UK1V6': { title: '1998 Chevrolet S10 Engine Control Module (ECM/PCM) OEM', years: '1998-2000', make: 'Chevrolet', model: 'S-10', trim: '2WD / 4WD', engine: '2.2L / 4.3L', price: 150, laborHours: 1.0, origin: 'US' },
+  // === 37 Clean Launch Exports Verified Legacy SKUs (100% Photo-Verified) ===
+  'ALD-1UK1V6': { title: '1998 Chevrolet S10 Engine Control Module (ECM/PCM) Delco OEM 16204850', years: '1998-2000', make: 'Chevrolet', model: 'S-10', trim: '2WD / 4WD', engine: '2.2L / 4.3L', brand: 'GM Delco OEM', mpn: '16204850', price: 150, laborHours: 1.0, origin: 'US', notes: 'Visually verified finned aluminum Delco Electronics VCM/PCM stamped HDW NO. 16204850 with clean mounting ears and connector bay.' },
   'ALD-1VNJTD': { title: '2012-2017 Fiat 500 Pop ABS Anti-Lock Brake Control Module OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 180, laborHours: 1.5, origin: 'MX' },
   'ALD-2K89Y8': { title: '2012-2014 Fiat 500 Pop Instrument Gauge Cluster Speedometer OEM', years: '2012-2014', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 180, laborHours: 1.0, origin: 'MX' },
   'ALD-4AEHOC': { title: '2012-2017 Fiat 500 Pop Steering Column Upper Shroud Cover OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 35, laborHours: 0.5, origin: 'MX' },
   'ALD-52QC24': { title: '2012-2017 Fiat 500 Pop Radiator Cooling Fan Shroud Assembly OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 95, laborHours: 1.5, origin: 'MX' },
   'ALD-714368': { title: '2000-2004 Subaru Outback Front Right Passenger Complete Door Shell w/ Mirror Green/Silver OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'AWD Two-Tone Wagon', engine: '2.5L EJ25 H4', placement: 'Front Right Passenger', price: 350, laborHours: 2.5, origin: 'JP', notes: 'Complete two-tone Green/Silver front right passenger exterior door shell with OUTBACK lower body cladding, exterior handle, and side mirror.' },
-  'ALD-7MSUTT': { title: '2001-2004 Ford Escape 4x4 Fuel Injection Rail Assembly OEM', years: '2001-2004', make: 'Ford', model: 'Escape', trim: '4x4', engine: '3.0L Duratec V6', price: 85, laborHours: 1.5, origin: 'US' },
+  'ALD-7MSUTT': { title: '2005-2008 Ford Escape 2.3L I4 Fuel Injection Rail Assembly w/ Injectors & Harness OEM 4M5G-9D280-FB', years: '2005-2008', make: 'Ford', model: 'Escape', trim: '2WD / 4x4', engine: '2.3L Duratec I4', brand: 'Ford OEM', mpn: '4M5G-9D280-FB', interchange: 'LF60-13-150', price: 85, laborHours: 1.5, origin: 'US', notes: 'Visually verified aluminum fuel injection rail stamped 4M5G-9D280-FB / LF60 13 150 complete with green fuel injectors, retaining clips, and factory wiring harness.' },
   'ALD-84PFJ8': { title: '2012-2017 Fiat 500 Pop Passenger Dashboard Trim Bezel Panel Red OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 110, laborHours: 0.8, origin: 'MX' },
   'ALD-88IUR4': { title: '1998-2004 Chevrolet S10 Front Parking Turn Signal Light Lamp OEM', years: '1998-2004', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', price: 35, laborHours: 0.5, origin: 'US' },
   'ALD-95CL32': { title: '2003-2009 Toyota 4Runner SR5 4x4 Rear Bench Seat Assembly OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 4x4', engine: '4.0L 1GR-FE V6', price: 180, laborHours: 1.0, origin: 'JP' },
@@ -78,13 +78,13 @@ const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-J0ZIRX': { title: '2012-2017 Fiat 500 Pop Dashboard Glove Box Compartment Door OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 75, laborHours: 0.5, origin: 'MX' },
   'ALD-JOAVVP': { title: '2012-2017 Fiat 500 Pop Rear Shock Absorber & Coil Spring Assembly OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 75, laborHours: 1.5, origin: 'MX' },
   'ALD-KNYU65': { title: '2001-2004 Ford Escape 4x4 Dual Radiator Cooling Fan Assembly OEM', years: '2001-2004', make: 'Ford', model: 'Escape', trim: '4x4', engine: '3.0L Duratec V6', price: 120, laborHours: 1.5, origin: 'US' },
-  'ALD-LXJKA9': { title: '2012-2017 Fiat 500 Pop Body Control Module (BCM) w/ Fuse Box OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 95, laborHours: 1.0, origin: 'MX' },
+  'ALD-LXJKA9': { title: '2012-2017 Fiat 500 Pop Body Control Module (BCM) w/ Integrated Interior Fuse Box OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', brand: 'Mopar / Fiat OEM', placement: 'Interior Lower Left Dash', price: 95, laborHours: 1.0, origin: 'MX', notes: 'Visually verified gray Mopar/Fiat Body Computer BCM with 12 integrated mini blade fuses, 3 intact multi-pin harness ports, and unbroken mounting ears.' },
   'ALD-M0E8R2': { title: '2012-2017 Fiat 500 Pop HVAC Heater A/C Climate Control Unit OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 85, laborHours: 0.8, origin: 'MX' },
   'ALD-MOWZ49': { title: '2012-2017 Fiat 500 Pop Interior Dashboard Air Vent Trim Bezel OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 35, laborHours: 0.5, origin: 'MX' },
   'ALD-O7ZBUN': { title: '2000-2004 Subaru Outback AWD Rear Right Passenger Door Shell OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'AWD Wagon', engine: '2.5L EJ25 H4', price: 300, laborHours: 2.5, origin: 'JP' },
-  'ALD-Q5GZ91': { title: '1998-2004 Chevrolet S10 Body Control Module (BCM) OEM', years: '1998-2004', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', price: 50, laborHours: 1.0, origin: 'US' },
+  'ALD-Q5GZ91': { title: '1998-2004 Chevrolet S10 Body Control Module (BCM) GM OEM 16268395', years: '1998-2004', make: 'Chevrolet', model: 'S-10', trim: 'Pickup', engine: '2.2L / 4.3L', brand: 'GM OEM', mpn: '16268395', interchange: 'CHAU', price: 50, laborHours: 1.0, origin: 'US', notes: 'Visually verified GM Body Control Module stamped P/N 16268395 (CHAU) with intact Purple, Blue, and Brown multi-pin connector ports.' },
   'ALD-QBGQ07': { title: '2000-2004 Subaru Outback AWD Rear Left Driver Door Shell OEM', years: '2000-2004', make: 'Subaru', model: 'Outback', trim: 'AWD Wagon', engine: '2.5L EJ25 H4', price: 220, laborHours: 2.5, origin: 'JP' },
-  'ALD-S3YFOK': { title: '2012-2017 Fiat 500 Pop Center Floor Console Assembly OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 180, laborHours: 1.0, origin: 'MX' },
+  'ALD-S3YFOK': { title: '2012-2017 Fiat 500 Pop 5-Speed Manual Shifter Assembly w/ Leather Boot, Knob & Lower Console Trim OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback 5-Speed', engine: '1.4L MultiAir I4', price: 145, laborHours: 1.0, origin: 'MX', notes: 'Visually verified 5-speed manual transmission shifter knob, stitched leather boot, power window switch cluster, and lower center dash console surround.' },
   'ALD-SUS2L8': { title: '2012-2017 Fiat 500 Pop Instrument Gauge Cluster Surround Bezel OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 45, laborHours: 0.5, origin: 'MX' },
   'ALD-T9HJRS': { title: '2012-2017 Fiat 500 Pop Front Exterior Fender Panel OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 180, laborHours: 2.0, origin: 'MX' },
   'ALD-UB9MKJ': { title: '2012-2017 Fiat 500 Pop Front Bucket Seat Assembly OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 220, laborHours: 1.0, origin: 'MX' },
@@ -95,7 +95,7 @@ const VERIFIED_SKU_ENRICHMENTS = {
   'ALD-YGM6IP': { title: '2012-2017 Fiat 500 Pop Front Right Passenger Door Shell OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 400, laborHours: 2.5, origin: 'MX' },
   'ALD-YYK0SE': { title: '2012-2017 Fiat 500 Pop Dashboard Center Air Vent Grille Assembly OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 55, laborHours: 0.5, origin: 'MX' },
   'ALD-ZCWYEV': { title: '2003-2009 Toyota 4Runner SR5 4x4 Engine Bay Fuse Relay Box OEM', years: '2003-2009', make: 'Toyota', model: '4Runner', trim: 'SR5 4x4', engine: '4.0L 1GR-FE V6', price: 75, laborHours: 1.0, origin: 'JP' },
-  'ALD-ZX8PU8': { title: '2012-2017 Fiat 500 Pop Electronic Control Module OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 100, laborHours: 1.0, origin: 'MX' },
+  'ALD-ZX8PU8': { title: '2012-2017 Fiat 500 Pop Blue&Me Bluetooth Hands-Free Telematics Convergence Module OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', brand: 'Magneti Marelli / Fiat OEM', placement: 'Interior Behind Glove Box / Rear Quarter', price: 95, laborHours: 0.8, origin: 'IT', notes: 'Visually verified Magneti Marelli Blue&Me Convergence Bluetooth hands-free telematics module with intact blue multi-pin connector port and black vented housing.' },
 
   // === Directly Photo-Inspected & Visual Audit Corrected SKUs (131-SKU Contact Sheet Audit) ===
   'ALD-04TOY-CENTER-CONSO-P0339': {
@@ -290,34 +290,53 @@ const VERIFIED_SKU_ENRICHMENTS = {
     years: '1996', make: 'Toyota', model: 'Camry', trim: 'Sedan', engine: '2.2L 5S-FE I4',
     placement: 'Rear Interior Cabin', price: 265, laborHours: 1.0, origin: 'JP',
     notes: 'Visually verified complete rear bench and folding backrest velour cloth seating set.'
+  },
+  'ALD-98SUB-SIDE-MARKER-P0092': {
+    title: '1998-2000 Subaru Forester Front Corner Side Marker & Turn Signal Lights Pair L+R OEM',
+    years: '1998-2000', make: 'Subaru', model: 'Forester', trim: 'AWD', engine: '2.5L EJ25 H4',
+    placement: 'Front Left & Right Corners', price: 55, laborHours: 0.5, origin: 'JP',
+    notes: 'Visually verified matched Left + Right pair of front corner amber/clear parking & side marker lamp assemblies with intact lenses.'
+  },
+  'ALD-10FOR-FUEL-GAS-FIL-P0159': {
+    title: '2010-2013 Ford Transit Connect Fuel Gas Filler Housing Pocket & Door Hinge Assembly',
+    years: '2010-2013', make: 'Ford', model: 'Transit Connect', trim: 'XL / XLT', engine: '2.0L I4',
+    condition: 'New', placement: 'Rear Left Quarter Fuel Door', price: 55, laborHours: 0.8, origin: 'US',
+    notes: 'Visually verified new boxed fuel filler neck housing pocket with integrated spring door hinge.'
   }
 };
 
 // Accurate part-type-specific packed weights (lb) and box dimensions (L x W x H in) — NEVER 0x0x0 or 2 lb defaults
-// IMPORTANT: More specific light components (door trim panel, shifter lever, dash bezel) MUST precede heavy assemblies (door shell, transmission)!
+// IMPORTANT: More specific light components MUST precede heavier assemblies so title-first matching is 100% accurate!
 const DIMENSION_RULES = [
   { match: /\b(door\s*trim\s*panel|interior\s*door|door\s*panel|cargo\s*quarter\s*interior\s*trim)\b/i, weight: 12, l: 42, w: 24, h: 8, labor: 0.8 },
+  { match: /\b(fuel\s*(gas\s*)?filler\s*(housing|pocket|tank\s*cap\s*door\s*hinge)|fuel\s*door\s*hinge)\b/i, weight: 3, l: 10, w: 8, h: 6, labor: 0.8 },
   { match: /\b(complete\s*door|door\s*shell|front\s*door|rear\s*door|passenger\s*door|driver\s*door)\b/i, weight: 82, l: 48, w: 44, h: 12, labor: 2.5 },
-  { match: /\b(shifter\s*lever|floor\s*shifter|shifter\s*assembly)\b/i, weight: 5, l: 16, w: 10, h: 8, labor: 0.8 },
+  { match: /\b(shifter\s*lever|floor\s*shifter|shifter\s*assembly)\b/i, weight: 8, l: 18, w: 12, h: 10, labor: 0.8 },
   { match: /\b(transmission\s*assembly|automatic\s*transmission|manual\s*transmission)\b/i, weight: 195, l: 38, w: 24, h: 22, labor: 5.5 },
   { match: /\b(complete\s*front\s*differential.*both\s*(cv\s*)?drive\s*axles|front\s*differential.*cv\s*drive\s*axles)\b/i, weight: 115, l: 48, w: 24, h: 20, labor: 4.5 },
   { match: /\b(differential\s*assembly|front\s*differential|rear\s*differential|drive\s*axle)\b/i, weight: 82, l: 26, w: 20, h: 18, labor: 3.5 },
   { match: /\b(complete\s*dashboard\s*pad|instrument\s*carrier\s*shell)\b/i, weight: 32, l: 58, w: 24, h: 18, labor: 3.5 },
-  { match: /\b(dash\s*bezel|cluster\s*dash\s*bezel|cluster\s*surround\s*bezel)\b/i, weight: 4.5, l: 24, w: 10, h: 6, labor: 0.6 },
+  { match: /\b(dash\s*bezel|cluster\s*dash\s*bezel|cluster\s*surround\s*bezel|console\s*bezel|overhead\s*console)\b/i, weight: 5, l: 20, w: 10, h: 6, labor: 0.6 },
+  { match: /\b(bolster\s*cushion)\b/i, weight: 5, l: 18, w: 10, h: 6, labor: 0.5 },
   { match: /\b(rear\s*seat|bench\s*seat|car\s*seats|seat\s*pair|backrest\s*pair)\b/i, weight: 76, l: 52, w: 26, h: 18, labor: 1.0 },
   { match: /\b(front\s*seat|driver\s*seat|passenger\s*seat|bucket\s*seat|car\s*seat|\bseat\b)\b/i, weight: 72, l: 34, w: 24, h: 22, labor: 1.0 },
   { match: /\b(fender\s*panel|front\s*fender)\b/i, weight: 28, l: 54, w: 32, h: 12, labor: 2.0 },
   { match: /\b(fender\s*liner)\b/i, weight: 6, l: 36, w: 22, h: 8, labor: 0.8 },
   { match: /\b(rear\s*bumper|front\s*bumper|bumper\s*cover)\b/i, weight: 32, l: 72, w: 22, h: 18, labor: 2.0 },
+  { match: /\b(wiper\s*switch|combination\s*switch|turn\s*signal\s*switch)\b/i, weight: 3, l: 12, w: 8, h: 5, labor: 0.8 },
+  { match: /\b(wiper\s*blade)\b/i, weight: 2.5, l: 26, w: 4, h: 3, labor: 0 },
+  { match: /\b(wiper\s*linkage|wiper\s*motor)\b/i, weight: 8, l: 26, w: 10, h: 7, labor: 1.2 },
+  { match: /\b(window\s*regulator)\b/i, weight: 7, l: 24, w: 12, h: 6, labor: 1.5 },
   { match: /\b(back\s*window|sliding\s*rear.*window|rear\s*window\s*glass)\b/i, weight: 38, l: 60, w: 22, h: 6, labor: 2.5 },
   { match: /\b(quarter\s*window|door\s*window|window\s*glass)\b/i, weight: 16, l: 34, w: 22, h: 5, labor: 1.5 },
   { match: /\b(gas\s*tank|fuel\s*tank)\b/i, weight: 32, l: 42, w: 20, h: 14, labor: 3.0 },
   { match: /\b(fuel\s*tank\s*strap)\b/i, weight: 5, l: 24, w: 8, h: 5, labor: 1.0 },
   { match: /\b(coolant\s*(overflow|recovery|expansion)?\s*reservoir|radiator\s*(coolant\s*)?overflow|overflow\s*tank|washer\s*(fluid|reservoir|tank))\b/i, weight: 4, l: 14, w: 11, h: 8, labor: 0.6 },
+  { match: /\b(front.*grille|radiator\s*grille)\b/i, weight: 7, l: 38, w: 12, h: 7, labor: 0.8 },
   { match: /\b(radiator\s*cooling\s*fan|cooling\s*fan|fan\s*assembly)\b/i, weight: 15, l: 30, w: 22, h: 8, labor: 1.5 },
-  { match: /\b(a\/c.*condenser|ac\s*condenser|radiator)\b/i, weight: 16, l: 32, w: 24, h: 7, labor: 2.0 },
-  { match: /\b(driveshaft|drive\s*shaft)\b/i, weight: 24, l: 54, w: 8, h: 8, labor: 1.5 },
+  { match: /\b(a\/c.*condenser|ac\s*condenser|\bradiator\b)\b/i, weight: 16, l: 32, w: 24, h: 7, labor: 2.0 },
   { match: /\b(cv\s*axle|axle\s*shaft)\b/i, weight: 18, l: 36, w: 8, h: 8, labor: 2.0 },
+  { match: /\b(driveshaft|drive\s*shaft)\b/i, weight: 24, l: 54, w: 8, h: 8, labor: 1.5 },
   { match: /\b(strut\s*assembly|shock.*coil|rear\s*shocks|fox\s*2\.0)\b/i, weight: 20, l: 28, w: 12, h: 9, labor: 1.8 },
   { match: /\b(brake\s*caliper)\b/i, weight: 18, l: 16, w: 12, h: 8, labor: 1.5 },
   { match: /\b(brake\s*master\s*cylinder|brake\s*booster)\b/i, weight: 13, l: 16, w: 12, h: 10, labor: 2.0 },
@@ -325,37 +344,34 @@ const DIMENSION_RULES = [
   { match: /\b(intake\s*manifold)\b/i, weight: 16, l: 24, w: 16, h: 12, labor: 2.5 },
   { match: /\b(roof\s*rack|roof\s*rail)\b/i, weight: 14, l: 64, w: 10, h: 6, labor: 1.0 },
   { match: /\b(center\s*(floor\s*)?console)\b/i, weight: 16, l: 34, w: 15, h: 14, labor: 1.0 },
-  { match: /\b(overhead\s*console|console\s*bezel)\b/i, weight: 5, l: 18, w: 10, h: 6, labor: 0.6 },
   { match: /\b(dashboard\s*trim|dash.*panel)\b/i, weight: 8, l: 30, w: 12, h: 8, labor: 0.8 },
   { match: /\b(glove\s*box)\b/i, weight: 7, l: 20, w: 14, h: 10, labor: 0.5 },
+  { match: /\b(parking\s*light|side\s*marker|tail\s*light|parking\s*turn\s*signal)\b/i, weight: 4, l: 14, w: 8, h: 6, labor: 0.5 },
   { match: /\b(headlight|headlamp)\b/i, weight: 9, l: 22, w: 14, h: 12, labor: 0.8 },
-  { match: /\b(parking\s*light|side\s*marker|tail\s*light)\b/i, weight: 4, l: 14, w: 8, h: 6, labor: 0.5 },
   { match: /\b(side\s*mirror|view\s*mirror)\b/i, weight: 6, l: 14, w: 10, h: 8, labor: 0.8 },
-  { match: /\b(front.*grille|radiator\s*grille)\b/i, weight: 7, l: 38, w: 12, h: 7, labor: 0.8 },
-  { match: /\b(wiper\s*linkage|wiper\s*motor)\b/i, weight: 8, l: 26, w: 10, h: 7, labor: 1.2 },
-  { match: /\b(window\s*regulator)\b/i, weight: 7, l: 24, w: 12, h: 6, labor: 1.5 },
+  { match: /\b(blue&me|convergence\s*module|yaw\s*rate|stability\s*sensor|sensor)\b/i, weight: 2.5, l: 8, w: 6, h: 4, labor: 0.8 },
   { match: /\b(ecm|ecu|pcm|bcm|tpms|mpx|4wd\s*control|sonar|clearance\s*warning|fuel\s*pump\s*control|keyless|control\s*module|computer|fuse\s*box|relay\s*box)\b/i, weight: 4, l: 11, w: 9, h: 5, labor: 0.9 },
-  { match: /\b(yaw\s*rate|stability\s*sensor|sensor)\b/i, weight: 2.5, l: 8, w: 6, h: 4, labor: 0.8 },
   { match: /\b(instrument.*cluster|speedometer|gauge\s*cluster)\b/i, weight: 5.5, l: 16, w: 11, h: 8, labor: 1.0 },
   { match: /\b(radio|stereo|head\s*unit|audio\s*usb)\b/i, weight: 6.5, l: 14, w: 11, h: 8, labor: 0.8 },
   { match: /\b(climate\s*control|hvac\s*heater)\b/i, weight: 4, l: 12, w: 8, h: 6, labor: 0.8 },
   { match: /\b(water\s*pump|timing\s*chain|timing\s*belt)\b/i, weight: 8.5, l: 14, w: 11, h: 7, labor: 3.0 },
   { match: /\b(fuel\s*injection\s*rail|fuel\s*rail)\b/i, weight: 5, l: 16, w: 8, h: 6, labor: 1.5 },
   { match: /\b(air\s*intake\s*box|charcoal\s*canister)\b/i, weight: 8, l: 18, w: 14, h: 10, labor: 1.0 },
-  { match: /\b(washer\s*fluid|coolant.*reservoir)\b/i, weight: 5, l: 16, w: 12, h: 9, labor: 0.6 },
   { match: /\b(suspension\s*arm|control\s*arm)\b/i, weight: 12, l: 20, w: 14, h: 7, labor: 1.5 },
-  { match: /\b(combination\s*switch|wiper\s*switch|turn\s*signal)\b/i, weight: 3, l: 12, w: 8, h: 5, labor: 0.8 },
   { match: /\b(clutch\s*slave)\b/i, weight: 3.5, l: 9, w: 6, h: 5, labor: 1.2 },
   { match: /\b(wheel\s*cover|hubcap)\b/i, weight: 4.5, l: 16, w: 16, h: 4, labor: 0 },
   { match: /\b(spare\s*tire\s*cover)\b/i, weight: 8, l: 28, w: 28, h: 4, labor: 0 },
-  { match: /\b(wiper\s*blade)\b/i, weight: 2.5, l: 26, w: 4, h: 3, labor: 0 },
   { match: /\b(owner'?s\s*manual)\b/i, weight: 2.5, l: 10, w: 7, h: 3, labor: 0 },
-  { match: /\b(air\s*vent|steering\s*column.*cover|bezel|horn|hood\s*cowl|hood\s*latch|fuel.*filler|heat\s*shield|pillar\s*trim|bolster)\b/i, weight: 5, l: 16, w: 10, h: 6, labor: 0.6 }
+  { match: /\b(air\s*vent|steering\s*column.*cover|bezel|horn|hood\s*cowl|hood\s*latch|heat\s*shield|pillar\s*trim)\b/i, weight: 5, l: 16, w: 10, h: 6, labor: 0.6 }
 ];
 
 function resolvePartDimensionsAndWeight(item) {
-  const hay = `${item.title || ''} ${item.category || ''}`;
-  const matched = DIMENSION_RULES.find((r) => r.match.test(hay));
+  const titleStr = String(item.title || '');
+  const catStr = String(item.category || '');
+  // Match specific title FIRST so broad category names (e.g. "Window Glass, Regulators & Wipers") never shadow light parts
+  const matched =
+    DIMENSION_RULES.find((r) => r.match.test(titleStr)) ||
+    DIMENSION_RULES.find((r) => r.match.test(`${titleStr} ${catStr}`));
   if (matched) {
     return {
       weight_lbs: matched.weight,

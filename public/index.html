@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=21" />
+  <link rel="stylesheet" href="/styles.css?v=22" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -228,33 +228,39 @@
             Plain-English mechanics at <strong>5115 66th St W, Bldg B, University Place, WA 98467</strong>. Every OEM part on our menu is photographed right off our own shelf (<strong>1-of-1 Physical Stock • Zero Double-Booking</strong>) — carry it out today or pick our <strong>House Special Combo</strong> for certified <strong>$174.99/hr</strong> bay installation with warranty.
           </p>
           <div class="hero-cta-row">
-            <button type="button" class="btn btn-primary" onclick="switchCustomerView('view-parts')">Browse Parts &amp; Bay Combos</button>
-            <button type="button" class="btn btn-dark" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')">🔓 Unlock 15%–25% Member Pricing</button>
-            <button type="button" class="btn btn-outline" onclick="switchCustomerView('view-repair')">Book 5.0★ Bay Repair</button>
+            <button type="button" class="btn btn-primary" onclick="switchCustomerView('view-parts')">Find Parts for My Car</button>
+            <button type="button" class="btn btn-dark" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure What You Need?</button>
+            <button type="button" class="btn btn-outline" onclick="window.openPartSourcingModal && window.openPartSourcingModal()">If We Don't Have It, We Can Get It</button>
           </div>
           <div class="pillar-strip">
             <div class="pillar-mini">
-              <strong>Carry-Out or House Special</strong>
-              <span>Every part shows Carry-Out price + Turnkey Installed Bay Combo at 5115 66th St W</span>
+              <strong>Carry-Out or Installed at Shop</strong>
+              <span>Every part has 2 simple options: Add to Cart (ship or free 98467 pickup) or Book Installed at 5115 66th St W</span>
             </div>
             <div class="pillar-mini">
-              <strong>Plain-English Guarantee</strong>
-              <span>5.0★ (87 Google Reviews) • Free Engine Light Scan • Fleet, Veteran &amp; First Responder Discounts</span>
+              <strong>5.0★ Plain-English Mechanics</strong>
+              <span>87 Google Reviews • FREE Check Engine Light Scan • $89.99 Digital Vehicle Inspection (DVI)</span>
             </div>
             <div class="pillar-mini">
-              <strong>U-Haul Dealer #046117</strong>
-              <span>Neighborhood truck &amp; trailer dispatch — 24/7 Truck Share® &amp; 24hr return via U-Haul.com</span>
+              <strong>U-Haul Dealer #046117 &amp; Storage</strong>
+              <span>Neighborhood U-Haul dispatch + Secure 98467 Vehicle, RV &amp; Trailer Storage ($149/mo)</span>
             </div>
           </div>
         </div>
         <div class="hero-media hero-media-brand">
           <img src="/assets/aldridge-shop-hero.jpg?v=11" alt="Chris Aldridge at Aldridge Auto's Service &amp; Repair — Full Service Auto Repair &amp; U-Haul Rentals (253) 245-4206" />
           <div class="hero-media-caption">
-            <span>5115 66th St W Bldg B • Live 5-Channel OEM Stock &amp; Certified Repair Bays</span>
+            <span>5115 66th St W Bldg B • Tested OEM Parts &amp; 5.0★ Certified Repair Bays</span>
             <span class="badge badge-ok" id="hero-stock-count">Live Stock</span>
           </div>
         </div>
       </div>
+
+      <!-- Instant Bookable Shop Services & Bay Menu (FREE CEL Scan, $89.99 DVI, $174.99/hr Bay, $149/mo Storage, Packages) -->
+      <div id="home-shop-services-menu"></div>
+
+      <!-- "If We Don't Have It, We Can Get It" + "Not Sure What You Need?" Quick Action Banner -->
+      <div id="home-sourcing-banner"></div>
 
       <!-- Shop Specials & High-Margin Tested Assemblies Hero Menu Board -->
       <div id="home-chef-specials-menu"></div>
@@ -291,42 +297,53 @@
       <!-- Featured Synced Parts -->
       <div class="section-head">
         <div>
-          <h2>Fresh Off the Shelf — Carry-Out or House Special Installed</h2>
-          <p>Every part has real shop photos, 1-of-1 stock lock, transparent public retail pricing, and optional VIP/Shop wholesale tiers.</p>
+          <h2>Fresh Off the Shelf — Carry-Out or Installed at Our Shop</h2>
+          <p>Real photos straight off our shelf. Pick Carry-Out or Certified Bay Install in one tap.</p>
         </div>
-        <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-parts')">View Full Parts Menu</button>
+        <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-parts')">Find Parts by Vehicle</button>
       </div>
       <div class="parts-grid" id="home-featured-parts"></div>
     </section>
 
     <!-- ==================== CUSTOMER VIEW 2: OEM PARTS STOREFRONT ==================== -->
     <section class="view-panel" id="view-parts">
-      <div id="catalog-chef-specials-menu"></div>
       <div class="section-head">
         <div>
-          <h2>Aldridge Auto's Tested OEM Parts Menu (1-of-1 Physical Stock)</h2>
-          <p>Pick <strong>Option A (Carry-Out / Shipped)</strong> or <strong>Option B (House Special Installed at 5115 66th St W • $174.99/hr)</strong> — unlock 15%–25% Member &amp; Shop Wholesale pricing in 10 seconds.</p>
+          <h2>Find Verified OEM Parts for Your Vehicle</h2>
+          <p>Pick your <strong>Year → Make → Model → System</strong> below — or tap <strong>If We Don't Have It, We Can Get It</strong> for an instant quote.</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-dark btn-sm" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure What You Need?</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="window.openPartSourcingModal && window.openPartSourcingModal()">If We Don't Have It, We Can Get It</button>
         </div>
       </div>
 
-      <div class="filter-bar">
-        <input type="search" id="parts-search-input" class="input" placeholder="Search Year, Make, Model, Part Name, OEM Part # or SKU..." />
+      <!-- Interactive Step-by-Step Vehicle Selector (1. Year -> 2. Make -> 3. Model -> 4. System) + Quick Vehicle Pills -->
+      <div id="vehicle-selector-bar"></div>
+
+      <div class="filter-bar" style="margin-top:10px;">
+        <input type="search" id="parts-search-input" class="input" placeholder="Search by part name, OEM part #, or vehicle (e.g. 4Runner transmission, Fiat 500 seat)..." />
         <select id="parts-category-filter" class="select">
-          <option value="">All Categories</option>
+          <option value="">All Part Systems</option>
         </select>
         <select id="parts-mode-filter" class="select">
-          <option value="">All Shipping Classes</option>
-          <option value="parcel">Parcel Shippable Nationwide (&lt; 70 lbs)</option>
-          <option value="freight">Local Pickup Only — UP, WA 98467 (70+ lbs / Oversize)</option>
+          <option value="">All Pickup &amp; Shipping</option>
+          <option value="parcel">Ships Nationwide or Free 98467 Pickup</option>
+          <option value="freight">University Place 98467 Local Pickup</option>
         </select>
         <button type="button" class="btn btn-outline" id="btn-reset-filters">Reset</button>
       </div>
 
+      <div id="catalog-results-meta" class="catalog-results-meta"></div>
       <div class="parts-grid" id="catalog-parts-grid"></div>
+      <div id="catalog-pagination-bar" class="catalog-pagination-bar"></div>
+
+      <div id="catalog-chef-specials-menu" style="margin-top:2rem;"></div>
     </section>
 
     <!-- ==================== CUSTOMER VIEW 3: AUTO REPAIR, PART PULL & BOOKING ==================== -->
     <section class="view-panel" id="view-repair">
+      <div id="repair-shop-services-menu" style="margin-bottom:1.75rem;"></div>
       <div class="grid-2">
         <div class="surface-card">
           <div class="eyebrow-label">5.0★ SERVICE BAYS • TURNKEY OEM PART INSTALLATION • SELF-PULL YARD</div>
@@ -1858,9 +1875,10 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=21"></script>
-  <script src="/storefront-menu.js?v=21"></script>
-  <script src="/dvi-portal.js?v=21"></script>
-  <script src="/wave1-studio.js?v=21"></script>
+  <script src="/app.js?v=22"></script>
+  <script src="/storefront-menu.js?v=22"></script>
+  <script src="/sourcing-storefront.js?v=22"></script>
+  <script src="/dvi-portal.js?v=22"></script>
+  <script src="/wave1-studio.js?v=22"></script>
 </body>
 </html>

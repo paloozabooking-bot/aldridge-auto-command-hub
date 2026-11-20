@@ -603,6 +603,39 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_abandoned_carts_status ON abandoned_carts(status);
   CREATE INDEX IF NOT EXISTS idx_abandoned_carts_due ON abandoned_carts(alert_15m_due_at, combo_24h_due_at);
+
+  -- "If We Don't Have It, We Can Get It" 50%-Markup Parts Sourcing & Guided Helper Leads
+  CREATE TABLE IF NOT EXISTS part_sourcing_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    request_code TEXT NOT NULL UNIQUE,
+    customer_id INTEGER,
+    customer_name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    sms_opt_in INTEGER NOT NULL DEFAULT 1,
+    vehicle_year TEXT DEFAULT '',
+    vehicle_make TEXT DEFAULT '',
+    vehicle_model TEXT DEFAULT '',
+    vehicle_vin TEXT DEFAULT '',
+    part_query TEXT NOT NULL DEFAULT '',
+    symptom_category TEXT DEFAULT '',
+    symptom_text TEXT DEFAULT '',
+    wholesale_cost_usd REAL NOT NULL DEFAULT 0.00,
+    markup_pct REAL NOT NULL DEFAULT 50.0,
+    quoted_retail_usd REAL NOT NULL DEFAULT 0.00,
+    estimated_labor_hours REAL NOT NULL DEFAULT 1.0,
+    labor_rate_hourly REAL NOT NULL DEFAULT 174.99,
+    installed_total_usd REAL NOT NULL DEFAULT 0.00,
+    vendor_source_label TEXT DEFAULT 'Aldridge Commercial Wholesale Network (OEM & Tier-1)',
+    eta_label TEXT DEFAULT 'Same-Day / Next-Business-Day to University Place 98467',
+    status TEXT NOT NULL DEFAULT 'quoted',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_part_sourcing_status ON part_sourcing_requests(status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_part_sourcing_customer ON part_sourcing_requests(customer_id);
 `);
 
 function ensureColumnExists(table, column, definition) {
