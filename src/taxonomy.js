@@ -56,7 +56,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-4'
   },
   {
-    match: /headlight|headlamp|fog\s*light|corner\s*light|parking\s*light/i,
+    match: /headlight|headlamp|fog\s*light|corner\s*light|parking\s*(light|turn\s*signal)|turn\s*signal\s*(light|lamp)|marker\s*light/i,
     partType: 'Headlight & Front Lamp Assemblies',
     ebayUsCategoryId: '33710',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Lighting & Lamps > Headlight Assemblies',
@@ -72,6 +72,15 @@ const TAXONOMY_RULES = [
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Tail & Brake Lights',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Tail & Brake Lights',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-9-2'
+  },
+  {
+    match: /door\s*shell|complete\s*door/i,
+    partType: 'Doors & Automotive Glass',
+    ebayUsCategoryId: '33642',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Doors & Door Skins',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Vehicle Doors',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
   },
   {
     match: /mirror/i,
@@ -110,7 +119,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-3'
   },
   {
-    match: /wheel|rim|tire|hubcap|center\s*cap/i,
+    match: /(?<!steering\s)\b(wheels?|rims?|tires?|hubcaps?|center\s*caps?)\b/i,
     partType: 'Wheels, Tires & Hub Caps',
     ebayUsCategoryId: '179679',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Wheels, Tires & Parts > Wheels',
@@ -128,7 +137,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-11'
   },
   {
-    match: /\b(engine\s*assembly|long\s*block|short\s*block|cylinder\s*head|intake\s*manifold|throttle\s*body|fuel\s*rail|fuel\s*pump|injector|valve\s*cover|timing|turbo|supercharger|oil\s*pan)\b/i,
+    match: /\b(engine\s*assembly|long\s*block|short\s*block|cylinder\s*head|intake\s*manifold|throttle\s*body|fuel\s*(injection\s*)?rail|fuel\s*pump|injector|valve\s*cover|timing|turbo|supercharger|oil\s*pan|harmonic\s*balancer|crankshaft|camshaft|ignition\s*coil)\b/i,
     partType: 'Engines & Engine Components',
     ebayUsCategoryId: '33615',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Engines & Engine Parts > Complete Engines',
@@ -138,7 +147,7 @@ const TAXONOMY_RULES = [
   },
   // Interior Trim, Door Panels, Seats, Consoles & Dash BEFORE Exterior Door Shell!
   {
-    match: /door\s*panel|interior\s*door|seat|console|dash|trim\s*panel|air\s*vent|bezel|visor|headliner|carpet|steering\s*column\s*cover|shifter|glove\s*box/i,
+    match: /door\s*(trim\s*)?panel|interior\s*door|seat|console|dash|trim\s*panel|air\s*vent|bezel|visor|headliner|carpet|steering\s*column\s*cover|shifter|glove\s*box|cup\s*holder|armrest/i,
     partType: 'Interior Trim, Door Panels & Seats',
     ebayUsCategoryId: '33701',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Door Panels & Seats',
@@ -147,7 +156,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-8'
   },
   {
-    match: /wiper\s*blade|wiper\s*linkage|wiper\s*motor|windshield\s*wiper/i,
+    match: /wiper|windshield\s*wiper/i,
     partType: 'Wipers & Windshield Hardware',
     ebayUsCategoryId: '179850',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Windshield Wiper Systems',
@@ -165,7 +174,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
   },
   {
-    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|window\s*regulator|latch|handle|liner/i,
+    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|window\s*regulator|latch|handle|liner|tow\s*hook|splash\s*guard/i,
     partType: 'Exterior Body Panels & Trim',
     ebayUsCategoryId: '33640',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Bumpers & Reinforcements',
@@ -209,8 +218,12 @@ function resolveCountryOfOrigin(item = {}) {
 }
 
 function resolvePartTaxonomyAndMetafields(item, settings = {}) {
-  const haystack = `${item?.title || ''} ${item?.part_type || ''} ${item?.category || ''}`;
-  const matched = TAXONOMY_RULES.find((r) => r.match.test(haystack)) || FALLBACK_TAXONOMY;
+  const titleText = String(item?.title || '');
+  const fallbackText = `${item?.part_type || ''} ${item?.category || ''}`;
+  const matched =
+    TAXONOMY_RULES.find((r) => r.match.test(titleText)) ||
+    TAXONOMY_RULES.find((r) => r.match.test(fallbackText)) ||
+    FALLBACK_TAXONOMY;
 
   const weight = Number(item?.weight_lbs || 10);
   const threshold = Number(settings?.freight_weight_threshold_lbs || 70);

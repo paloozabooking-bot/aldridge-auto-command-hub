@@ -288,6 +288,7 @@ function enrichAllActiveInventoryInDb() {
       const tax = resolvePartTaxonomyAndMetafields({
         ...row,
         title,
+        category: '',
         brand,
         condition,
         oem_part_number: cleanMpn,
