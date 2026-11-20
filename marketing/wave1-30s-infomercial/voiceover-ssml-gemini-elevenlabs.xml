@@ -1,0 +1,21 @@
+<speak>
+  <!-- Calibrated to 30.0 seconds flat (74 words @ ~148 WPM) — Authentic Pacific Northwest Shop-Owner Cadence -->
+  <prosody rate="100%" pitch="-1st">
+    Tired of wasting hours typing part listings and chasing paper approvals?
+    <break time="280ms"/>
+    We built this inside our five-star Tacoma auto shop.
+    <break time="260ms"/>
+    Snap one part photo and our AI handles the rest,
+    <break time="180ms"/>
+    pulling verified OEM numbers, box dimensions, and taxonomy,
+    <break time="180ms"/>
+    then publishing to Shopify, eBay, Google, Meta, and Craigslist at once.
+    <break time="280ms"/>
+    When it sells, it auto-delists everywhere with zero double-sales.
+    <break time="260ms"/>
+    Customers approve mobile inspections in minutes.
+    <break time="280ms"/>
+    Join our Pierce and King County Founder Beta at
+    <say-as interpret-as="verbatim">aldridgeautosupply.com</say-as>.
+  </prosody>
+</speak>

@@ -1,0 +1,64 @@
+{
+  "title": "Aldridge Auto's AI Hands-Off Shop & OEM Parts Super-App — 30-Second Proof Commercial",
+  "duration_seconds": 30.0,
+  "word_count": 74,
+  "aspect_ratios": ["9:16", "16:9"],
+  "brand": {
+    "name": "Aldridge Auto's Service & Repair",
+    "rating": "5.0★ Rated (87 Google Reviews)",
+    "location": "University Place / Tacoma, WA 98467",
+    "address": "5115 66th St W, Bldg B, University Place, WA 98467",
+    "url": "https://aldridgeautosupply.com",
+    "labor_rate_hourly": 174.99
+  },
+  "scenes": [
+    {
+      "id": 1,
+      "start_sec": 0.0,
+      "end_sec": 5.0,
+      "headline": "SNAP 1 PHOTO -> AI HANDLES THE REST",
+      "subline": "Zero manual data entry — built inside a real 5.0★ Tacoma auto shop",
+      "voiceover": "Tired of wasting hours typing part listings and chasing paper approvals? We built this inside our five-star Tacoma auto shop."
+    },
+    {
+      "id": 2,
+      "start_sec": 5.0,
+      "end_sec": 10.5,
+      "headline": "REAL OEM MPN • WEIGHT • BOX DIMS • TAXONOMY",
+      "subline": "Verified Year/Make/Model • 16470-31050 • 4 lbs • 14×11×8 in • $174.99/hr Bay Install",
+      "voiceover": "Snap one part photo and our AI handles the rest, pulling verified OEM numbers, box dimensions, and taxonomy,"
+    },
+    {
+      "id": 3,
+      "start_sec": 10.5,
+      "end_sec": 16.0,
+      "headline": "LIVE ON SHOPIFY, EBAY, GOOGLE, META & CRAIGSLIST",
+      "subline": "Simultaneous 5-channel publish • QR tamper tag isolated strictly to Shopify",
+      "voiceover": "then publishing to Shopify, eBay, Google, Meta, and Craigslist at once."
+    },
+    {
+      "id": 4,
+      "start_sec": 16.0,
+      "end_sec": 21.0,
+      "headline": "1-OF-1 AUTO-DELIST = 0 DOUBLE-SALES",
+      "subline": "Atomic inventory lock zeroes every feed instantly when a single-unit part sells",
+      "voiceover": "When it sells, it auto-delists everywhere with zero double-sales."
+    },
+    {
+      "id": 5,
+      "start_sec": 21.0,
+      "end_sec": 25.5,
+      "headline": "MOBILE DVI APPROVED IN < 15 MIN",
+      "subline": "Green / Yellow / Red bay photos + live in-stock OEM Option A/B quotes on customer phones",
+      "voiceover": "Customers approve mobile inspections in minutes."
+    },
+    {
+      "id": 6,
+      "start_sec": 25.5,
+      "end_sec": 30.0,
+      "headline": "BUILT & PROVEN IN TACOMA, WA",
+      "subline": "Inviting 1–3 Pierce & King County shops or yards into our Founder Beta • aldridgeautosupply.com",
+      "voiceover": "Join our Pierce and King County Founder Beta at aldridgeautosupply.com."
+    }
+  ]
+}

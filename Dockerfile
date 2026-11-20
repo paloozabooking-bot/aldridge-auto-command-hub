@@ -14,6 +14,7 @@ RUN npm ci --omit=dev
 COPY src ./src
 COPY public ./public
 COPY scripts ./scripts
+COPY marketing ./marketing
 COPY data/command_hub.db ./data/command_hub.db
 COPY data/review_catalog.json ./data/review_catalog.json
 COPY data/uploads ./data/uploads

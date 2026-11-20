@@ -27,6 +27,12 @@ const {
   createOrganizationTenant,
   updateOrganizationTenant,
   addOrganizationUserSeat,
+  listBetaProspects,
+  createBetaProspect,
+  updateBetaProspect,
+  deleteBetaProspect,
+  getWave1ProofMetrics,
+  renderWave1ProofOnePagerHtml,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
   getPhotoReviewSummary,
@@ -1243,6 +1249,77 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, organization: updatedOrg });
         return;
       }
+    }
+
+    /* ==================== WAVE 1 "PROOF OF DOMINANCE" METRICS, BETA PIPELINE & 30S INFOMERCIAL STUDIO ==================== */
+    if (method === 'GET' && pathname === '/api/wave1/metrics') {
+      sendJson(res, 200, { ok: true, metrics: getWave1ProofMetrics() });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/wave1/proof-one-pager') {
+      const html = renderWave1ProofOnePagerHtml();
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      res.end(html);
+      return;
+    }
+
+    if (pathname === '/api/wave1/beta-prospects') {
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, prospects: listBetaProspects() });
+        return;
+      }
+      if (method === 'POST') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const created = createBetaProspect(b);
+        sendJson(res, 201, { ok: true, prospect: created, metrics: getWave1ProofMetrics() });
+        return;
+      }
+    }
+
+    const betaProspectMatch = pathname.match(/^\/api\/wave1\/beta-prospects\/(\d+)$/);
+    if (betaProspectMatch) {
+      const pid = Number(betaProspectMatch[1]);
+      if (method === 'PUT' || method === 'PATCH') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const updated = updateBetaProspect(pid, b);
+        sendJson(res, 200, { ok: true, prospect: updated, metrics: getWave1ProofMetrics() });
+        return;
+      }
+      if (method === 'DELETE') {
+        const deleted = deleteBetaProspect(pid);
+        if (!deleted) return sendJson(res, 404, { error: 'Prospect not found' });
+        sendJson(res, 200, { ok: true, metrics: getWave1ProofMetrics() });
+        return;
+      }
+    }
+
+    if (method === 'GET' && pathname === '/api/wave1/infomercial-assets') {
+      const promoDir = path.join(__dirname, '..', 'marketing', 'wave1-30s-infomercial');
+      const readSafe = (fname) => {
+        try {
+          return fs.readFileSync(path.join(promoDir, fname), 'utf8');
+        } catch (_) {
+          return '';
+        }
+      };
+      let storyboard = {};
+      try { storyboard = JSON.parse(readSafe('storyboard-30s-timeline.json') || '{}'); } catch (_) {}
+      const voiceoverScript = readSafe('voiceover-script-74w.txt').trim();
+      sendJson(res, 200, {
+        ok: true,
+        metrics: getWave1ProofMetrics(),
+        word_count: voiceoverScript ? voiceoverScript.split(/\s+/).length : 0,
+        voiceover_script: voiceoverScript,
+        voiceover_ssml: readSafe('voiceover-ssml-gemini-elevenlabs.xml').trim(),
+        veo3_prompt_9x16: readSafe('veo3-prompt-9x16-reels.txt').trim(),
+        veo3_prompt_16x9: readSafe('veo3-prompt-16x9-youtube.txt').trim(),
+        storyboard
+      });
+      return;
     }
 
     // Bulk CSV Import & Master Template

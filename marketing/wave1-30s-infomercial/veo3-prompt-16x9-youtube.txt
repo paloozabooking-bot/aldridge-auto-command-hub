@@ -1,0 +1,17 @@
+GOOGLE AI STUDIO / VEO 3 PROMPT — 16:9 WIDESCREEN (YOUTUBE / FACEBOOK / LINKEDIN) — CONTINUOUS 30-SECOND SINGLE-TAKE COMMERCIAL
+
+Format: 16:9 widescreen 4K, 24fps documentary-style commercial filmed inside a real working Pacific Northwest independent auto repair shop & OEM parts operation in University Place / Tacoma, Washington. Natural overcast daylight streaming through open bay doors, warm practical shop lighting, smooth Steadicam continuous motion connecting real bay action with crisp live UI overlays—authentic, trustworthy, zero hype.
+
+[0:00-0:05] Wide establishing glide through a tidy 5-star Tacoma auto repair shop into the parts intake bench. A technician inspects a used OEM Toyota 4Runner coolant overflow tank and snaps ONE single photo on a ruggedized smartphone. Left-aligned broadcast lower-third animates cleanly in navy & safety orange: "SNAP 1 PHOTO -> AI HANDLES THE REST".
+
+[0:05-0:10.5] Floating glass UI overlay expands beside the part bench showing hands-off AI Vision extraction with zero manual typing: Title ("2010-2020 Toyota 4Runner Coolant Overflow Tank"), Verified OEM MPN ("16470-31050"), Packed Weight & Box Dimensions ("4 lbs • 14x11x8 in"), Official Shopify Category ("Radiator Overflow Tanks"), Turnkey Bay Install ("$174.99/hr"), and a printed 4x6 thermal QR tamper-security tag. Lower-third: "REAL OEM MPN • WEIGHT • BOX DIMS • TAXONOMY".
+
+[0:10.5-0:16] Camera tracks smoothly across the front counter monitor showing all 5 connected channels illuminating simultaneously: Shopify Storefront, eBay (aabcas), Google Merchant XML, Meta Commerce Catalog, and Tacoma Craigslist—highlighting clean part photos with the QR card strictly isolated to Shopify's final gallery slot. Lower-third: "LIVE ON SHOPIFY, EBAY, GOOGLE, META & CRAIGSLIST".
+
+[0:16-0:21] Real-time "SOLD — 1 OF 1" webhook pulse ripples across the screen, flipping all 5 channel status pills to "AUTO-DELISTED • 0 IN STOCK" in under one second—zero manual clicking, zero double-sales. Lower-third: "1-OF-1 AUTO-DELIST = 0 DOUBLE-SALES".
+
+[0:21-0:25.5] Camera swings to an active hydraulic lift bay where a technician uploads a mobile inspection photo; right side of the widescreen frame shows the customer's mobile DVI portal with color-coded Green/Yellow/Red findings and live OEM parts-on-hand Option A/B pricing as the customer taps "APPROVE". Lower-third: "MOBILE DVI APPROVED IN < 15 MIN".
+
+[0:25.5-0:30] Hero wide shot of Aldridge Auto's Service & Repair service bays and parts counter settling into a sharp dark-navy & orange branded end-card: "ALDRIDGE AUTO'S SERVICE & REPAIR • 5.0★ RATED • UNIVERSITY PLACE / TACOMA, WA", "BUILT & PROVEN IN TACOMA, WA", "INVITING 1–3 PIERCE & KING COUNTY SHOPS OR YARDS INTO OUR FOUNDER BETA", and "https://aldridgeautosupply.com".
+
+Audio direction: Authentic Pacific Northwest shop-owner narration (74 words calibrated to 30.0s), subtle clean shop ambiance + understated modern guitar/percussion pulse, crisp subtle UI chime on auto-delist and customer approval.
