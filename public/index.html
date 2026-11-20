@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=14" />
+  <link rel="stylesheet" href="/styles.css?v=15" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -197,6 +197,7 @@
         <button type="button" class="nav-btn" data-view="view-parts" id="nav-parts">OEM Parts Store</button>
         <button type="button" class="nav-btn" data-view="view-repair" id="nav-repair">Auto Repair &amp; Booking</button>
         <button type="button" class="nav-btn" data-view="view-uhaul" id="nav-uhaul">U-Haul #046117</button>
+        <button type="button" class="nav-btn" data-view="view-portal" id="nav-portal">My Garage &amp; DVI Portal</button>
         <button type="button" class="nav-btn" data-view="view-support" id="nav-support">Inquiries, Returns &amp; VIP</button>
       </nav>
 
@@ -692,19 +693,91 @@
       </div>
     </section>
 
+    <!-- ==================== CUSTOMER VIEW 6: CUSTOMER PORTAL (DVI, APPROVALS, DEPOSITS & TRACKER) ==================== -->
+    <section class="view-panel" id="view-portal">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow-label">ALDRIDGE AUTO'S CUSTOMER PORTAL • LIVE DVI PHOTOS, QUOTES &amp; ONLINE PAYMENTS</div>
+          <h2>My Garage, Digital Inspections &amp; Repair Tracker</h2>
+        </div>
+        <div id="portal-header-actions" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;"></div>
+      </div>
+
+      <!-- Frictionless Customer Login Card (Magic Link or Password) -->
+      <div id="portal-auth-card" class="grid-2" style="margin-bottom:1.35rem;">
+        <div class="surface-card" style="border-left:4px solid var(--brand-orange);">
+          <div class="eyebrow-label">FRICTIONLESS MAGIC LINK LOGIN</div>
+          <h3 style="margin-top:0;">Instant SMS / Email Portal Link</h3>
+          <p style="font-size:0.84rem;color:var(--text-secondary);">Enter the email or phone number on your repair order to receive an instant secure login link tied directly to your vehicle profile.</p>
+          <form id="portal-magic-form">
+            <div class="form-group">
+              <label for="portal-magic-identifier">Email or Phone Number *</label>
+              <input type="text" id="portal-magic-identifier" class="input" required placeholder="(253) 555-0199 or you@example.com" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">Send Instant Magic Login Link</button>
+          </form>
+          <div id="portal-magic-result" style="display:none;margin-top:0.75rem;padding:0.75rem;border-radius:8px;background:var(--bg-subtle);font-size:0.82rem;"></div>
+        </div>
+
+        <div class="surface-card">
+          <div class="eyebrow-label">PASSWORD LOGIN / FIRST-TIME SETUP</div>
+          <h3 style="margin-top:0;">Sign In With Password</h3>
+          <form id="portal-password-form">
+            <div class="form-group">
+              <label for="portal-pwd-identifier">Email or Phone Number *</label>
+              <input type="text" id="portal-pwd-identifier" class="input" required placeholder="you@example.com or (253) 555-0199" />
+            </div>
+            <div class="form-group">
+              <label for="portal-pwd-secret">Password *</label>
+              <input type="password" id="portal-pwd-secret" class="input" required minlength="6" placeholder="At least 6 characters" />
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;">
+              <input type="checkbox" id="portal-pwd-setup-mode" />
+              <label for="portal-pwd-setup-mode" style="margin:0;font-weight:500;">First time? Set / Create my portal password</label>
+            </div>
+            <div class="form-group" id="portal-pwd-name-wrap" style="display:none;">
+              <label for="portal-pwd-name">Full Name</label>
+              <input type="text" id="portal-pwd-name" class="input" placeholder="Your Full Name" />
+            </div>
+            <button type="submit" class="btn btn-dark btn-sm">Sign In to My Garage Portal</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Authenticated Customer Portal Workspace -->
+      <div id="portal-dashboard" style="display:none;">
+        <div id="portal-status-tracker" class="surface-card" style="margin-bottom:1.25rem;"></div>
+        <div id="portal-dvi-reports" style="display:flex;flex-direction:column;gap:1.25rem;margin-bottom:1.25rem;"></div>
+        <div id="portal-quotes-invoices" style="display:flex;flex-direction:column;gap:1.25rem;margin-bottom:1.25rem;"></div>
+        <div class="grid-2">
+          <div class="surface-card">
+            <h3 style="margin-top:0;">My Vehicles &amp; Mileage History</h3>
+            <div id="portal-vehicles-list"></div>
+          </div>
+          <div class="surface-card">
+            <h3 style="margin-top:0;">Deferred Maintenance &amp; 60/90-Day Reminders</h3>
+            <div id="portal-deferred-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ==================== EMPLOYEE BACKEND COMMAND CENTER ==================== -->
     <section class="view-panel" id="view-staff">
       <div class="section-head">
         <div>
-          <div class="eyebrow-label">UNIFIED OPERATIONS &amp; CO-MASTER SYNC ENGINE</div>
+          <div class="eyebrow-label">UNIFIED OPERATIONS, DVI BAY CAPTURE &amp; CO-MASTER SYNC ENGINE</div>
           <h2>Employee Backend Command Center</h2>
         </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-review')">📸 Visual Photo Review (KEEP / REMOVE)</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="switchStaffTab('staff-launch-kit')">🚀 Launch Center</button>
-          <a href="/api/exports/legacy-905-two-tier.csv" download="aldridge_905_legacy_two_tier_active_only.csv" class="btn btn-outline btn-sm">⬇ 905 Two-Tier Shopify CSV</a>
-          <a href="/api/exports/ebay-safe-batch-50.csv" download="ebay_aabcas_safe_batch_1_50_skus.csv" class="btn btn-outline btn-sm">⬇ eBay Batch 1 (50 SKUs)</a>
-          <a href="/api/exports/local-pickup-98467-ads.csv" download="local_pickup_98467_offerup_craigslist_ads.csv" class="btn btn-outline btn-sm">⬇ 318 Local Pickup Ads CSV</a>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+          <label for="staff-role-select" style="font-size:0.78rem;font-weight:700;color:var(--text-secondary);">Active Role:</label>
+          <select id="staff-role-select" class="select" style="width:auto;min-width:190px;padding:0.35rem 0.65rem;font-size:0.8rem;">
+            <option value="owner">👑 Owner / Admin (Chris)</option>
+            <option value="office_manager">📋 Office Manager (Maria)</option>
+            <option value="technician">🔧 Technician (Bay Tech)</option>
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" onclick="switchStaffTab('staff-approvals')">🔍 Bay DVI &amp; Quoting</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="switchStaffTab('staff-review')">📸 Photo Review</button>
           <button type="button" class="btn btn-dark btn-sm" id="btn-trigger-shopify-sync">Sync Co-Master w/ Shopify</button>
         </div>
       </div>
@@ -1193,8 +1266,57 @@
         </div>
       </div>
 
-      <!-- STAFF TAB 4: STAFF APPROVAL QUEUE (APPOINTMENTS, SELF-PULL, WE-PULL, INSTALLS) -->
+      <!-- STAFF TAB 4: STAFF APPROVAL QUEUE, DIGITAL VEHICLE INSPECTION (DVI) & LIVE INVENTORY QUOTING -->
       <div class="staff-section" id="staff-approvals">
+        <!-- Integrated Mobile-First DVI & Live Inventory Quoting Command Center -->
+        <div class="surface-card" style="margin-bottom:1.35rem;border-left:4px solid var(--brand-orange);" id="dvi-bay-command-center">
+          <div class="section-head" style="margin-bottom:0.85rem;">
+            <div>
+              <div class="eyebrow-label" style="color:var(--brand-orange);">DIGITAL VEHICLE INSPECTION (DVI) • GEMINI VISION • LIVE INVENTORY QUOTING • MARIA OFFICE WORKFLOW</div>
+              <h3 style="margin:0;">Active Repair Orders, Bay DVI Capture &amp; Inventory-Linked Quoting</h3>
+              <p style="margin:0.2rem 0 0;font-size:0.83rem;color:var(--text-secondary);">
+                Labor: <strong>$135/hr</strong> • Shop Supplies: <strong>7% (cap $45)</strong> • University Place / Tacoma WA Tax: <strong>10.1%</strong> • Offline Bay Media Queue enabled via IndexedDB.
+              </p>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+              <span id="dvi-offline-queue-badge" class="badge badge-ok">🟢 Online • Bay Queue: 0 Pending</span>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-dvi-flush-offline" style="display:none;" onclick="flushOfflineDviQueue()">⬆ Sync Queued Bay Media</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="toggleNewDviRoForm()">+ New Repair Order / Start DVI</button>
+            </div>
+          </div>
+
+          <!-- New RO + DVI + CRM Vehicle Intake Form -->
+          <form id="dvi-new-ro-form" style="display:none;background:var(--bg-subtle);padding:1rem;border-radius:10px;border:1px solid var(--border);margin-bottom:1rem;">
+            <h4 style="margin:0 0 0.65rem;">Create Repair Order &amp; Start Digital Vehicle Inspection (Auto-Links Unified CRM)</h4>
+            <div class="grid-3">
+              <div class="form-group"><label>Customer Name *</label><input type="text" id="dvi-new-cust-name" class="input" required placeholder="Jane Doe" /></div>
+              <div class="form-group"><label>Phone (Normalized CRM Key) *</label><input type="tel" id="dvi-new-cust-phone" class="input" required placeholder="(253) 555-0199" /></div>
+              <div class="form-group"><label>Email</label><input type="email" id="dvi-new-cust-email" class="input" placeholder="jane@example.com" /></div>
+            </div>
+            <div class="grid-4">
+              <div class="form-group"><label>17-Digit VIN (Auto-Decodes)</label><input type="text" id="dvi-new-vin" class="input mono" maxlength="17" placeholder="JTEBU14R..." /></div>
+              <div class="form-group"><label>Year</label><input type="number" id="dvi-new-year" class="input" placeholder="2004" /></div>
+              <div class="form-group"><label>Make *</label><input type="text" id="dvi-new-make" class="input" required placeholder="Toyota" /></div>
+              <div class="form-group"><label>Model *</label><input type="text" id="dvi-new-model" class="input" required placeholder="4Runner" /></div>
+            </div>
+            <div class="grid-3">
+              <div class="form-group"><label>Mileage In</label><input type="number" id="dvi-new-mileage" class="input" placeholder="148500" /></div>
+              <div class="form-group"><label>Assigned Technician</label><input type="text" id="dvi-new-tech" class="input" value="Lead ASE Tech" /></div>
+              <div class="form-group"><label>Customer Concern / Service Summary</label><input type="text" id="dvi-new-summary" class="input" value="Full Digital Vehicle Inspection &amp; Diagnostics" /></div>
+            </div>
+            <div style="display:flex;gap:0.5rem;">
+              <button type="submit" class="btn btn-primary btn-sm">Create RO &amp; Open Bay DVI Workspace</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="toggleNewDviRoForm(false)">Cancel</button>
+            </div>
+          </form>
+
+          <!-- Active DVI RO Selector Strip -->
+          <div id="dvi-ro-selector-list" style="display:flex;gap:0.55rem;overflow-x:auto;padding-bottom:0.5rem;margin-bottom:0.85rem;"></div>
+
+          <!-- Active DVI Inspection + Live Inventory Quote Workspace -->
+          <div id="dvi-active-workspace"></div>
+        </div>
+
         <div class="surface-card" style="margin-bottom:1.35rem;">
           <div class="section-head" style="margin-bottom:0.75rem;">
             <div>
@@ -1239,8 +1361,33 @@
         </div>
       </div>
 
-      <!-- STAFF TAB 5: UNIFIED CRM, INQUIRIES, RMA CLAIMS & SPECIALS BROADCASTER -->
+      <!-- STAFF TAB 5: UNIFIED CRM, VEHICLE PROFILES, DEFERRED FOLLOW-UPS, INQUIRIES, RMA CLAIMS & SPECIALS -->
       <div class="staff-section" id="staff-crm">
+        <!-- Unified Customer + Vehicle Profiles & 60/90-Day Deferred Work Follow-Up Center -->
+        <div class="grid-2" style="margin-bottom:1.35rem;">
+          <div class="surface-card" style="border-left:4px solid #2563eb;">
+            <div class="section-head" style="margin-bottom:0.65rem;">
+              <div>
+                <div class="eyebrow-label" style="color:#2563eb;">DEDUPLICATED CRM • VIN VEHICLE PROFILES • PORTAL MAGIC LINKS</div>
+                <h3 style="margin:0;">Unified Customer &amp; Vehicle Profiles</h3>
+              </div>
+              <input type="search" id="crm-unified-search" class="input" style="max-width:210px;" placeholder="Search name, phone, VIN..." oninput="loadUnifiedCrmProfiles(this.value)" />
+            </div>
+            <div id="crm-unified-profiles-list" style="display:flex;flex-direction:column;gap:0.65rem;max-height:380px;overflow-y:auto;"></div>
+          </div>
+
+          <div class="surface-card" style="border-left:4px solid #f59e0b;">
+            <div class="section-head" style="margin-bottom:0.65rem;">
+              <div>
+                <div class="eyebrow-label" style="color:#b45309;">AUTO-LOGGED DECLINED YELLOW/RED RECOMMENDATIONS</div>
+                <h3 style="margin:0;">60 / 90-Day Deferred Work Follow-Up Queue</h3>
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadUnifiedCrmProfiles()">↻ Refresh</button>
+            </div>
+            <div id="crm-deferred-followups-list" style="display:flex;flex-direction:column;gap:0.65rem;max-height:380px;overflow-y:auto;"></div>
+          </div>
+        </div>
+
         <div class="grid-2" style="margin-bottom:1.35rem;">
           <!-- Inquiries Inbox -->
           <div class="surface-card">
@@ -1696,6 +1843,7 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=14"></script>
+  <script src="/app.js?v=15"></script>
+  <script src="/dvi-portal.js?v=15"></script>
 </body>
 </html>

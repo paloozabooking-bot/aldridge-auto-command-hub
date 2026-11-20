@@ -269,12 +269,242 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_photo_review_status ON photo_review_items(review_status);
   CREATE INDEX IF NOT EXISTS idx_photo_review_folder ON photo_review_items(vehicle_folder);
+
+  CREATE TABLE IF NOT EXISTS crm_vehicles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL,
+    vin TEXT DEFAULT '',
+    year INTEGER DEFAULT 0,
+    make TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    trim TEXT DEFAULT '',
+    engine TEXT DEFAULT '',
+    license_plate TEXT DEFAULT '',
+    mileage INTEGER DEFAULT 0,
+    color TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_vehicles_customer ON crm_vehicles(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_crm_vehicles_vin ON crm_vehicles(vin);
+
+  CREATE TABLE IF NOT EXISTS dvi_inspections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dvi_number TEXT UNIQUE NOT NULL,
+    work_order_id INTEGER,
+    wo_number TEXT DEFAULT '',
+    customer_id INTEGER NOT NULL,
+    vehicle_id INTEGER,
+    technician_name TEXT DEFAULT 'Lead ASE Tech',
+    mileage_in INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'checked_in',
+    overall_severity TEXT NOT NULL DEFAULT 'green',
+    summary_notes TEXT DEFAULT '',
+    voice_raw_notes TEXT DEFAULT '',
+    voice_clean_notes TEXT DEFAULT '',
+    published_to_customer INTEGER NOT NULL DEFAULT 0,
+    published_by TEXT DEFAULT '',
+    published_at TEXT DEFAULT '',
+    share_token TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE,
+    FOREIGN KEY (vehicle_id) REFERENCES crm_vehicles(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_dvi_customer ON dvi_inspections(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_dvi_status ON dvi_inspections(status);
+
+  CREATE TABLE IF NOT EXISTS dvi_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dvi_id INTEGER NOT NULL,
+    category TEXT NOT NULL DEFAULT 'General Inspection',
+    component_name TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'green',
+    tech_notes TEXT DEFAULT '',
+    customer_notes TEXT DEFAULT '',
+    ai_findings_json TEXT DEFAULT '{}',
+    media_json TEXT DEFAULT '[]',
+    reference_healthy_caption TEXT DEFAULT 'Factory-spec healthy component with zero leaks, cracks, or excessive wear.',
+    recommended_part_query TEXT DEFAULT '',
+    suggested_labor_hours REAL DEFAULT 0,
+    reviewed_by_tech INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (dvi_id) REFERENCES dvi_inspections(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_dvi_items_dvi ON dvi_items(dvi_id);
+
+  CREATE TABLE IF NOT EXISTS service_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_number TEXT UNIQUE NOT NULL,
+    dvi_id INTEGER,
+    work_order_id INTEGER,
+    customer_id INTEGER NOT NULL,
+    vehicle_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'draft',
+    office_reviewed_by TEXT DEFAULT '',
+    office_reviewed_at TEXT DEFAULT '',
+    labor_rate REAL NOT NULL DEFAULT 135.00,
+    shop_supply_fee_rate REAL NOT NULL DEFAULT 0.07,
+    shop_supply_fee REAL NOT NULL DEFAULT 0,
+    tax_rate REAL NOT NULL DEFAULT 0.101,
+    parts_subtotal REAL NOT NULL DEFAULT 0,
+    labor_subtotal REAL NOT NULL DEFAULT 0,
+    tax_amount REAL NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    deposit_required REAL NOT NULL DEFAULT 0,
+    deposit_paid REAL NOT NULL DEFAULT 0,
+    amount_paid REAL NOT NULL DEFAULT 0,
+    balance_due REAL NOT NULL DEFAULT 0,
+    invoice_number TEXT DEFAULT '',
+    invoiced_at TEXT DEFAULT '',
+    customer_signature TEXT DEFAULT '',
+    approved_at TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (dvi_id) REFERENCES dvi_inspections(id) ON DELETE SET NULL,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE,
+    FOREIGN KEY (vehicle_id) REFERENCES crm_vehicles(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_service_quotes_customer ON service_quotes(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_service_quotes_dvi ON service_quotes(dvi_id);
+
+  CREATE TABLE IF NOT EXISTS quote_line_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER NOT NULL,
+    dvi_item_id INTEGER,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    severity TEXT NOT NULL DEFAULT 'yellow',
+    selected_option TEXT NOT NULL DEFAULT 'option_a_used_oem',
+    matched_inventory_sku TEXT DEFAULT '',
+    matched_inventory_title TEXT DEFAULT '',
+    matched_inventory_bin TEXT DEFAULT '',
+    matched_inventory_photo TEXT DEFAULT '',
+    option_a_part_price REAL NOT NULL DEFAULT 0,
+    option_b_part_price REAL NOT NULL DEFAULT 0,
+    part_price REAL NOT NULL DEFAULT 0,
+    labor_hours REAL NOT NULL DEFAULT 1.0,
+    labor_rate REAL NOT NULL DEFAULT 135.00,
+    labor_total REAL NOT NULL DEFAULT 135.00,
+    line_subtotal REAL NOT NULL DEFAULT 135.00,
+    customer_decision TEXT NOT NULL DEFAULT 'pending',
+    decided_at TEXT DEFAULT '',
+    inventory_locked INTEGER NOT NULL DEFAULT 0,
+    inventory_locked_at TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (quote_id) REFERENCES service_quotes(id) ON DELETE CASCADE,
+    FOREIGN KEY (dvi_item_id) REFERENCES dvi_items(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_quote_lines_quote ON quote_line_items(quote_id);
+  CREATE INDEX IF NOT EXISTS idx_quote_lines_sku ON quote_line_items(matched_inventory_sku);
+
+  CREATE TABLE IF NOT EXISTS deferred_work_followups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL,
+    vehicle_id INTEGER,
+    dvi_id INTEGER,
+    quote_id INTEGER,
+    quote_line_item_id INTEGER,
+    title TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'yellow',
+    estimated_total REAL NOT NULL DEFAULT 0,
+    declined_at TEXT NOT NULL,
+    followup_60d_date TEXT NOT NULL,
+    followup_90d_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_deferred_customer ON deferred_work_followups(customer_id);
+
+  CREATE TABLE IF NOT EXISTS portal_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payment_reference TEXT UNIQUE NOT NULL,
+    quote_id INTEGER NOT NULL,
+    work_order_id INTEGER,
+    customer_id INTEGER NOT NULL,
+    payment_type TEXT NOT NULL DEFAULT 'deposit',
+    amount REAL NOT NULL DEFAULT 0,
+    method TEXT NOT NULL DEFAULT 'card_online',
+    status TEXT NOT NULL DEFAULT 'paid',
+    receipt_notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (quote_id) REFERENCES service_quotes(id) ON DELETE CASCADE,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_portal_payments_quote ON portal_payments(quote_id);
+
+  CREATE TABLE IF NOT EXISTS customer_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL,
+    dvi_id INTEGER,
+    quote_id INTEGER,
+    channel TEXT NOT NULL DEFAULT 'sms',
+    event_type TEXT NOT NULL,
+    recipient TEXT DEFAULT '',
+    subject TEXT DEFAULT '',
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'logged',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_cust_notif_customer ON customer_notifications(customer_id);
 `);
+
+function ensureColumnExists(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+}
+
+function normalizePhoneDigits(rawPhone) {
+  const digits = String(rawPhone || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) return digits.slice(1);
+  return digits;
+}
+
+// Safe additive column migrations for existing CRM & Work Orders tables
+ensureColumnExists('crm_customers', 'phone_normalized', "TEXT DEFAULT ''");
+ensureColumnExists('crm_customers', 'password_hash', "TEXT DEFAULT ''");
+ensureColumnExists('crm_customers', 'portal_magic_token', "TEXT DEFAULT ''");
+ensureColumnExists('crm_customers', 'portal_magic_expires_at', "TEXT DEFAULT ''");
+ensureColumnExists('crm_customers', 'updated_at', "TEXT DEFAULT ''");
+ensureColumnExists('work_orders', 'customer_id', 'INTEGER');
+ensureColumnExists('work_orders', 'vehicle_id', 'INTEGER');
+ensureColumnExists('work_orders', 'dvi_id', 'INTEGER');
+ensureColumnExists('work_orders', 'quote_id', 'INTEGER');
+ensureColumnExists('work_orders', 'invoice_number', "TEXT DEFAULT ''");
+ensureColumnExists('work_orders', 'portal_status', "TEXT DEFAULT 'checked_in'");
+ensureColumnExists('work_orders', 'office_approved_by', "TEXT DEFAULT ''");
+ensureColumnExists('work_orders', 'shop_supply_fee', 'REAL DEFAULT 0');
+ensureColumnExists('work_orders', 'tax_amount', 'REAL DEFAULT 0');
+ensureColumnExists('work_orders', 'deposit_paid', 'REAL DEFAULT 0');
+ensureColumnExists('work_orders', 'amount_paid', 'REAL DEFAULT 0');
+
+// Backfill phone_normalized for existing CRM customers to prevent future duplicates
+(() => {
+  const rows = db.prepare("SELECT id, phone, phone_normalized FROM crm_customers WHERE phone != '' AND (phone_normalized IS NULL OR phone_normalized = '')").all();
+  if (rows.length > 0) {
+    const stmt = db.prepare('UPDATE crm_customers SET phone_normalized = ? WHERE id = ?');
+    for (const r of rows) {
+      stmt.run(normalizePhoneDigits(r.phone), r.id);
+    }
+  }
+})();
 
 const DEFAULT_SETTINGS = {
   business_name: "Aldridge Auto's",
   google_listing_name: "Aldridge Auto's Service & Repair",
   owner_name: 'Chris Aldridge',
+  office_manager_name: 'Maria',
   google_rating_badge: '5.0 ★ (87 Google Reviews) • #1 Rated in University Place, WA',
   tagline: '5.0★ Auto Repair & Diagnostics • Tested OEM Parts • U-Haul Neighborhood Dealer #046117',
   phone: '(253) 245-4206',
@@ -292,6 +522,11 @@ const DEFAULT_SETTINGS = {
   logo_url: '/assets/aldridge-crest.jpg?v=11',
   theme_preset: 'pnw_navy_orange',
   labor_rate_hourly: 135.00,
+  shop_supply_fee_rate: 0.07,
+  shop_supply_fee_cap: 45.00,
+  parts_markup_used_oem: 1.00,
+  parts_markup_aftermarket: 1.35,
+  deposit_percent_default: 0.50,
   handling_fee_default: 10.00,
   handling_days_default: 3,
   freight_weight_threshold_lbs: 70,
@@ -636,14 +871,21 @@ function computeShippingClass(weightLbs, category = '', lengthIn = 14, widthIn =
   return 'parcel_calculated';
 }
 
-function upsertCustomer({ name, email = '', phone = '', source_pillar = 'website', tags = [], vehicles = [], email_opt_in = 0, sms_opt_in = 0, referred_by = '' }) {
+function upsertCustomer({ name, email = '', phone = '', source_pillar = 'website', tags = [], vehicles = [], email_opt_in = 0, sms_opt_in = 0, referred_by = '', notes = '' }) {
   const now = new Date().toISOString();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanPhone = String(phone || '').trim();
+  const phoneNorm = normalizePhoneDigits(cleanPhone);
+
   let existing = null;
-  if (email) {
-    existing = db.prepare('SELECT * FROM crm_customers WHERE LOWER(email) = LOWER(?)').get(email);
+  if (cleanEmail) {
+    existing = db.prepare('SELECT * FROM crm_customers WHERE LOWER(TRIM(email)) = ?').get(cleanEmail);
   }
-  if (!existing && phone) {
-    existing = db.prepare('SELECT * FROM crm_customers WHERE phone = ?').get(phone);
+  if (!existing && phoneNorm && phoneNorm.length >= 7) {
+    existing = db.prepare('SELECT * FROM crm_customers WHERE phone_normalized = ?').get(phoneNorm);
+  }
+  if (!existing && cleanPhone) {
+    existing = db.prepare('SELECT * FROM crm_customers WHERE TRIM(phone) = ?').get(cleanPhone);
   }
 
   if (existing) {
@@ -652,27 +894,36 @@ function upsertCustomer({ name, email = '', phone = '', source_pillar = 'website
     const nextEmailOpt = email_opt_in ? 1 : existing.email_opt_in;
     const nextSmsOpt = sms_opt_in ? 1 : existing.sms_opt_in;
     const smsTs = sms_opt_in && !existing.sms_consent_timestamp ? now : existing.sms_consent_timestamp;
+    const nextNotes = notes
+      ? (existing.notes && !existing.notes.includes(notes) ? `${existing.notes}\n${notes}` : (existing.notes || notes))
+      : existing.notes;
     db.prepare(`
       UPDATE crm_customers
       SET name = COALESCE(NULLIF(?, ''), name),
           email = COALESCE(NULLIF(?, ''), email),
           phone = COALESCE(NULLIF(?, ''), phone),
+          phone_normalized = COALESCE(NULLIF(?, ''), phone_normalized),
           tags_json = ?,
           vehicles_json = ?,
           email_opt_in = ?,
           sms_opt_in = ?,
           sms_consent_timestamp = ?,
-          visit_count = visit_count + 1
+          notes = ?,
+          visit_count = visit_count + 1,
+          updated_at = ?
       WHERE id = ?
     `).run(
-      name,
-      email,
-      phone,
+      String(name || '').trim(),
+      cleanEmail,
+      cleanPhone,
+      phoneNorm,
       JSON.stringify(mergedTags),
       JSON.stringify(mergedVehicles),
       nextEmailOpt,
       nextSmsOpt,
       smsTs,
+      nextNotes || '',
+      now,
       existing.id
     );
     return db.prepare('SELECT * FROM crm_customers WHERE id = ?').get(existing.id);
@@ -681,13 +932,14 @@ function upsertCustomer({ name, email = '', phone = '', source_pillar = 'website
   const refCode = generateReferralCode(name);
   const res = db.prepare(`
     INSERT INTO crm_customers (
-      name, email, phone, source_pillar, tags_json, vehicles_json,
-      email_opt_in, sms_opt_in, sms_consent_timestamp, referral_code, referred_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      name, email, phone, phone_normalized, source_pillar, tags_json, vehicles_json,
+      email_opt_in, sms_opt_in, sms_consent_timestamp, referral_code, referred_by, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    name || 'Shop Guest',
-    email,
-    phone,
+    String(name || '').trim() || 'Shop Guest',
+    cleanEmail,
+    cleanPhone,
+    phoneNorm,
     source_pillar,
     JSON.stringify(tags),
     JSON.stringify(vehicles.filter(Boolean)),
@@ -696,6 +948,8 @@ function upsertCustomer({ name, email = '', phone = '', source_pillar = 'website
     sms_opt_in ? now : '',
     refCode,
     referred_by || '',
+    notes || '',
+    now,
     now
   );
   return db.prepare('SELECT * FROM crm_customers WHERE id = ?').get(res.lastInsertRowid);
@@ -1646,6 +1900,7 @@ module.exports = {
   computeShippingClass,
   validateVinStrict,
   validatePartCompliance,
+  normalizePhoneDigits,
   upsertCustomer,
   logSync,
   ensureCleanSlateBaseline,

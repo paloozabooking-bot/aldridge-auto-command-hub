@@ -70,6 +70,36 @@ const {
   generatePrintablePackingSlipHtml
 } = require('./qr-card');
 const { resolvePartTaxonomyAndMetafields } = require('./taxonomy');
+const {
+  DVI_MEDIA_DIR,
+  STAFF_ROLES,
+  resolveStaffRole,
+  assertRolePermission,
+  verifyPortalSessionToken,
+  upsertCustomerVehicle,
+  getCrmCustomerDetail,
+  listUnifiedCrmProfiles,
+  findMatchingInventoryParts,
+  lockInventorySkuAtomically,
+  saveDviMediaDataUrl,
+  analyzeDviMediaWithGemini,
+  cleanupVoiceNotesWithGemini,
+  recomputeDviOverallSeverity,
+  hydrateDvi,
+  recalculateQuoteTotals,
+  hydrateQuote,
+  createDviInspectionWithRo,
+  addQuoteLineItem,
+  submitCustomerLineDecision,
+  updateDviRepairStatus,
+  publishDviAndSendQuote,
+  convertQuoteToRoAndInvoice,
+  recordPortalPayment,
+  issueCustomerMagicLink,
+  authenticateCustomerPortal,
+  getCustomerPortalDashboard,
+  renderInvoiceHtml
+} = require('./dvi-crm-engine');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -177,8 +207,12 @@ const MIME_TYPES = {
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
+  '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime'
 };
 
 function sendJson(res, status, data, extraHeaders = {}) {
@@ -191,14 +225,14 @@ function sendJson(res, status, data, extraHeaders = {}) {
   res.end(body);
 }
 
-function readRawBody(req, maxBytes = 16 * 1024 * 1024) {
+function readRawBody(req, maxBytes = 24 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > maxBytes) {
-        reject(new Error('Payload exceeds maximum size limit (16MB).'));
+        reject(new Error('Payload exceeds maximum size limit (24MB).'));
         req.destroy();
         return;
       }
@@ -1400,22 +1434,15 @@ const server = http.createServer(async (req, res) => {
         now
       );
 
-      // Atomically decrement/reserve inventory across Co-Master & all feeds!
+      // Atomically decrement/reserve inventory across Co-Master, Shopify & all feeds!
       for (const line of hydratedOrderItems) {
-        const dbItem = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(line.sku);
-        const nextQty = Math.max(0, dbItem.quantity - line.qty);
-        const nextStatus = nextQty === 0 ? (mode === 'ship_calculated' ? 'sold' : 'reserved') : 'active';
-        db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, updated_at = ? WHERE id = ?').run(
-          nextQty, nextStatus, now, dbItem.id
-        );
-        logSync(
-          'outbound',
-          'all_channels',
-          'order_auto_zero_out',
-          line.sku,
-          'success',
-          `Order ${orderNumber} (${mode}) set ${line.sku} qty=${nextQty} (${nextStatus}). Synced to Shopify/Google/Meta/eBay feeds.`
-        );
+        const lockRes = await lockInventorySkuAtomically(line.sku, {
+          reason: `direct_storefront_${mode}`,
+          reference: orderNumber
+        });
+        if (!lockRes.locked) {
+          return sendJson(res, 409, { error: `Part ${line.sku} was just reserved or sold (${lockRes.reason}). Please refresh your bag.` });
+        }
       }
 
       db.prepare('UPDATE crm_customers SET total_spent = total_spent + ? WHERE id = ?').run(total, customer.id);
@@ -1554,54 +1581,495 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Internal Shop Work Orders (Pulling Stocked SKU Auto-Delists Everywhere!)
+    // Internal Shop Work Orders (Pulling Stocked SKU Atomically Auto-Delists Everywhere!)
     if (method === 'POST' && pathname === '/api/work-orders') {
       const b = JSON.parse((await readRawBody(req)) || '{}');
       const settings = getSettings();
       const now = new Date().toISOString();
       const woNumber = 'WO-' + Math.floor(10000 + Math.random() * 89999);
       const laborHours = Number(b.labor_hours || 1.5);
-      const laborRate = Number(settings.labor_rate_hourly || 125);
+      const laborRate = Number(settings.labor_rate_hourly || 135);
       let partsTotal = 0;
       const partsUsed = [];
 
       if (b.pull_sku) {
-        const item = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(b.pull_sku);
-        if (!item || item.quantity <= 0) {
-          return sendJson(res, 400, { error: `SKU ${b.pull_sku} has 0 available quantity in shop inventory.` });
+        const itemBefore = db.prepare('SELECT * FROM inventory_items WHERE UPPER(sku) = UPPER(?)').get(b.pull_sku);
+        const lockRes = await lockInventorySkuAtomically(b.pull_sku, {
+          reason: 'shop_work_order_pull',
+          reference: woNumber
+        });
+        if (!lockRes.locked) {
+          return sendJson(res, 409, { error: `SKU ${b.pull_sku} has 0 available quantity in shop inventory (${lockRes.reason}).` });
         }
-        const nextQty = Math.max(0, item.quantity - 1);
-        const nextStatus = nextQty === 0 ? 'shop_used' : 'active';
-        db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, updated_at = ? WHERE id = ?').run(
-          nextQty, nextStatus, now, item.id
-        );
-        partsTotal += Number(item.price_we_pull || 0);
-        partsUsed.push({ sku: item.sku, title: item.title, price: item.price_we_pull, bin: item.bin_location });
-        logSync(
-          'outbound',
-          'all_channels',
-          'shop_work_order_pull',
-          item.sku,
-          'success',
-          `Work Order ${woNumber} pulled ${item.sku} from ${item.bin_location} for internal repair bay. Automatically zeroed/updated across Shopify, eBay Motors, Google, Meta & Crosslist.`
-        );
+        partsTotal += Number(itemBefore?.price_we_pull || 0);
+        partsUsed.push({ sku: lockRes.sku, title: itemBefore?.title || lockRes.sku, price: itemBefore?.price_we_pull || 0, bin: itemBefore?.bin_location || '' });
       }
 
-      const totalEstimate = Number((laborHours * laborRate + partsTotal).toFixed(2));
+      const laborSub = Number((laborHours * laborRate).toFixed(2));
+      const supplyFee = laborSub > 0 ? Number(Math.min(Number(settings.shop_supply_fee_cap ?? 45), laborSub * Number(settings.shop_supply_fee_rate ?? 0.07)).toFixed(2)) : 0;
+      const taxAmount = Number(((laborSub + partsTotal + supplyFee) * Number(settings.tax_rate ?? 0.101)).toFixed(2));
+      const totalEstimate = Number((laborSub + partsTotal + supplyFee + taxAmount).toFixed(2));
       const r = db.prepare(`
         INSERT INTO work_orders (
           wo_number, booking_code, customer_name, customer_phone, vehicle_ymm, vehicle_vin,
-          service_summary, parts_used_json, labor_hours, labor_rate, parts_total, total_estimate,
-          status, technician, notes, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?)
+          service_summary, parts_used_json, labor_hours, labor_rate, parts_total, shop_supply_fee,
+          tax_amount, total_estimate, status, portal_status, technician, notes, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_repair', 'in_repair', ?, ?, ?)
       `).run(
         woNumber, b.booking_code || '', b.customer_name || 'Walk-In Repair Customer',
         b.customer_phone || '', b.vehicle_ymm || 'Customer Vehicle', (b.vehicle_vin || '').toUpperCase(),
         b.service_summary || 'Shop Repair & Part Installation', JSON.stringify(partsUsed),
-        laborHours, laborRate, partsTotal, totalEstimate, b.technician || 'Lead ASE Tech', b.notes || '', now
+        laborHours, laborRate, partsTotal, supplyFee, taxAmount, totalEstimate, b.technician || 'Lead ASE Tech', b.notes || '', now
       );
 
       sendJson(res, 201, db.prepare('SELECT * FROM work_orders WHERE id = ?').get(r.lastInsertRowid));
+      return;
+    }
+
+    /* ==================== INTEGRATED DVI, UNIFIED CRM, QUOTING & CUSTOMER PORTAL ==================== */
+    const reqStaffRole = resolveStaffRole(req.headers['x-staff-role'] || urlObj.searchParams.get('role') || 'owner');
+
+    // 1. DVI Inspections List & Create (Linked RO + CRM Customer + Vehicle + Quote)
+    if (pathname === '/api/dvi/inspections') {
+      if (method === 'GET') {
+        const rows = db.prepare('SELECT id FROM dvi_inspections ORDER BY id DESC LIMIT 60').all();
+        const list = rows.map((r) => hydrateDvi(r.id)).filter(Boolean);
+        sendJson(res, 200, { ok: true, roles: STAFF_ROLES, inspections: list });
+        return;
+      }
+      if (method === 'POST') {
+        assertRolePermission(reqStaffRole, 'can_capture_dvi');
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const created = createDviInspectionWithRo(b);
+        sendJson(res, 201, { ok: true, inspection: created });
+        return;
+      }
+    }
+
+    const dviDetailMatch = pathname.match(/^\/api\/dvi\/inspections\/(\d+)$/);
+    if (method === 'GET' && dviDetailMatch) {
+      const dvi = hydrateDvi(Number(dviDetailMatch[1]));
+      if (!dvi) return sendJson(res, 404, { error: 'DVI inspection not found' });
+      sendJson(res, 200, { ok: true, inspection: dvi });
+      return;
+    }
+
+    // 2. Capture DVI Photo/Video + Gemini Vision AI Draft Analysis (Always requires Tech Review before publish!)
+    const dviItemsMatch = pathname.match(/^\/api\/dvi\/inspections\/(\d+)\/items$/);
+    if (method === 'POST' && dviItemsMatch) {
+      assertRolePermission(reqStaffRole, 'can_capture_dvi');
+      const dviId = Number(dviItemsMatch[1]);
+      const dvi = hydrateDvi(dviId);
+      if (!dvi) return sendJson(res, 404, { error: 'DVI inspection not found' });
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const now = new Date().toISOString();
+
+      const savedMedia = [];
+      const mediaInputs = Array.isArray(b.media_list) && b.media_list.length
+        ? b.media_list
+        : (b.media_data_url ? [{ data_url: b.media_data_url, caption: b.caption || '' }] : []);
+
+      let firstDataUrlForAi = '';
+      for (const mItem of mediaInputs) {
+        const rawUrl = typeof mItem === 'string' ? mItem : mItem.data_url;
+        if (!rawUrl) continue;
+        if (!firstDataUrlForAi && rawUrl.startsWith('data:')) firstDataUrlForAi = rawUrl;
+        const saved = saveDviMediaDataUrl(dvi.dvi_number, rawUrl, b.component_name || 'bay');
+        if (saved) {
+          savedMedia.push({
+            url: saved.url,
+            media_type: saved.media_type,
+            caption: (typeof mItem === 'object' && mItem.caption) ? mItem.caption : (b.component_name || 'Inspection capture'),
+            captured_at: now
+          });
+        }
+      }
+
+      let aiDraft = null;
+      if (b.run_ai !== false) {
+        aiDraft = await analyzeDviMediaWithGemini({
+          dataUrl: firstDataUrlForAi,
+          componentHint: b.component_name || '',
+          techNotes: b.tech_notes || '',
+          vehicle: dvi.vehicle || {}
+        });
+      }
+
+      const componentName = String(b.component_name || aiDraft?.component_name || 'Inspection Point').trim();
+      const category = String(b.category || aiDraft?.category || 'General Inspection').trim();
+      const severity = ['green', 'yellow', 'red'].includes(String(b.severity || '').toLowerCase())
+        ? String(b.severity).toLowerCase()
+        : (aiDraft?.severity || 'yellow');
+      const techNotes = String(b.tech_notes || aiDraft?.tech_notes || '').trim();
+      const customerNotes = String(b.customer_notes || aiDraft?.customer_notes || '').trim();
+      const healthyCaption = String(b.reference_healthy_caption || aiDraft?.reference_healthy_caption || 'Factory-spec healthy component with zero leaks, cracks, or excessive wear.').trim();
+      const partQuery = String(b.recommended_part_query || aiDraft?.suggested_part_query || componentName).trim();
+      const laborHours = Number(b.suggested_labor_hours ?? aiDraft?.suggested_labor_hours ?? (severity === 'green' ? 0 : 1.0));
+      // AI-generated drafts always default to reviewed_by_tech = 0 unless explicitly marked reviewed by tech/admin
+      const reviewed = b.reviewed_by_tech === true ? 1 : 0;
+
+      const ins = db.prepare(`
+        INSERT INTO dvi_items (
+          dvi_id, category, component_name, severity, tech_notes, customer_notes,
+          ai_findings_json, media_json, reference_healthy_caption, recommended_part_query,
+          suggested_labor_hours, reviewed_by_tech, sort_order, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        dviId, category, componentName, severity, techNotes, customerNotes,
+        JSON.stringify(aiDraft || {}), JSON.stringify(savedMedia), healthyCaption, partQuery,
+        laborHours, reviewed, dvi.items.length + 1, now, now
+      );
+
+      recomputeDviOverallSeverity(dviId);
+      if (dvi.status === 'checked_in') {
+        db.prepare("UPDATE dvi_inspections SET status = 'inspection_complete', updated_at = ? WHERE id = ?").run(now, dviId);
+      }
+
+      sendJson(res, 201, {
+        ok: true,
+        item_id: ins.lastInsertRowid,
+        ai_draft: aiDraft,
+        matched_inventory_parts: aiDraft?.matched_inventory_parts || findMatchingInventoryParts({
+          query: partQuery,
+          year: dvi.vehicle?.year,
+          make: dvi.vehicle?.make,
+          model: dvi.vehicle?.model,
+          oemPartNumber: aiDraft?.detected_oem_part_number || '',
+          limit: 5
+        }),
+        inspection: hydrateDvi(dviId)
+      });
+      return;
+    }
+
+    const dviItemPatchMatch = pathname.match(/^\/api\/dvi\/items\/(\d+)$/);
+    if ((method === 'PATCH' || method === 'PUT') && dviItemPatchMatch) {
+      assertRolePermission(reqStaffRole, 'can_capture_dvi');
+      const itemId = Number(dviItemPatchMatch[1]);
+      const existing = db.prepare('SELECT * FROM dvi_items WHERE id = ?').get(itemId);
+      if (!existing) return sendJson(res, 404, { error: 'DVI item not found' });
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const now = new Date().toISOString();
+
+      let mediaArr = JSON.parse(existing.media_json || '[]');
+      if (b.append_media_data_url) {
+        const dvi = db.prepare('SELECT dvi_number FROM dvi_inspections WHERE id = ?').get(existing.dvi_id);
+        const saved = saveDviMediaDataUrl(dvi?.dvi_number || 'DVI', b.append_media_data_url, existing.component_name);
+        if (saved) {
+          mediaArr.push({ url: saved.url, media_type: saved.media_type, caption: b.caption || existing.component_name, captured_at: now });
+        }
+      }
+
+      const nextSev = ['green', 'yellow', 'red'].includes(String(b.severity || '').toLowerCase())
+        ? String(b.severity).toLowerCase()
+        : existing.severity;
+
+      db.prepare(`
+        UPDATE dvi_items
+        SET component_name = COALESCE(?, component_name),
+            category = COALESCE(?, category),
+            severity = ?,
+            tech_notes = COALESCE(?, tech_notes),
+            customer_notes = COALESCE(?, customer_notes),
+            recommended_part_query = COALESCE(?, recommended_part_query),
+            suggested_labor_hours = COALESCE(?, suggested_labor_hours),
+            reviewed_by_tech = COALESCE(?, reviewed_by_tech),
+            media_json = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).run(
+        b.component_name ?? null,
+        b.category ?? null,
+        nextSev,
+        b.tech_notes ?? null,
+        b.customer_notes ?? null,
+        b.recommended_part_query ?? null,
+        b.suggested_labor_hours !== undefined ? Number(b.suggested_labor_hours) : null,
+        b.reviewed_by_tech !== undefined ? (b.reviewed_by_tech ? 1 : 0) : null,
+        JSON.stringify(mediaArr),
+        now,
+        itemId
+      );
+
+      recomputeDviOverallSeverity(existing.dvi_id);
+      sendJson(res, 200, { ok: true, inspection: hydrateDvi(existing.dvi_id) });
+      return;
+    }
+
+    // 3. Hands-Free Voice-to-Text Note Cleanup (Gemini)
+    if (method === 'POST' && pathname === '/api/dvi/voice-cleanup') {
+      assertRolePermission(reqStaffRole, 'can_capture_dvi');
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      let vehicle = b.vehicle || {};
+      if (b.dvi_id) {
+        const dvi = hydrateDvi(Number(b.dvi_id));
+        if (dvi?.vehicle) vehicle = dvi.vehicle;
+      }
+      const cleaned = await cleanupVoiceNotesWithGemini({
+        rawNotes: b.raw_notes || '',
+        componentName: b.component_name || '',
+        vehicle
+      });
+      if (b.dvi_id) {
+        db.prepare('UPDATE dvi_inspections SET voice_raw_notes = ?, voice_clean_notes = ?, updated_at = ? WHERE id = ?').run(
+          String(b.raw_notes || ''), cleaned.customer_notes, new Date().toISOString(), Number(b.dvi_id)
+        );
+      }
+      sendJson(res, 200, { ok: true, ...cleaned });
+      return;
+    }
+
+    // 4. Update Repair Status Tracker + Auto-Dispatch SMS/Email Alert
+    const dviStatusMatch = pathname.match(/^\/api\/dvi\/inspections\/(\d+)\/status$/);
+    if (method === 'POST' && dviStatusMatch) {
+      assertRolePermission(reqStaffRole, 'can_capture_dvi');
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const updated = await updateDviRepairStatus(Number(dviStatusMatch[1]), String(b.status || ''), {
+        updatedBy: b.updated_by || STAFF_ROLES[reqStaffRole]?.label || 'Staff'
+      });
+      sendJson(res, 200, { ok: true, inspection: updated });
+      return;
+    }
+
+    // 5. Publish Reviewed DVI & Send Quote + Customer Portal Magic Link (Owner/Admin or Maria ONLY)
+    const dviPublishMatch = pathname.match(/^\/api\/dvi\/inspections\/(\d+)\/publish$/);
+    if (method === 'POST' && dviPublishMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await publishDviAndSendQuote({
+        dviId: Number(dviPublishMatch[1]),
+        role: reqStaffRole,
+        reviewerName: b.reviewer_name || (reqStaffRole === 'office_manager' ? 'Maria' : 'Chris Aldridge')
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // 6. Live Parts-on-Hand Cross-Reference (inventory_items, non-QR photos ONLY, Option A vs Option B)
+    if (method === 'GET' && pathname === '/api/quotes/inventory-match') {
+      const matches = findMatchingInventoryParts({
+        query: urlObj.searchParams.get('q') || '',
+        year: Number(urlObj.searchParams.get('year') || 0),
+        make: urlObj.searchParams.get('make') || '',
+        model: urlObj.searchParams.get('model') || '',
+        oemPartNumber: urlObj.searchParams.get('mpn') || '',
+        limit: Number(urlObj.searchParams.get('limit') || 10)
+      });
+      sendJson(res, 200, { ok: true, count: matches.length, matches });
+      return;
+    }
+
+    // 7. Quote Line Items, Decisions (Atomic Inventory Lock), RO/Invoice Conversion & Payments
+    const quoteLinesMatch = pathname.match(/^\/api\/quotes\/(\d+)\/lines$/);
+    if (method === 'POST' && quoteLinesMatch) {
+      assertRolePermission(reqStaffRole, 'can_capture_dvi');
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = addQuoteLineItem(Number(quoteLinesMatch[1]), b);
+      sendJson(res, 201, { ok: true, ...result });
+      return;
+    }
+
+    const quoteLineDecMatch = pathname.match(/^\/api\/quotes\/(\d+)\/lines\/(\d+)\/decision$/);
+    if ((method === 'PATCH' || method === 'POST') && quoteLineDecMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await submitCustomerLineDecision({
+        quoteId: Number(quoteLineDecMatch[1]),
+        lineId: Number(quoteLineDecMatch[2]),
+        decision: b.decision,
+        selectedOption: b.selected_option || null,
+        actor: b.actor || STAFF_ROLES[reqStaffRole]?.label || 'Staff'
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const quoteConvertMatch = pathname.match(/^\/api\/quotes\/(\d+)\/convert$/);
+    if (method === 'POST' && quoteConvertMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await convertQuoteToRoAndInvoice({
+        quoteId: Number(quoteConvertMatch[1]),
+        role: reqStaffRole,
+        reviewerName: b.reviewer_name || (reqStaffRole === 'office_manager' ? 'Maria' : 'Chris Aldridge'),
+        finalizeInvoice: Boolean(b.finalize_invoice)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const quoteInvoiceMatch = pathname.match(/^\/api\/quotes\/(\d+)\/invoice$/);
+    if (method === 'GET' && quoteInvoiceMatch) {
+      const html = renderInvoiceHtml(Number(quoteInvoiceMatch[1]));
+      if (!html) return sendJson(res, 404, { error: 'Invoice not found' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(html);
+      return;
+    }
+
+    const quotePayMatch = pathname.match(/^\/api\/quotes\/(\d+)\/payments$/);
+    if (method === 'POST' && quotePayMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await recordPortalPayment({
+        quoteId: Number(quotePayMatch[1]),
+        amount: b.amount,
+        paymentType: b.payment_type || 'deposit',
+        method: b.method || 'shop_counter',
+        receiptNotes: b.receipt_notes || ''
+      });
+      sendJson(res, 201, result);
+      return;
+    }
+
+    // 8. Unified CRM Profiles, Vehicle Profiles & 60/90-Day Deferred Work Follow-Up Queue
+    if (pathname === '/api/crm/profiles') {
+      if (method === 'GET') {
+        const profiles = listUnifiedCrmProfiles(urlObj.searchParams.get('q') || '');
+        const deferredQueue = db.prepare(`
+          SELECT d.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email,
+                 v.year AS veh_year, v.make AS veh_make, v.model AS veh_model
+          FROM deferred_work_followups d
+          JOIN crm_customers c ON c.id = d.customer_id
+          LEFT JOIN crm_vehicles v ON v.id = d.vehicle_id
+          ORDER BY d.followup_60d_date ASC, d.id DESC
+          LIMIT 100
+        `).all();
+        sendJson(res, 200, { ok: true, count: profiles.length, profiles, deferred_followups: deferredQueue });
+        return;
+      }
+      if (method === 'POST') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const customer = upsertCustomer({
+          name: b.name || 'Shop Customer',
+          email: b.email || '',
+          phone: b.phone || '',
+          source_pillar: b.source_pillar || 'repair_crm',
+          tags: Array.isArray(b.tags) ? b.tags : ['crm-profile'],
+          email_opt_in: b.email_opt_in ? 1 : 0,
+          sms_opt_in: b.sms_opt_in ? 1 : 0,
+          notes: b.notes || ''
+        });
+        let vehicle = null;
+        if (b.vin || b.make || b.model) {
+          vehicle = upsertCustomerVehicle({
+            customer_id: customer.id,
+            vin: b.vin || '',
+            year: b.year || 0,
+            make: b.make || '',
+            model: b.model || '',
+            trim: b.trim || '',
+            engine: b.engine || '',
+            license_plate: b.license_plate || '',
+            mileage: b.mileage || 0
+          });
+        }
+        sendJson(res, 201, { ok: true, profile: getCrmCustomerDetail(customer.id), vehicle });
+        return;
+      }
+    }
+
+    const crmDetailMatch = pathname.match(/^\/api\/crm\/profiles\/(\d+)$/);
+    if (method === 'GET' && crmDetailMatch) {
+      const detail = getCrmCustomerDetail(Number(crmDetailMatch[1]));
+      if (!detail) return sendJson(res, 404, { error: 'Customer profile not found' });
+      sendJson(res, 200, { ok: true, ...detail });
+      return;
+    }
+
+    const crmVehMatch = pathname.match(/^\/api\/crm\/profiles\/(\d+)\/vehicles$/);
+    if (method === 'POST' && crmVehMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const vehicle = upsertCustomerVehicle({ customer_id: Number(crmVehMatch[1]), ...b });
+      sendJson(res, 201, { ok: true, vehicle });
+      return;
+    }
+
+    const crmDefMatch = pathname.match(/^\/api\/crm\/deferred\/(\d+)$/);
+    if (method === 'PATCH' && crmDefMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const nextStatus = ['scheduled', 'reminded_60d', 'reminded_90d', 'booked', 'dismissed'].includes(b.status) ? b.status : 'reminded_60d';
+      db.prepare('UPDATE deferred_work_followups SET status = ?, notes = COALESCE(?, notes) WHERE id = ?').run(
+        nextStatus, b.notes ?? null, Number(crmDefMatch[1])
+      );
+      sendJson(res, 200, { ok: true, followup: db.prepare('SELECT * FROM deferred_work_followups WHERE id = ?').get(Number(crmDefMatch[1])) });
+      return;
+    }
+
+    // 9. Customer Portal Authentication (Magic Link + Password) & Scoped Portal APIs
+    if (method === 'POST' && pathname === '/api/portal/auth/magic-link') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await issueCustomerMagicLink({
+        customerId: b.customer_id ? Number(b.customer_id) : null,
+        email: b.email || '',
+        phone: b.phone || '',
+        baseUrl
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/portal/auth/login') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const auth = authenticateCustomerPortal({
+        magicToken: b.magic_token || '',
+        email: b.email || '',
+        phone: b.phone || '',
+        password: b.password || '',
+        setPassword: Boolean(b.set_password),
+        name: b.name || ''
+      });
+      const dashboard = getCustomerPortalDashboard(auth.customer.id);
+      sendJson(res, 200, { ...auth, dashboard });
+      return;
+    }
+
+    function requirePortalSession() {
+      const headerTok = String(req.headers['x-portal-token'] || '').trim();
+      const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      const qTok = urlObj.searchParams.get('session_token') || '';
+      const session = verifyPortalSessionToken(headerTok || authHeader || qTok);
+      if (!session) {
+        const err = new Error('Customer Portal session required. Sign in via Magic Link or Password.');
+        err.statusCode = 401;
+        throw err;
+      }
+      return session;
+    }
+
+    if (method === 'GET' && pathname === '/api/portal/me') {
+      const session = requirePortalSession();
+      const dashboard = getCustomerPortalDashboard(session.cid);
+      if (!dashboard) return sendJson(res, 404, { error: 'Customer profile not found' });
+      sendJson(res, 200, { ok: true, ...dashboard });
+      return;
+    }
+
+    const portalDecMatch = pathname.match(/^\/api\/portal\/quotes\/(\d+)\/lines\/(\d+)\/decision$/);
+    if (method === 'POST' && portalDecMatch) {
+      const session = requirePortalSession();
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await submitCustomerLineDecision({
+        quoteId: Number(portalDecMatch[1]),
+        lineId: Number(portalDecMatch[2]),
+        decision: b.decision,
+        selectedOption: b.selected_option || null,
+        actor: 'customer_portal',
+        customerId: session.cid
+      });
+      sendJson(res, 200, { ...result, dashboard: getCustomerPortalDashboard(session.cid) });
+      return;
+    }
+
+    const portalPayMatch = pathname.match(/^\/api\/portal\/quotes\/(\d+)\/pay$/);
+    if (method === 'POST' && portalPayMatch) {
+      const session = requirePortalSession();
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await recordPortalPayment({
+        quoteId: Number(portalPayMatch[1]),
+        amount: b.amount,
+        paymentType: b.payment_type || 'deposit',
+        method: b.method || 'card_online',
+        customerId: session.cid,
+        receiptNotes: b.receipt_notes || 'Customer Portal Online Payment'
+      });
+      sendJson(res, 201, { ...result, dashboard: getCustomerPortalDashboard(session.cid) });
       return;
     }
 
@@ -2097,6 +2565,29 @@ const server = http.createServer(async (req, res) => {
         FROM photo_review_items WHERE photo_uid = ?
       `).get(uid);
       sendJson(res, 200, { ok: true, item: updated, summary: getPhotoReviewSummary() });
+      return;
+    }
+
+    // Uploaded DVI Inspection Media (/uploads/dvi/DVI-12345-....jpg|mp4|webm)
+    if ((method === 'GET' || method === 'HEAD') && pathname.startsWith('/uploads/dvi/')) {
+      const safeDviFile = path.basename(decodeURIComponent(pathname.replace('/uploads/dvi/', '')));
+      const dviFilePath = path.join(DVI_MEDIA_DIR, safeDviFile);
+      if (dviFilePath.startsWith(DVI_MEDIA_DIR) && fs.existsSync(dviFilePath) && fs.statSync(dviFilePath).isFile()) {
+        const ext = path.extname(dviFilePath).toLowerCase();
+        const stat = fs.statSync(dviFilePath);
+        res.writeHead(200, {
+          'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+          'Content-Length': stat.size,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        if (method === 'HEAD') {
+          res.end();
+        } else {
+          fs.createReadStream(dviFilePath).pipe(res);
+        }
+        return;
+      }
+      sendJson(res, 404, { error: 'DVI media file not found' });
       return;
     }
 
