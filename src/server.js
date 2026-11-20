@@ -41,6 +41,7 @@ const {
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
   resolveShopifyAccessToken,
+  ensureShopifyWebhooksRegistered,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook
@@ -1276,6 +1277,18 @@ const server = http.createServer(async (req, res) => {
       const topic = req.headers['x-shopify-topic'] || 'orders/create';
       const hmac = req.headers['x-shopify-hmac-sha256'] || '';
       const result = handleShopifyWebhook(topic, rawBody, hmac);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/shopify/webhooks/status') {
+      const result = await ensureShopifyWebhooksRegistered({ registerMissing: false, baseUrl: getSettings().canonical_domain || baseUrl });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/shopify/webhooks/register') {
+      const result = await ensureShopifyWebhooksRegistered({ registerMissing: true, baseUrl: getSettings().canonical_domain || baseUrl });
       sendJson(res, 200, result);
       return;
     }
@@ -2726,6 +2739,17 @@ async function autoSyncKeepItemsOnStartup() {
     console.log(
       `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Active SKUs=${result.total_active_inventory_skus} (created=${result.skus_created}, updated=${result.skus_updated}, merged_angles=${result.multi_angle_photos_merged}, compliance_blocked=${result.compliance_blocked.length}) | QR=${result.qr_cards_generated} | Shopify=${result.shopify_sync?.mode || 'staged'} (${result.shopify_sync?.synced_count ?? 0})`
     );
+
+    if (shopifyAuthReady) {
+      try {
+        const whRes = await ensureShopifyWebhooksRegistered({ registerMissing: true, baseUrl });
+        console.log(
+          `[Startup Shopify Webhooks] ${whRes.address} -> registered=${whRes.registered.length}/${whRes.required_topics.length} (created=${whRes.created.length}, already=${whRes.already_registered.length}, errors=${whRes.errors.length})`
+        );
+      } catch (whErr) {
+        console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
+      }
+    }
   } catch (err) {
     console.error('[Startup Auto-Sync Error]', err.message || err);
   }

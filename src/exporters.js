@@ -1122,7 +1122,7 @@ async function syncAllToShopifyCoMaster() {
   let activeAccessToken = auth.token;
   const existingHandles = new Set();
   const existingSkus = new Map();
-  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,variants`;
+  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,variants,images`;
   while (nextUrl) {
     let preResp = await fetch(nextUrl, {
       headers: { 'X-Shopify-Access-Token': activeAccessToken, 'Accept': 'application/json' },
@@ -1142,12 +1142,16 @@ async function syncAllToShopifyCoMaster() {
     const preData = await preResp.json();
     for (const p of preData.products || []) {
       existingHandles.add(String(p.handle || '').toLowerCase());
+      const cleanCdnImages = (p.images || [])
+        .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+        .map((img) => img.src);
       for (const v of p.variants || []) {
         if (v.sku) {
           existingSkus.set(String(v.sku).trim().toUpperCase(), {
             product_id: String(p.id || ''),
             variant_id: String(v.id || ''),
-            inventory_item_id: String(v.inventory_item_id || '')
+            inventory_item_id: String(v.inventory_item_id || ''),
+            clean_cdn_images: cleanCdnImages
           });
         }
       }
@@ -1167,18 +1171,24 @@ async function syncAllToShopifyCoMaster() {
       const skuUpper = String(item.sku || '').toUpperCase();
       const matchedExisting = existingSkus.get(skuUpper);
       if (existingHandles.has(handle) || matchedExisting) {
-        if (matchedExisting && !item.shopify_product_id) {
-          db.prepare(`
-            UPDATE inventory_items
-            SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, updated_at = ?
-            WHERE id = ?
-          `).run(
-            matchedExisting.product_id,
-            matchedExisting.variant_id,
-            matchedExisting.inventory_item_id,
-            new Date().toISOString(),
-            item.id
-          );
+        if (matchedExisting) {
+          const curPhotos = getValidPhotos(item);
+          const needsCdn = matchedExisting.clean_cdn_images?.length > 0 && !curPhotos.some((u) => /cdn\.shopify\.com/i.test(u));
+          if (!item.shopify_product_id || needsCdn) {
+            const nextPhotosJson = needsCdn ? JSON.stringify(matchedExisting.clean_cdn_images) : item.photos_json;
+            db.prepare(`
+              UPDATE inventory_items
+              SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, photos_json = ?, updated_at = ?
+              WHERE id = ?
+            `).run(
+              matchedExisting.product_id,
+              matchedExisting.variant_id,
+              matchedExisting.inventory_item_id,
+              nextPhotosJson,
+              new Date().toISOString(),
+              item.id
+            );
+          }
         }
         skippedProtected++;
         continue;
@@ -1713,6 +1723,137 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   return { pushed: false, queued_for_ebay: true, shopify_domain: domain };
 }
 
+const REQUIRED_SHOPIFY_WEBHOOK_TOPICS = [
+  'orders/create',
+  'orders/paid',
+  'products/update',
+  'inventory_levels/update'
+];
+
+async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl = '' } = {}) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings);
+  const targetOrigin = (baseUrl || settings.canonical_domain || 'https://aldridgeautosupply.com').replace(/\/+$/, '');
+  const webhookAddress = `${targetOrigin}/api/webhooks/shopify`;
+
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return {
+      ok: false,
+      mode: 'unconfigured',
+      auth_mode: auth.authMode,
+      address: webhookAddress,
+      required_topics: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
+      registered: [],
+      created: [],
+      missing: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
+      errors: []
+    };
+  }
+
+  let activeToken = auth.token;
+  const listUrl = `https://${auth.shopDomain}/admin/api/2025-01/webhooks.json?limit=250`;
+  let listResp = await fetch(listUrl, {
+    headers: { 'X-Shopify-Access-Token': activeToken, 'Accept': 'application/json' },
+    signal: AbortSignal.timeout(12000)
+  });
+  if (listResp.status === 401 && auth.authMode === 'client_credentials') {
+    const refreshed = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+    activeToken = refreshed.token;
+    listResp = await fetch(listUrl, {
+      headers: { 'X-Shopify-Access-Token': activeToken, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(12000)
+    });
+  }
+  if (!listResp.ok) {
+    const errBody = await listResp.text().catch(() => '');
+    throw new Error(`Shopify GET /webhooks.json failed (HTTP ${listResp.status}): ${errBody.slice(0, 180)}`);
+  }
+
+  const listData = await listResp.json();
+  const existingWebhooks = Array.isArray(listData.webhooks) ? listData.webhooks : [];
+  const existingByTopic = new Map();
+  for (const wh of existingWebhooks) {
+    const normAddr = String(wh.address || '').replace(/\/+$/, '').toLowerCase();
+    if (normAddr === webhookAddress.toLowerCase()) {
+      existingByTopic.set(String(wh.topic || '').toLowerCase(), wh);
+    }
+  }
+
+  const alreadyRegistered = [];
+  const created = [];
+  const errors = [];
+
+  for (const topic of REQUIRED_SHOPIFY_WEBHOOK_TOPICS) {
+    const found = existingByTopic.get(topic);
+    if (found) {
+      alreadyRegistered.push({ id: found.id, topic: found.topic, address: found.address, format: found.format });
+      continue;
+    }
+    if (!registerMissing) continue;
+
+    try {
+      const postResp = await fetch(`https://${auth.shopDomain}/admin/api/2025-01/webhooks.json`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': activeToken,
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          webhook: {
+            topic,
+            address: webhookAddress,
+            format: 'json'
+          }
+        }),
+        signal: AbortSignal.timeout(12000)
+      });
+      const postText = await postResp.text().catch(() => '');
+      let postData = {};
+      try { postData = JSON.parse(postText || '{}'); } catch (_) {}
+      if (!postResp.ok || !postData.webhook) {
+        errors.push({ topic, status: postResp.status, error: postData.errors || postText.slice(0, 200) });
+      } else {
+        created.push({
+          id: postData.webhook.id,
+          topic: postData.webhook.topic,
+          address: postData.webhook.address,
+          format: postData.webhook.format
+        });
+      }
+    } catch (err) {
+      errors.push({ topic, error: err.message });
+    }
+  }
+
+  const allRegistered = [...alreadyRegistered, ...created];
+  const registeredTopics = new Set(allRegistered.map((w) => String(w.topic).toLowerCase()));
+  const missing = REQUIRED_SHOPIFY_WEBHOOK_TOPICS.filter((t) => !registeredTopics.has(t));
+
+  logSync(
+    'outbound',
+    'shopify_webhooks',
+    registerMissing ? 'auto_register_webhooks' : 'check_webhooks',
+    'ALL',
+    errors.length === 0 && missing.length === 0 ? 'success' : 'partial',
+    `Shopify webhooks on ${auth.shopDomain} -> ${webhookAddress}: ${alreadyRegistered.length} already active, ${created.length} newly registered, ${missing.length} missing, ${errors.length} error(s).`
+  );
+
+  return {
+    ok: errors.length === 0 && missing.length === 0,
+    shop_domain: auth.shopDomain,
+    auth_mode: auth.authMode,
+    address: webhookAddress,
+    required_topics: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
+    already_registered: alreadyRegistered,
+    created,
+    registered: allRegistered,
+    missing,
+    errors,
+    total_store_webhooks: existingWebhooks.length + created.length
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -1732,6 +1873,7 @@ module.exports = {
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
   resolveShopifyAccessToken,
+  ensureShopifyWebhooksRegistered,
   syncAllToShopifyCoMaster,
   pushSingleItemToShopify,
   handleShopifyWebhook
