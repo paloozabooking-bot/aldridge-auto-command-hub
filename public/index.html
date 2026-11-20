@@ -39,8 +39,8 @@
   <link rel="apple-touch-icon" href="/assets/app-icon.jpg?v=11" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=19" />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css?v=20" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -214,44 +214,50 @@
     </div>
   </header>
 
+  <!-- Warm 5.0-Star Neighborhood Guarantee & 3-Tier Member Pricing Unlock Strip -->
+  <div id="member-club-banner" style="padding:0 1.25rem;"></div>
+
   <main class="container">
     <!-- ==================== CUSTOMER VIEW 1: OVERVIEW ==================== -->
     <section class="view-panel active" id="view-home">
       <div class="hero-split">
         <div class="hero-copy">
-          <div class="eyebrow-label">UNIVERSITY PLACE &amp; TACOMA, WA • FREE ENGINE LIGHT SCAN • $100 INSPECTIONS • FLEET, VETERAN &amp; FIRST RESPONDER DISCOUNTS</div>
-          <h1 id="hero-headline">Welcome to Aldridge Auto's — Where Customer Satisfaction Comes First</h1>
+          <div class="eyebrow-label">UNIVERSITY PLACE &amp; TACOMA, WA • 5.0★ (87 GOOGLE REVIEWS) • FREE ENGINE LIGHT SCAN • $100 INSPECTIONS</div>
+          <h1 id="hero-headline">Your Neighborhood 5.0★ Auto Shop &amp; Tested OEM Parts Counter</h1>
           <p class="hero-lead">
-            Serving University Place, South Tacoma, Lakewood &amp; Fife from <strong>5115 66th St W, Bldg B</strong>. Full-service 5.0★ auto repair, verified photographed Used OEM auto parts (<strong>1 Single Variant per Physical Part • Zero Double-Booking</strong>), <strong>Free Engine Light Scans</strong>, <strong>$100 Inspections</strong>, and Authorized <strong>U-Haul Dealer #046117</strong>.
+            Plain-English mechanics at <strong>5115 66th St W, Bldg B, University Place, WA 98467</strong>. Every OEM part on our menu is photographed right off our own shelf (<strong>1-of-1 Physical Stock • Zero Double-Booking</strong>) — carry it out today or pick our <strong>House Special Combo</strong> for certified <strong>$174.99/hr</strong> bay installation with warranty.
           </p>
           <div class="hero-cta-row">
-            <button type="button" class="btn btn-primary" onclick="switchCustomerView('view-parts')">Browse Photographed OEM Parts</button>
-            <button type="button" class="btn btn-dark" onclick="switchCustomerView('view-repair')">Book Auto Repair or Part Install</button>
-            <button type="button" class="btn btn-outline" onclick="switchCustomerView('view-uhaul')">U-Haul #046117 Rentals</button>
+            <button type="button" class="btn btn-primary" onclick="switchCustomerView('view-parts')">Browse Parts &amp; Bay Combos</button>
+            <button type="button" class="btn btn-dark" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')">🔓 Unlock 15%–25% Member Pricing</button>
+            <button type="button" class="btn btn-outline" onclick="switchCustomerView('view-repair')">Book 5.0★ Bay Repair</button>
           </div>
           <div class="pillar-strip">
             <div class="pillar-mini">
-              <strong>Verified Photo OEM Parts</strong>
-              <span>1-Variant Physical Stock • Ship Parcel, Free 98467 Pickup, or Optional Bay Install</span>
+              <strong>Carry-Out or House Special</strong>
+              <span>Every part shows Carry-Out price + Turnkey Installed Bay Combo at 5115 66th St W</span>
             </div>
             <div class="pillar-mini">
-              <strong>5.0★ Auto Repair</strong>
-              <span>Free Engine Light Scan • $100 Inspections • Fleet, Veteran &amp; First Responder Discounts</span>
+              <strong>Plain-English Guarantee</strong>
+              <span>5.0★ (87 Google Reviews) • Free Engine Light Scan • Fleet, Veteran &amp; First Responder Discounts</span>
             </div>
             <div class="pillar-mini">
               <strong>U-Haul Dealer #046117</strong>
-              <span>Limited-stock neighborhood franchise — 24/7 Truck Share® &amp; 24hr return via U-Haul.com</span>
+              <span>Neighborhood truck &amp; trailer dispatch — 24/7 Truck Share® &amp; 24hr return via U-Haul.com</span>
             </div>
           </div>
         </div>
         <div class="hero-media hero-media-brand">
           <img src="/assets/aldridge-shop-hero.jpg?v=11" alt="Chris Aldridge at Aldridge Auto's Service &amp; Repair — Full Service Auto Repair &amp; U-Haul Rentals (253) 245-4206" />
           <div class="hero-media-caption">
-            <span>5115 66th St W Bldg B • Official Storefront Synced w/ Shopify, eBay (aabcas), Google &amp; Social</span>
+            <span>5115 66th St W Bldg B • Live 5-Channel OEM Stock &amp; Certified Repair Bays</span>
             <span class="badge badge-ok" id="hero-stock-count">Live Stock</span>
           </div>
         </div>
       </div>
+
+      <!-- Shop Specials & High-Margin Tested Assemblies Hero Menu Board -->
+      <div id="home-chef-specials-menu"></div>
 
       <!-- Official Cross-Platform Verified Backlinks & Trust Bar -->
       <div class="verified-channels-bar" aria-label="Verified Aldridge Auto's Official Profiles and Marketplaces">
@@ -278,27 +284,28 @@
           <h2>Current Aldridge Auto's Parts &amp; Repair Specials</h2>
           <p>Redeem online or at Bldg B in University Place — share any offer with a friend in the 253 in one tap.</p>
         </div>
-        <button type="button" class="btn btn-outline btn-sm" onclick="switchCustomerView('view-support')">Join Text, Email &amp; Push VIP List</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="window.openMembershipModal && window.openMembershipModal('garage_club_basic')">Join Free Garage Club ($0/mo)</button>
       </div>
       <div class="grid-3" id="home-specials-grid" style="margin-bottom:2.2rem;"></div>
 
       <!-- Featured Synced Parts -->
       <div class="section-head">
         <div>
-          <h2>Featured Photographed On-Hand OEM Inventory</h2>
-          <p>Every part has real shop photos, 1 single variant (1 in stock), and estimated Certified Shop Installation pricing right on the listing.</p>
+          <h2>Fresh Off the Shelf — Carry-Out or House Special Installed</h2>
+          <p>Every part has real shop photos, 1-of-1 stock lock, transparent public retail pricing, and optional VIP/Shop wholesale tiers.</p>
         </div>
-        <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-parts')">View Full Parts Catalog</button>
+        <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-parts')">View Full Parts Menu</button>
       </div>
       <div class="parts-grid" id="home-featured-parts"></div>
     </section>
 
     <!-- ==================== CUSTOMER VIEW 2: OEM PARTS STOREFRONT ==================== -->
     <section class="view-panel" id="view-parts">
+      <div id="catalog-chef-specials-menu"></div>
       <div class="section-head">
         <div>
-          <h2>Verified Photographed OEM Auto Parts Catalog (Single-Variant • 1 in Stock)</h2>
-          <p>Calculated carrier shipping (+$10 protective crating &amp; 2–3 day test buffer), Free 98467 Counter Pickup, and Certified Shop Installation quotes in every description.</p>
+          <h2>Aldridge Auto's Tested OEM Parts Menu (1-of-1 Physical Stock)</h2>
+          <p>Pick <strong>Option A (Carry-Out / Shipped)</strong> or <strong>Option B (House Special Installed at 5115 66th St W • $174.99/hr)</strong> — unlock 15%–25% Member &amp; Shop Wholesale pricing in 10 seconds.</p>
         </div>
       </div>
 
@@ -782,6 +789,9 @@
         </div>
       </div>
 
+      <!-- Authenticated Staff Session & Color-Coded Status Legend -->
+      <div id="employee-session-status-bar"></div>
+
       <!-- KPI Strip -->
       <div class="grid-4" style="margin-bottom:1.25rem;" id="staff-kpi-strip"></div>
 
@@ -1083,6 +1093,7 @@
 
       <!-- STAFF TAB 2: INVENTORY, DONOR GARAGE, WORK ORDERS & BULK CSV IMPORT -->
       <div class="staff-section" id="staff-inventory">
+        <div id="staff-inventory-color-summary"></div>
         <!-- Clean-Slate Zero-Inventory Fresh Start Banner + Standard eBay US + Crosslist + Craigslist Auto-Fill -->
         <div class="surface-card" style="margin-bottom:1.25rem;border-left:4px solid var(--brand-amber);">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
@@ -1363,6 +1374,8 @@
 
       <!-- STAFF TAB 5: UNIFIED CRM, VEHICLE PROFILES, DEFERRED FOLLOW-UPS, INQUIRIES, RMA CLAIMS & SPECIALS -->
       <div class="staff-section" id="staff-crm">
+        <!-- Counter Member Lookup & Abandoned Cart 15m/24h Recovery Panel (Strictly Authenticated) -->
+        <div id="employee-crm-funnel-host"></div>
         <!-- Unified Customer + Vehicle Profiles & 60/90-Day Deferred Work Follow-Up Center -->
         <div class="grid-2" style="margin-bottom:1.35rem;">
           <div class="surface-card" style="border-left:4px solid #2563eb;">
@@ -1845,8 +1858,9 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=19"></script>
-  <script src="/dvi-portal.js?v=19"></script>
-  <script src="/wave1-studio.js?v=19"></script>
+  <script src="/app.js?v=20"></script>
+  <script src="/storefront-menu.js?v=20"></script>
+  <script src="/dvi-portal.js?v=20"></script>
+  <script src="/wave1-studio.js?v=20"></script>
 </body>
 </html>

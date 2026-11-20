@@ -64,6 +64,25 @@ const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
 const { enrichAllActiveInventoryInDb, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
+  MEMBERSHIP_TIERS,
+  verifyStaffCredentials,
+  issueEmployeeToken,
+  verifyEmployeeRequest,
+  buildEmployeeSessionCookie,
+  buildClearEmployeeCookie,
+  createMembershipSignupAndBilling,
+  lookupMemberPublic,
+  handleStripeWebhookEvent,
+  listAllMemberships,
+  updateMembershipTierByStaff,
+  lookupMemberForCounter,
+  upsertAbandonedCart,
+  markAbandonedCartRecovered,
+  listAbandonedCarts,
+  triggerAbandonedCartRecovery,
+  processDueAbandonedCartAlerts
+} = require('./memberships-funnel');
+const {
   decodeVin,
   analyzePartIntake,
   syncUhaulDealerPage,
@@ -650,7 +669,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v19',
+        sw_version: 'v20',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/intake/snap-and-publish',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
@@ -1558,6 +1577,170 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/catalog/integrity-audit') {
       sendJson(res, 200, auditCatalogIntegrity());
       return;
+    }
+
+    /* ==================== 3-TIER RECURRING MEMBERSHIPS & STRIPE BILLING ==================== */
+    if (method === 'GET' && pathname === '/api/memberships/tiers') {
+      const q = String(urlObj.searchParams.get('lookup') || '').trim();
+      const member = q ? lookupMemberPublic(q) : null;
+      sendJson(res, 200, {
+        ok: true,
+        tiers: Object.values(MEMBERSHIP_TIERS),
+        stripe_configured: Boolean(process.env.STRIPE_SECRET_KEY),
+        member
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/memberships/join') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const result = await createMembershipSignupAndBilling(b, {
+        baseUrl: getSettings().canonical_domain || baseUrl
+      });
+      sendJson(res, 201, result);
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/memberships/lookup') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const member = lookupMemberPublic(b.query || b.email || b.phone || b.member_code || '');
+      if (!member) {
+        sendJson(res, 404, { ok: false, error: 'No Garage Club / VIP / B2B membership found matching that email, phone, or member code.' });
+        return;
+      }
+      sendJson(res, 200, { ok: true, member });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/webhooks/stripe') {
+      const raw = await readRawBody(req);
+      const event = JSON.parse(raw || '{}');
+      const out = handleStripeWebhookEvent(event);
+      sendJson(res, 200, out);
+      return;
+    }
+
+    /* ==================== ABANDONED CART TRACKING & RECOVERY ==================== */
+    if (method === 'POST' && pathname === '/api/carts/track') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const tracked = upsertAbandonedCart(b);
+      sendJson(res, 200, tracked);
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/carts/recover') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const out = markAbandonedCartRecovered(b);
+      sendJson(res, 200, out);
+      return;
+    }
+
+    /* ==================== STRICT EMPLOYEE BACKEND AUTHENTICATION & /api/employee/* ==================== */
+    if (method === 'POST' && pathname === '/api/employee/auth/login') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const check = verifyStaffCredentials(b.pin || b.password || '', b.staff_name || '', b.role || 'Owner/Admin');
+      if (!check.ok) {
+        sendJson(res, 401, { ok: false, error: check.error });
+        return;
+      }
+      const token = issueEmployeeToken(check);
+      const isHttps = String(req.headers['x-forwarded-proto'] || '').includes('https');
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Set-Cookie': buildEmployeeSessionCookie(token, isHttps),
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify({
+        ok: true,
+        authenticated: true,
+        staff_name: check.staff_name,
+        role: check.role,
+        token
+      }));
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/employee/auth/status') {
+      const session = verifyEmployeeRequest(req);
+      sendJson(res, 200, {
+        ok: true,
+        authenticated: Boolean(session),
+        staff_name: session?.staff_name || '',
+        role: session?.role || ''
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/employee/auth/logout') {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Set-Cookie': buildClearEmployeeCookie(),
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify({ ok: true, authenticated: false }));
+      return;
+    }
+
+    // All remaining /api/employee/* endpoints strictly enforce verified employee authentication!
+    if (pathname.startsWith('/api/employee/')) {
+      const empSession = verifyEmployeeRequest(req);
+      if (!empSession) {
+        sendJson(res, 401, {
+          ok: false,
+          error: 'Employee authentication required. Sign in to Employee Backend with your Staff PIN/Password.'
+        });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/counter-lookup') {
+        const q = String(urlObj.searchParams.get('q') || '').trim();
+        sendJson(res, 200, { ...lookupMemberForCounter(q), staff_user: empSession.staff_name });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/memberships') {
+        sendJson(res, 200, { ok: true, ...listAllMemberships(), staff_user: empSession.staff_name });
+        return;
+      }
+
+      const empMemberMatch = pathname.match(/^\/api\/employee\/memberships\/(\d+)\/tier$/);
+      if (empMemberMatch && (method === 'POST' || method === 'PATCH')) {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const updated = updateMembershipTierByStaff(Number(empMemberMatch[1]), b);
+        if (!updated) return sendJson(res, 404, { ok: false, error: 'Membership not found' });
+        sendJson(res, 200, { ok: true, member: updated });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/abandoned-carts') {
+        processDueAbandonedCartAlerts();
+        sendJson(res, 200, { ok: true, ...listAbandonedCarts(), staff_user: empSession.staff_name });
+        return;
+      }
+
+      const empCartMatch = pathname.match(/^\/api\/employee\/abandoned-carts\/(\d+)\/trigger$/);
+      if (empCartMatch && method === 'POST') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const updated = triggerAbandonedCartRecovery(Number(empCartMatch[1]), b.action || 'alert_15m');
+        if (!updated) return sendJson(res, 404, { ok: false, error: 'Abandoned cart not found' });
+        sendJson(res, 200, { ok: true, cart: updated });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/inventory-status') {
+        const counts = db.prepare('SELECT status, COUNT(*) c FROM inventory_items GROUP BY status').all();
+        const map = {};
+        for (const r of counts) map[r.status] = Number(r.c || 0);
+        sendJson(res, 200, {
+          ok: true,
+          verified_and_live: map.active || 0,
+          needs_photo_title_check: map.pending_verification || 0,
+          quarantined_srs: map.compliance_blocked || 0,
+          sold: map.sold || 0,
+          staff_user: empSession.staff_name
+        });
+        return;
+      }
     }
 
     // U-Haul Official Dealer Page Sync
@@ -3017,7 +3200,7 @@ async function autoSyncKeepItemsOnStartup() {
 
     // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment sync across all live Shopify products
     const latestCfg = getSettings();
-    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v3;
+    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v4;
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
@@ -3028,7 +3211,7 @@ async function autoSyncKeepItemsOnStartup() {
         `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | errors=${(syncRes.errors || []).length}`
       );
       if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v3: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v4: new Date().toISOString() });
       }
     }
   } catch (err) {
@@ -3042,6 +3225,18 @@ if (require.main === module) {
     setImmediate(() => {
       autoSyncKeepItemsOnStartup();
     });
+    // Automated Abandoned Cart 15-min urgency & 24-hr $15-off Bay Combo worker
+    const cartTimer = setInterval(() => {
+      try {
+        const res = processDueAbandonedCartAlerts();
+        if (res.triggered15m || res.triggered24h) {
+          console.log(`[Abandoned Cart Worker] Dispatched 15m=${res.triggered15m}, 24h_combo=${res.triggered24h}`);
+        }
+      } catch (e) {
+        console.error('[Abandoned Cart Worker Error]', e.message);
+      }
+    }, 60000);
+    if (typeof cartTimer.unref === 'function') cartTimer.unref();
   });
 }
 

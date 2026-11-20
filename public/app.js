@@ -8,6 +8,7 @@ const state = {
   activePolicyKey: 'master_return_refund_policy',
   deferredInstallPrompt: null
 };
+window.state = state;
 
 function esc(str) {
   return String(str ?? '')

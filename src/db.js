@@ -545,6 +545,64 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_beta_prospects_stage ON saas_beta_prospects(onboarding_stage);
+
+  -- 3-Tier Recurring Memberships (Garage Club Basic $0, VIP Driver $19.99/mo, B2B Dealer Pro $79/mo)
+  CREATE TABLE IF NOT EXISTS memberships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    customer_id INTEGER,
+    member_code TEXT NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    phone_digits TEXT DEFAULT '',
+    sms_opt_in INTEGER NOT NULL DEFAULT 1,
+    vehicle_year TEXT DEFAULT '',
+    vehicle_make TEXT DEFAULT '',
+    vehicle_model TEXT DEFAULT '',
+    vehicle_vin TEXT DEFAULT '',
+    tier_key TEXT NOT NULL DEFAULT 'garage_club_basic',
+    monthly_price_usd REAL NOT NULL DEFAULT 0.00,
+    parts_discount_pct REAL NOT NULL DEFAULT 0.00,
+    labor_discount_pct REAL NOT NULL DEFAULT 10.00,
+    status TEXT NOT NULL DEFAULT 'active',
+    billing_mode TEXT NOT NULL DEFAULT 'free_account',
+    stripe_customer_id TEXT DEFAULT '',
+    stripe_subscription_id TEXT DEFAULT '',
+    stripe_checkout_session_id TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_memberships_email ON memberships(LOWER(email));
+  CREATE INDEX IF NOT EXISTS idx_memberships_phone ON memberships(phone_digits);
+  CREATE INDEX IF NOT EXISTS idx_memberships_vin ON memberships(UPPER(vehicle_vin));
+  CREATE INDEX IF NOT EXISTS idx_memberships_tier ON memberships(tier_key, status);
+
+  -- Abandoned Cart & Single-Variant Urgency Recovery Queue (15-min urgency + 24-hr Bay Combo offer)
+  CREATE TABLE IF NOT EXISTS abandoned_carts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    cart_token TEXT NOT NULL UNIQUE,
+    customer_name TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    phone_digits TEXT DEFAULT '',
+    push_subscription_json TEXT DEFAULT '',
+    items_json TEXT NOT NULL DEFAULT '[]',
+    subtotal_usd REAL NOT NULL DEFAULT 0.00,
+    fulfillment_mode TEXT DEFAULT 'ship_calculated',
+    status TEXT NOT NULL DEFAULT 'open',
+    alert_15m_due_at TEXT NOT NULL,
+    alert_15m_sent_at TEXT DEFAULT '',
+    combo_24h_due_at TEXT NOT NULL,
+    combo_24h_sent_at TEXT DEFAULT '',
+    recovery_notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_abandoned_carts_status ON abandoned_carts(status);
+  CREATE INDEX IF NOT EXISTS idx_abandoned_carts_due ON abandoned_carts(alert_15m_due_at, combo_24h_due_at);
 `);
 
 function ensureColumnExists(table, column, definition) {
