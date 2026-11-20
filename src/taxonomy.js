@@ -62,7 +62,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomySearch: 'Motor Vehicle Braking'
   },
   {
-    match: /\b(ecm|ecu|pcm|tcm|bcm|tpms|mpx|module|computer|fuse\s*box|junction|relay|wiring|harness|amplifier|amp|radio|stereo|infotainment|navigation|display\s*screen|camera|sensor|receiver)\b/i,
+    match: /\b(ecm|ecu|pcm|tcm|bcm|tpms|mpx|module|computer|fuse\s*box|junction|relay|wiring|harness|amplifier|amp|radio|stereo|infotainment|navigation|display\s*screen|camera|sensor|receiver|combination\s*switch|horns?)\b/i,
     partType: 'ECUs, Modules & Automotive Electronics',
     ebayUsCategoryId: '33596',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Starters, Alternators, ECUs & Wiring > ECUs & Computer Modules',
@@ -79,7 +79,7 @@ const TAXONOMY_RULES = [
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-12',
-    shopifyTaxonomySearch: 'Motor Vehicle Headlights'
+    shopifyTaxonomySearch: 'Motor Vehicle Lighting'
   },
   {
     match: /tail\s*light|taillight|tail\s*lamp|brake\s*light|third\s*brake/i,
@@ -89,7 +89,7 @@ const TAXONOMY_RULES = [
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-12',
-    shopifyTaxonomySearch: 'Motor Vehicle Tail & Brake Lights'
+    shopifyTaxonomySearch: 'Motor Vehicle Lighting'
   },
   {
     match: /door\s*shell|complete\s*door/i,
@@ -97,9 +97,9 @@ const TAXONOMY_RULES = [
     ebayUsCategoryId: '33642',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Doors & Door Skins',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Doors',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-9',
-    shopifyTaxonomySearch: 'Motor Vehicle Doors'
+    shopifyTaxonomySearch: 'Motor Vehicle Frame & Body Parts'
   },
   {
     match: /mirror/i,
@@ -152,7 +152,7 @@ const TAXONOMY_RULES = [
     shopifyTaxonomySearch: 'Motor Vehicle Wheel Systems'
   },
   {
-    match: /transmission|transfer\s*case|differential|axle|driveshaft|cv\s*joint|torque\s*converter/i,
+    match: /transmission|transfer\s*case|differential|axle|drive\s*shaft|driveshaft|cv\s*joint|torque\s*converter|clutch\s*slave/i,
     partType: 'Transmission & Drivetrain',
     ebayUsCategoryId: '171115',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Transmission & Drivetrain > Automatic Transmission',
@@ -160,6 +160,26 @@ const TAXONOMY_RULES = [
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Transmission & Drivetrain Parts',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-19',
     shopifyTaxonomySearch: 'Motor Vehicle Transmission & Drivetrain Parts'
+  },
+  {
+    match: /exhaust\s*heat\s*shield|heat\s*shield|muffler|exhaust\s*pipe|tailpipe/i,
+    partType: 'Exhaust & Heat Shields',
+    ebayUsCategoryId: '33630',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exhaust & Emission Systems > Heat Shields & Wraps',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Exhaust',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Exhaust',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-7',
+    shopifyTaxonomySearch: 'Motor Vehicle Exhaust'
+  },
+  {
+    match: /gas\s*tank|fuel\s*tank|fuel\s*gas\s*filler|fuel\s*filler|charcoal\s*canister/i,
+    partType: 'Fuel Systems & Tanks',
+    ebayUsCategoryId: '33556',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Air & Fuel Delivery > Fuel Tanks & Filler Necks',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Fuel Systems',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Fuel Systems',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-8',
+    shopifyTaxonomySearch: 'Motor Vehicle Fuel Systems'
   },
   {
     match: /air\s*intake|intake\s*box|air\s*cleaner|maf\b/i,
@@ -183,7 +203,7 @@ const TAXONOMY_RULES = [
   },
   // Seats -> Motor Vehicle Seating (vp-1-4-15)
   {
-    match: /\b(bucket\s*seat|front\s*seat|rear\s*seat|car\s*seats?|seat\s*backrest|seat\s*assembly|seat\s*cushion|bench\s*seat)\b/i,
+    match: /\b(bucket\s*seat|front\s*seat|rear\s*seat|car\s*seats?|seat\s*backrest|seat\s*assembly|seat\s*cushion|bench\s*seat|bolster\s*cushions?)\b/i,
     partType: 'Interior Seats & Seating Assemblies',
     ebayUsCategoryId: '33701',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Seats',
@@ -194,7 +214,7 @@ const TAXONOMY_RULES = [
   },
   // Interior Trim, Door Panels, Consoles & Dash -> Motor Vehicle Interior Fittings (vp-1-4-11)
   {
-    match: /door\s*(trim\s*)?panel|interior\s*door|seat|console|dash|trim\s*panel|air\s*vent|bezel|visor|headliner|carpet|steering\s*column\s*cover|shifter|glove\s*box|cup\s*holder|armrest/i,
+    match: /door\s*(trim\s*)?panel|interior\s*door|seat|console|dash|trim\s*panel|pillar\s*trim|cloth\s*interior|air\s*vent|bezel|visor|headliner|carpet|steering\s*column\s*(upper\s*|lower\s*)?(cover|shroud)|shifter|glove\s*box|cup\s*holder|armrest/i,
     partType: 'Interior Trim & Door Panels',
     ebayUsCategoryId: '33701',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Door Panels',
@@ -205,7 +225,7 @@ const TAXONOMY_RULES = [
   },
   // Window Glass, Regulators & Wipers -> Motor Vehicle Window Parts & Accessories (vp-1-4-21)
   {
-    match: /wiper|windshield\s*wiper|window\s*glass|quarter\s*window|window\s*regulator/i,
+    match: /wiper|windshield\s*wiper|window\s*glass|quarter\s*window|door\s*window|window\s*regulator/i,
     partType: 'Window Glass, Regulators & Wipers',
     ebayUsCategoryId: '179850',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Glass & Window Parts',
@@ -220,12 +240,12 @@ const TAXONOMY_RULES = [
     ebayUsCategoryId: '33642',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Doors & Door Skins',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Doors',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
     shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-9',
-    shopifyTaxonomySearch: 'Motor Vehicle Doors'
+    shopifyTaxonomySearch: 'Motor Vehicle Frame & Body Parts'
   },
   {
-    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|latch|handle|liner|tow\s*hook|splash\s*guard/i,
+    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|latch|handle|liner|tow\s*hook|splash\s*guard|roof\s*(rack|rails?)/i,
     partType: 'Exterior Body Panels & Trim',
     ebayUsCategoryId: '33640',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Bumpers & Reinforcements',

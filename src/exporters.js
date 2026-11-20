@@ -1159,6 +1159,7 @@ function buildShopifyProductMetafields(item, settings, tax) {
     { namespace: 'custom', key: 'security_mark', value: String(item.security_mark_code || '').trim(), type: 'single_line_text_field' },
     { namespace: 'custom', key: 'ebay_us_category_id', value: tax.ebayUsCategoryId, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'shopify_taxonomy_id', value: tax.shopifyTaxonomyId, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'country_of_origin', value: tax.countryOfOrigin || 'US', type: 'single_line_text_field' },
     { namespace: 'custom', key: 'return_policy', value: 'Returns Not Accepted (Defect-Only)', type: 'single_line_text_field' },
     { namespace: 'custom', key: 'crosslist_offerup_fb_sync', value: 'enabled_auto_delist_on_zero', type: 'single_line_text_field' }
   ];
@@ -1170,8 +1171,9 @@ function buildShopifyProductMetafields(item, settings, tax) {
 const _shopifyTaxonomyGidCache = new Map();
 
 async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, settings, tax }) {
+  const fallback = tax?.shopifyTaxonomyId || 'gid://shopify/TaxonomyCategory/vp-1-4';
   const searchTerm = String(tax?.shopifyTaxonomySearch || tax?.partType || '').trim();
-  const cacheKey = `${domain}|${searchTerm.toLowerCase()}`;
+  const cacheKey = `${domain}|${fallback}|${searchTerm.toLowerCase()}`;
   if (searchTerm && _shopifyTaxonomyGidCache.has(cacheKey)) {
     return _shopifyTaxonomyGidCache.get(cacheKey);
   }
@@ -1185,7 +1187,7 @@ async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, setti
           body: JSON.stringify({
             query: `query LookupTax($q: String!) {
               taxonomy {
-                categories(search: $q, first: 8) {
+                categories(search: $q, first: 10) {
                   nodes { id name fullName }
                 }
               }
@@ -1197,10 +1199,12 @@ async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, setti
       );
       if (resp.ok) {
         const data = await resp.json();
-        const nodes = data?.data?.taxonomy?.categories?.nodes || [];
+        const nodes = (data?.data?.taxonomy?.categories?.nodes || []).filter((n) =>
+          String(n.id || '').startsWith('gid://shopify/TaxonomyCategory/vp-1-4')
+        );
         const vehicleNode =
-          nodes.find((n) => /motor vehicle|vehicles & parts/i.test(String(n.fullName || '')) && String(n.name || '').toLowerCase() === searchTerm.toLowerCase()) ||
-          nodes.find((n) => /motor vehicle|vehicles & parts/i.test(String(n.fullName || ''))) ||
+          nodes.find((n) => String(n.name || '').toLowerCase() === searchTerm.toLowerCase()) ||
+          nodes.find((n) => String(n.id || '').startsWith(fallback)) ||
           null;
         if (vehicleNode?.id) {
           _shopifyTaxonomyGidCache.set(cacheKey, vehicleNode.id);
@@ -1209,7 +1213,6 @@ async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, setti
       }
     } catch (_) {}
   }
-  const fallback = tax?.shopifyTaxonomyId || 'gid://shopify/TaxonomyCategory/vp-1-4';
   if (searchTerm) _shopifyTaxonomyGidCache.set(cacheKey, fallback);
   return fallback;
 }
@@ -1380,6 +1383,44 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
     }
   } catch (err) {
     results.warnings.push(`metafields err: ${err.message}`);
+  }
+
+  // Purge any stale legacy/placeholder MPN metafields on Shopify when no verified stamped OEM MPN exists
+  if (!tax?.mpn) {
+    try {
+      const delResp = await shopifyFetchWithRetry(
+        graphqlUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `mutation DeleteStaleMpns($metafields: [MetafieldIdentifierInput!]!) {
+              metafieldsDelete(metafields: $metafields) {
+                deletedMetafields { key namespace ownerId }
+                userErrors { field message }
+              }
+            }`,
+            variables: {
+              metafields: [
+                { ownerId: productGid, namespace: 'mm-google-shopping', key: 'mpn' },
+                { ownerId: productGid, namespace: 'custom', key: 'oem_part_number' },
+                { ownerId: productGid, namespace: 'custom', key: 'oem_mpn' }
+              ]
+            }
+          })
+        },
+        { authMode, settings, tokenRef }
+      );
+      if (delResp.ok) {
+        const delData = await delResp.json();
+        const delErrs = delData?.data?.metafieldsDelete?.userErrors || [];
+        if (delErrs.length) {
+          results.warnings.push(`metafieldsDelete: ${JSON.stringify(delErrs).slice(0, 140)}`);
+        }
+      }
+    } catch (err) {
+      results.warnings.push(`metafieldsDelete err: ${err.message}`);
+    }
   }
 
   return results;
@@ -1918,15 +1959,18 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
       });
       if (!item) continue;
 
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification';
       const hasInvField = v.inventory_quantity !== undefined && v.inventory_quantity !== null;
       const rawQty = hasInvField ? Math.max(0, Number(v.inventory_quantity)) : Number(item.quantity || 0);
-      const nextQty = isArchivedOrDraft ? 0 : rawQty;
-      const nextStatus = nextQty === 0 ? (isArchivedOrDraft && rawQty > 0 ? 'inactive' : 'sold') : 'active';
+      const nextQty = (isLockedQuarantine || isArchivedOrDraft) ? 0 : rawQty;
+      const nextStatus = isLockedQuarantine
+        ? item.status
+        : (nextQty === 0 ? (isArchivedOrDraft && rawQty > 0 ? 'inactive' : 'sold') : 'active');
       const nextPrice = Number.isFinite(parseFloat(v.price)) && parseFloat(v.price) > 0 ? parseFloat(v.price) : item.price_we_pull;
 
       let nextChannels = item.channels_json || '{}';
       if (nextQty === 0) {
-        nextChannels = markInventoryChannelDelisted(item, isArchivedOrDraft ? `shopify_${shopifyStatus}` : 'shopify_zero_inventory');
+        nextChannels = markInventoryChannelDelisted(item, isLockedQuarantine ? item.status : (isArchivedOrDraft ? `shopify_${shopifyStatus}` : 'shopify_zero_inventory'));
         delistedSkus.push(item.sku);
       } else {
         try {
@@ -1956,10 +2000,11 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
   } else if (normalizedTopic === 'inventory_levels/update' && payload.inventory_item_id !== undefined) {
     const item = findInventoryItemForWebhook({ inventoryItemId: payload.inventory_item_id });
     if (item && payload.available !== undefined && payload.available !== null) {
-      const nextQty = Math.max(0, Number(payload.available));
-      const nextStatus = nextQty === 0 ? 'sold' : 'active';
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification';
+      const nextQty = isLockedQuarantine ? 0 : Math.max(0, Number(payload.available));
+      const nextStatus = isLockedQuarantine ? item.status : (nextQty === 0 ? 'sold' : 'active');
       const nextChannels = nextQty === 0
-        ? markInventoryChannelDelisted(item, 'shopify_inventory_zero')
+        ? markInventoryChannelDelisted(item, isLockedQuarantine ? item.status : 'shopify_inventory_zero')
         : (item.channels_json || '{}');
       db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
         nextQty, nextStatus, nextChannels, now, item.id
@@ -2388,6 +2433,7 @@ async function inspectLiveShopifyProducts(skus = []) {
       is_qr: isQrCardUrl(im.src) || /scan qr/i.test(String(im.alt || ''))
     }));
 
+    const rawHtmlText = String(p.body_html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     out.push({
       sku,
       found: true,
@@ -2399,6 +2445,7 @@ async function inspectLiveShopifyProducts(skus = []) {
       product_type: p.product_type,
       category,
       country_code_of_origin: countryOfOrigin,
+      variants_count: Array.isArray(p.variants) ? p.variants.length : 0,
       price: v.price,
       inventory_quantity: v.inventory_quantity,
       weight_lbs: v.weight,
@@ -2407,8 +2454,12 @@ async function inspectLiveShopifyProducts(skus = []) {
       tags: p.tags,
       metafields,
       images_count: imgs.length,
+      first_photo_is_real: imgs.length > 0 ? !imgs[0].is_qr : false,
       qr_in_final_slot: imgs.length > 0 ? Boolean(imgs[imgs.length - 1].is_qr) : false,
-      body_html_preview: String(p.body_html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 320)
+      has_174_99_in_html: rawHtmlText.includes('174.99'),
+      has_135_in_html: /\$135(\.00)?\s*\/\s*hr/i.test(rawHtmlText),
+      has_pickup_address_in_html: /5115\s+66th\s+St\s+W/i.test(rawHtmlText) && /98467/.test(rawHtmlText),
+      body_html_preview: rawHtmlText.slice(0, 320)
     });
   }
 

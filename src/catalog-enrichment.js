@@ -236,7 +236,7 @@ function enrichAllActiveInventoryInDb() {
   const settings = getSettings();
   const laborRate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
   const donors = db.prepare('SELECT * FROM donor_vehicles').all();
-  const rows = db.prepare("SELECT * FROM inventory_items WHERE status IN ('active', 'pending_verification')").all();
+  const rows = db.prepare("SELECT * FROM inventory_items WHERE status IN ('active', 'pending_verification', 'inactive')").all();
   const now = new Date().toISOString();
 
   let updatedCount = 0;
