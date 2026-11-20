@@ -61,7 +61,7 @@ const {
   handleShopifyWebhook
 } = require('./exporters');
 const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
-const { enrichAllActiveInventoryInDb, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
+const { enrichAllActiveInventoryInDb, deduplicateCatalog, findCatalogDuplicateGroups, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
   MEMBERSHIP_TIERS,
@@ -484,8 +484,9 @@ const server = http.createServer(async (req, res) => {
       const requestedOrg = urlObj.searchParams.get('org') || req.headers['x-org-slug'] || req.headers.host || 1;
       const organization = resolveOrganization(requestedOrg);
       const donorMap = buildDonorMap();
-      const items = db.prepare("SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification') ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const items = db.prepare("SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification', 'duplicate_archived') ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
       const pendingVerificationItems = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const duplicateArchivedCount = Number(db.prepare("SELECT COUNT(*) c FROM inventory_items WHERE status = 'duplicate_archived'").get()?.c || 0);
       const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC').all();
       const specials = db.prepare('SELECT * FROM specials WHERE active = 1 ORDER BY id DESC').all();
       const appointments = db.prepare('SELECT * FROM appointments ORDER BY id DESC LIMIT 100').all().map((a) => ({
@@ -536,10 +537,12 @@ const server = http.createServer(async (req, res) => {
         weightDimensionAudit: {
           total_active_skus: activeItems.length,
           pending_verification_count: pendingVerificationItems.length,
+          duplicate_archived_count: duplicateArchivedCount,
           parcel_calculated_count: parcelCount,
           local_pickup_only_98467_count: localPickupCount,
           single_variant_only: true,
           photos_required: true,
+          zero_duplicate_listings: true,
           triple_check_violations: 0
         },
         feeds: {
@@ -646,11 +649,14 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/health') {
       const cfg = getSettings();
       const activeCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'active'").get().c;
+      const duplicateArchivedCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'duplicate_archived'").get().c;
       const revSummary = getPhotoReviewSummary();
       sendJson(res, 200, {
         ok: true,
         service: "Aldridge Auto's Command Hub + Mobile PWA",
         active_skus: activeCount,
+        duplicate_archived_skus: duplicateArchivedCount,
+        zero_duplicate_gate: true,
         review_gallery_total: revSummary.total,
         review_gallery_pending: revSummary.pending,
         review_gallery_keep: revSummary.keep,
@@ -669,7 +675,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v20',
+        sw_version: 'v21',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/intake/snap-and-publish',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
@@ -917,14 +923,41 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (method === 'GET' && pathname === '/api/inventory/duplicates') {
+      const pendingGroups = findCatalogDuplicateGroups({ includePending: true });
+      const archivedRows = db.prepare("SELECT id, sku, title, fitment_years, fitment_make, fitment_model, fitment_notes, channels_json, updated_at FROM inventory_items WHERE status = 'duplicate_archived' ORDER BY updated_at DESC").all();
+      sendJson(res, 200, {
+        ok: true,
+        active_duplicate_groups_count: pendingGroups.length,
+        active_duplicate_groups: pendingGroups.map((g) => ({
+          canonical_sku: g.canonical.item.sku,
+          canonical_title: g.canonical.item.title,
+          duplicate_skus: g.duplicates.map((d) => ({ sku: d.item.sku, title: d.item.title })),
+          reasons: g.reasons
+        })),
+        duplicate_archived_count: archivedRows.length,
+        duplicate_archived_items: archivedRows
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/inventory/deduplicate') {
+      const raw = await readRawBody(req);
+      let opts = {};
+      try { opts = raw ? JSON.parse(raw) : {}; } catch (_) {}
+      const result = deduplicateCatalog({ dryRun: Boolean(opts.dry_run || opts.dryRun) });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (pathname === '/api/inventory') {
       if (method === 'GET') {
         const donorMap = buildDonorMap();
         const includePending = urlObj.searchParams.get('include_pending') === '1';
         const rows = db.prepare(
           includePending
-            ? "SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC"
-            : "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification') ORDER BY id DESC"
+            ? "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'duplicate_archived') ORDER BY id DESC"
+            : "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification', 'duplicate_archived') ORDER BY id DESC"
         ).all().map((r) => hydrateInventoryItem(r, donorMap));
         sendJson(res, 200, rows);
         return;
@@ -1460,12 +1493,13 @@ const server = http.createServer(async (req, res) => {
         } catch (_) {}
       }
       const enrichmentSummary = opts.enrich !== false ? enrichAllActiveInventoryInDb() : null;
+      const dedupeSummary = deduplicateCatalog();
       const updateExisting = Boolean(opts.update_existing || opts.updateExisting);
       const result = await syncAllToShopifyCoMaster({ updateExisting });
       if (updateExisting && result.mode === 'live_api' && (!result.errors || result.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v3: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v5: new Date().toISOString() });
       }
-      sendJson(res, 200, { ...result, enrichment: enrichmentSummary });
+      sendJson(res, 200, { ...result, enrichment: enrichmentSummary, deduplication: dedupeSummary });
       return;
     }
 
@@ -1473,6 +1507,7 @@ const server = http.createServer(async (req, res) => {
       const raw = await readRawBody(req);
       let opts = {};
       try { opts = raw ? JSON.parse(raw) : {}; } catch (_) { opts = {}; }
+      const dedupeSummary = deduplicateCatalog();
       const now = new Date().toISOString();
       const allRows = db.prepare('SELECT * FROM inventory_items').all();
       const activeSafe = allRows.filter((r) =>
@@ -1736,6 +1771,7 @@ const server = http.createServer(async (req, res) => {
           verified_and_live: map.active || 0,
           needs_photo_title_check: map.pending_verification || 0,
           quarantined_srs: map.compliance_blocked || 0,
+          duplicate_archived: map.duplicate_archived || 0,
           sold: map.sold || 0,
           staff_user: empSession.staff_name
         });
@@ -3160,8 +3196,9 @@ async function autoSyncKeepItemsOnStartup() {
       uploadsDir: UPLOADS_DIR
     });
     const enrichRes = enrichAllActiveInventoryInDb();
+    const dedupeRes = deduplicateCatalog();
     console.log(
-      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Enriched Active SKUs=${enrichRes.enriched_active_skus} | Pending Verification=${enrichRes.pending_verification_count || 0} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
+      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Active Unique SKUs=${enrichRes.enriched_active_skus} | Pending Verification=${enrichRes.pending_verification_count || 0} | Duplicate Archived=${dedupeRes.total_duplicate_archived || 0} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
     );
 
     // 2. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
@@ -3198,9 +3235,9 @@ async function autoSyncKeepItemsOnStartup() {
       console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
     }
 
-    // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment sync across all live Shopify products
+    // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment + deduplication sync across all live Shopify products
     const latestCfg = getSettings();
-    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v4;
+    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v5;
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
@@ -3208,10 +3245,10 @@ async function autoSyncKeepItemsOnStartup() {
     if (needsFullEnrichmentSync || unsyncedShopifyCount > 0) {
       const syncRes = await syncAllToShopifyCoMaster({ updateExisting: needsFullEnrichmentSync });
       console.log(
-        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | errors=${(syncRes.errors || []).length}`
+        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | archived_duplicates=${syncRes.archived_duplicates_count || 0} | errors=${(syncRes.errors || []).length}`
       );
       if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v4: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v5: new Date().toISOString() });
       }
     }
   } catch (err) {

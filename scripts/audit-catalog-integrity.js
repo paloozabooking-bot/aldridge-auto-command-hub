@@ -12,10 +12,11 @@ const { enrichAllActiveInventoryInDb, auditCatalogIntegrity } = require('../src/
 const shouldFix = process.argv.includes('--fix');
 if (shouldFix) {
   const enrichRes = enrichAllActiveInventoryInDb();
-  console.log('Enrichment applied:', JSON.stringify({
+  console.log('Enrichment + Deduplication applied:', JSON.stringify({
     active: enrichRes.enriched_active_skus,
     pending_verification: enrichRes.pending_verification_count,
     compliance_blocked: enrichRes.compliance_blocked_count,
+    duplicate_archived: enrichRes.duplicate_archived_count,
     labor_rate_hourly: enrichRes.labor_rate_hourly
   }));
 }

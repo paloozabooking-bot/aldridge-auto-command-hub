@@ -874,13 +874,28 @@ async function runKeepBatchIntakeAndPublish({
       }
 
       if (existing) {
-        // Preserve already-synced Shopify CDN URLs if present; otherwise ensure all group photo angles are attached
+        // NEVER mutate quarantined/archived duplicate or compliance-blocked SKUs on startup re-intake
+        if (existing.status === 'duplicate_archived' || existing.status === 'compliance_blocked') {
+          processedSkus.push(existing.sku);
+          continue;
+        }
+        // Preserve already-synced Shopify CDN URLs AND any merged multi-angle gallery photos from deduplicateCatalog()
         let finalPhotos = candidate.photos;
         try {
-          const prevPhotos = JSON.parse(existing.photos_json || '[]');
+          const prevPhotos = JSON.parse(existing.photos_json || '[]').filter(Boolean);
           const cdnOnly = prevPhotos.filter((u) => /^https:\/\/cdn\.shopify\.com\//i.test(String(u)));
           if (cdnOnly.length > 0) {
             finalPhotos = prevPhotos;
+          } else if (prevPhotos.length > 0) {
+            const seen = new Set(prevPhotos);
+            const union = [...prevPhotos];
+            for (const p of candidate.photos) {
+              if (p && !seen.has(p)) {
+                seen.add(p);
+                union.push(p);
+              }
+            }
+            finalPhotos = union.slice(0, 10);
           }
         } catch (_) {}
 

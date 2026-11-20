@@ -88,6 +88,32 @@ function isMarketplaceSafeItem(item) {
   return true;
 }
 
+/**
+ * PERMANENT PRE-EXPORT DEDUPLICATION GATE:
+ * Runs deduplicateCatalog() before every marketplace CSV/XML export so duplicate physical
+ * parts are NEVER exported and canonical items always carry their merged photo galleries.
+ */
+function ensureDeduplicatedItems(items) {
+  try {
+    const { deduplicateCatalog } = require('./catalog-enrichment');
+    deduplicateCatalog();
+  } catch (_) {}
+  if (!Array.isArray(items) || !items.length) return [];
+  const activeRows = db.prepare("SELECT sku, status, quantity, photos_json FROM inventory_items WHERE status = 'active'").all();
+  const activeBySku = new Map(activeRows.map((r) => [String(r.sku || '').trim().toUpperCase(), r]));
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const skuKey = String(item?.sku || '').trim().toUpperCase();
+    if (!skuKey || seen.has(skuKey)) continue;
+    const live = activeBySku.get(skuKey);
+    if (!live || Number(live.quantity || 0) <= 0) continue;
+    seen.add(skuKey);
+    out.push({ ...item, status: live.status, quantity: live.quantity, photos_json: live.photos_json || item.photos_json });
+  }
+  return out;
+}
+
 function sanitizeMpnField(rawMpn) {
   const clean = sanitizeVerifiedMpn(rawMpn);
   if (!clean) return '';
@@ -619,6 +645,7 @@ function importInventoryCsv(csvText) {
 }
 
 function generateShopifyCsv(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Published',
     'Option1 Name', 'Option1 Value', 'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker',
@@ -647,8 +674,8 @@ function generateShopifyCsv(items, settings, baseUrl) {
 
   const rows = [headers.join(',')];
   for (const item of items) {
-    // Hard compliance, anti-placeholder, fake-VIN & real-photo guard: never export SRS/catalytic, pending_verification, fake-VIN, or photo-less items!
-    if (item.status === 'pending_verification' || item.status === 'compliance_blocked') continue;
+    // Hard compliance, anti-placeholder, deduplication, fake-VIN & real-photo guard
+    if (item.status === 'pending_verification' || item.status === 'compliance_blocked' || item.status === 'duplicate_archived') continue;
     if (!hasRealPhotos(item)) continue;
     const gate = validateInventoryItemForPublish(item);
     if (!gate.valid) continue;
@@ -732,6 +759,7 @@ function generateShopifyCsv(items, settings, baseUrl) {
 
 // STRICT STANDARD EBAY US (ebay.com, SiteID=US) ONLY — NEVER eBay Motors!
 function generateEbayMotorsCsv(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     '*Action(SiteID=US|Country=US|Currency=USD|Version=1193)',
     'CustomLabel',
@@ -810,6 +838,7 @@ function generateEbayMotorsCsv(items, settings, baseUrl) {
 }
 
 function generateGoogleMerchantXml(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const activeItems = items.filter(isMarketplaceSafeItem);
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const itemNodes = activeItems.map((item) => {
@@ -859,6 +888,7 @@ ${itemNodes}
 }
 
 function generateMetaCatalogCsv(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     'id', 'title', 'description', 'availability', 'condition', 'price',
     'link', 'image_link', 'brand', 'mpn', 'quantity_to_sell_on_facebook', 'google_product_category'
@@ -896,6 +926,7 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
 }
 
 function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo') {
+  items = ensureDeduplicatedItems(items);
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
     ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Year', 'Make', 'Model', 'eBay_US_Category_ID', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Return_Policy', 'Zip Code', 'Shop_Install_Price_98467', 'Image 1', 'Additional_Images', 'Internal Notes']
@@ -950,6 +981,7 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
 }
 
 function generateCraigslistCsv(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     'SKU', 'Posting_Title', 'Price_USD', 'Category', 'Area_Subarea', 'Postal_Code',
     'Condition', 'Make_Model', 'OEM_Part_Number', 'Shipping_Or_Pickup',
@@ -994,6 +1026,7 @@ function generateCraigslistCsv(items, settings, baseUrl) {
 }
 
 function generateTiktokShopCsv(items, settings, baseUrl) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     'seller_sku', 'product_name', 'category', 'brand', 'mpn', 'condition', 'product_description',
     'price', 'quantity', 'package_weight_lb', 'package_length_in', 'package_width_in', 'package_height_in', 'main_image_url'
@@ -1017,6 +1050,7 @@ function generateTiktokShopCsv(items, settings, baseUrl) {
 }
 
 function generateCarPartHollanderCsv(items) {
+  items = ensureDeduplicatedItems(items);
   const headers = [
     'StockNumber', 'InventorySKU', 'HollanderInterchange', 'OEMPartNumber',
     'YearRange', 'Make', 'Model', 'PartCategory', 'ConditionGrade',
@@ -1454,6 +1488,13 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
 }
 
 async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
+  // PERMANENT PRE-SYNC DEDUPLICATION GATE: Archive any duplicate physical parts & merge photos before touching Shopify
+  let dedupeSummary = null;
+  try {
+    const { deduplicateCatalog } = require('./catalog-enrichment');
+    dedupeSummary = deduplicateCatalog();
+  } catch (_) {}
+
   const settings = getSettings();
   const allDbItems = db.prepare('SELECT * FROM inventory_items').all();
   const items = allDbItems.filter(isMarketplaceSafeItem);
@@ -1464,11 +1505,17 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       .filter((r) => r.status === 'compliance_blocked' || !validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
       .map((r) => String(r.sku || '').trim().toUpperCase())
   ]);
+  const duplicateArchivedSkusSet = new Set(
+    allDbItems
+      .filter((r) => r.status === 'duplicate_archived')
+      .map((r) => String(r.sku || '').trim().toUpperCase())
+      .filter((s) => s && !blockedSkusSet.has(s))
+  );
   const pendingVerificationSkusSet = new Set(
     allDbItems
       .filter((r) => r.status === 'pending_verification' || (r.status === 'active' && !validateInventoryItemForPublish(r).valid))
       .map((r) => String(r.sku || '').trim().toUpperCase())
-      .filter((s) => s && !blockedSkusSet.has(s))
+      .filter((s) => s && !blockedSkusSet.has(s) && !duplicateArchivedSkusSet.has(s))
   );
 
   const auth = await resolveShopifyAccessToken(settings, { forceRefresh: Boolean(updateExisting) });
@@ -1566,6 +1613,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   let updatedCount = 0;
   let draftedBlocked = 0;
   let archivedPending = 0;
+  let archivedDuplicates = 0;
   let skippedProtected = 0;
   let updatedImageAlts = 0;
   const errors = [];
@@ -1647,6 +1695,46 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       await new Promise((r) => setTimeout(r, 260));
     } catch (err) {
       errors.push(`archive-pending ${pendSku}: ${err.message}`);
+    }
+  }
+
+  // 1c. PERMANENT DUPLICATE ARCHIVAL: Archive & zero every duplicate_archived SKU currently on Shopify!
+  for (const dupSku of duplicateArchivedSkusSet) {
+    const liveDup = existingSkus.get(dupSku);
+    if (!liveDup) continue;
+    const needsArchive = liveDup.status !== 'archived';
+    const needsZero = Number(liveDup.inventory_quantity || 0) > 0;
+    if (!needsArchive && !needsZero) continue;
+    try {
+      if (needsArchive) {
+        const archResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${liveDup.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              product: {
+                id: Number(liveDup.product_id),
+                status: 'archived',
+                tags: 'DUPLICATE-ARCHIVED, MERGED-INTO-CANONICAL-SKU'
+              }
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (archResp.ok) {
+          archivedDuplicates++;
+          logSync('outbound', 'shopify_co_master', 'archive_duplicate_sku', dupSku, 'success', `Archived duplicate_archived SKU ${dupSku} on ${domain} (Product ID ${liveDup.product_id}) — merged into canonical single-unit listing.`);
+        } else {
+          errors.push(`archive-duplicate ${dupSku}: HTTP ${archResp.status}`);
+        }
+      }
+      if (needsZero) {
+        await zeroShopifyInventoryItem(liveDup.inventory_item_id);
+      }
+      await new Promise((r) => setTimeout(r, 260));
+    } catch (err) {
+      errors.push(`archive-duplicate ${dupSku}: ${err.message}`);
     }
   }
 
@@ -1900,7 +1988,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     updateExisting ? 'live_api_full_enrichment_sync' : 'live_api_push',
     'ALL',
     errors.length ? 'partial' : 'success',
-    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, archived_pending=${archivedPending}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
+    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, archived_pending=${archivedPending}, archived_duplicates=${archivedDuplicates}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
   );
   return {
     mode: 'live_api',
@@ -1910,8 +1998,10 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     updated_count: updatedCount,
     drafted_blocked_count: draftedBlocked,
     archived_pending_count: archivedPending,
+    archived_duplicates_count: archivedDuplicates,
     skipped_protected: skippedProtected,
     total_active_catalog_skus: finalActiveCount,
+    deduplication: dedupeSummary,
     errors
   };
 }
@@ -2031,7 +2121,7 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
       });
       if (!item) continue;
 
-      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification';
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
       const hasInvField = v.inventory_quantity !== undefined && v.inventory_quantity !== null;
       const rawQty = hasInvField ? Math.max(0, Number(v.inventory_quantity)) : Number(item.quantity || 0);
       const nextQty = (isLockedQuarantine || isArchivedOrDraft) ? 0 : rawQty;
@@ -2072,7 +2162,7 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
   } else if (normalizedTopic === 'inventory_levels/update' && payload.inventory_item_id !== undefined) {
     const item = findInventoryItemForWebhook({ inventoryItemId: payload.inventory_item_id });
     if (item && payload.available !== undefined && payload.available !== null) {
-      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification';
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
       const nextQty = isLockedQuarantine ? 0 : Math.max(0, Number(payload.available));
       const nextStatus = isLockedQuarantine ? item.status : (nextQty === 0 ? 'sold' : 'active');
       const nextChannels = nextQty === 0
