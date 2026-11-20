@@ -9,14 +9,30 @@
  * - Hard-blocks all visually verified SRS/airbag SKUs (ALD-9FJP71, ALD-EUCT8U, ALD-H51N50, ALD-IBRLF3).
  */
 
-const { db, getSettings, computeShippingClass, logSync } = require('./db');
+const { db, getSettings, computeShippingClass, validateInventoryItemForPublish, logSync } = require('./db');
 const { PROHIBITED_CAT_SKUS, PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS } = require('./audit-sanitizer');
 const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn, resolveCountryOfOrigin } = require('./taxonomy');
 
 const SHOP_LABOR_RATE_LOCKED = 174.99;
 
-// Grounded SKU enrichment map: verified from Clean Launch Exports CSVs (37 SKUs) + direct visual photo inspection (20 SKUs) + specific outlier fixes
+// Grounded SKU enrichment map: verified from Clean Launch Exports CSVs (37 SKUs) + direct visual photo inspection (21 SKUs) + specific outlier fixes
 const VERIFIED_SKU_ENRICHMENTS = {
+  'ALD-12TOY-COOLANT-RESE-P0840': {
+    title: '2010-2020 Toyota 4Runner 4.0L V6 Radiator Coolant Overflow Reservoir Tank OEM 16470-31050',
+    years: '2010-2020',
+    make: 'Toyota',
+    model: '4Runner',
+    trim: 'SR5 / Trail / Limited',
+    engine: '4.0L 1GR-FE V6 / 2.7L 2TR-FE I4',
+    brand: 'Toyota DENSO OEM',
+    mpn: '16470-31050',
+    interchange: '1647031050',
+    placement: 'Engine Bay Front Right',
+    price: 55,
+    laborHours: 0.6,
+    origin: 'JP',
+    notes: 'Visually verified P0840.jpg: genuine DENSO-molded translucent white Toyota coolant overflow recovery tank with 3 intact mounting ears, factory cap, and overflow hose.'
+  },
   // === 37 Clean Launch Exports Verified Legacy SKUs ===
   'ALD-1UK1V6': { title: '1998 Chevrolet S10 Engine Control Module (ECM/PCM) OEM', years: '1998-2000', make: 'Chevrolet', model: 'S-10', trim: '2WD / 4WD', engine: '2.2L / 4.3L', price: 150, laborHours: 1.0, origin: 'US' },
   'ALD-1VNJTD': { title: '2012-2017 Fiat 500 Pop ABS Anti-Lock Brake Control Module OEM', years: '2012-2017', make: 'Fiat', model: '500 Pop', trim: 'Pop Hatchback', engine: '1.4L MultiAir I4', price: 180, laborHours: 1.5, origin: 'MX' },
@@ -108,6 +124,7 @@ const DIMENSION_RULES = [
   { match: /\b(quarter\s*window|door\s*window|window\s*glass)\b/i, weight: 16, l: 34, w: 22, h: 5, labor: 1.5 },
   { match: /\b(gas\s*tank|fuel\s*tank)\b/i, weight: 32, l: 42, w: 20, h: 14, labor: 3.0 },
   { match: /\b(fuel\s*tank\s*strap)\b/i, weight: 5, l: 24, w: 8, h: 5, labor: 1.0 },
+  { match: /\b(coolant\s*(overflow|recovery|expansion)?\s*reservoir|radiator\s*(coolant\s*)?overflow|overflow\s*tank|washer\s*(fluid|reservoir|tank))\b/i, weight: 4, l: 14, w: 11, h: 8, labor: 0.6 },
   { match: /\b(radiator\s*cooling\s*fan|cooling\s*fan|fan\s*assembly)\b/i, weight: 15, l: 30, w: 22, h: 8, labor: 1.5 },
   { match: /\b(a\/c.*condenser|ac\s*condenser|radiator)\b/i, weight: 16, l: 32, w: 24, h: 7, labor: 2.0 },
   { match: /\b(driveshaft|drive\s*shaft)\b/i, weight: 24, l: 54, w: 8, h: 8, labor: 1.5 },
@@ -179,11 +196,15 @@ function normalizeVehicleTitleCasing(title) {
 
 function buildRichStructuredDescription(item, settings = {}) {
   const rate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
+  const supplyRate = Number(settings.shop_supply_fee_rate ?? 0.07);
+  const supplyCap = Number(settings.shop_supply_fee_cap ?? 45);
+  const taxRate = Number(settings.tax_rate ?? 0.101);
   const priceWePull = Number(item.price_we_pull || 0);
   const laborHours = Number(item.install_labor_hours || 0);
-  const installPrice = laborHours > 0
-    ? Number((priceWePull + laborHours * rate).toFixed(2))
-    : priceWePull;
+  const laborSub = laborHours > 0 ? Number((laborHours * rate).toFixed(2)) : 0;
+  const supplyFee = laborSub > 0 ? Number(Math.min(supplyCap, laborSub * supplyRate).toFixed(2)) : 0;
+  const preTaxInstall = Number((priceWePull + laborSub + supplyFee).toFixed(2));
+  const installWithTax = Number((preTaxInstall * (1 + taxRate)).toFixed(2));
   const cleanMpn = sanitizeVerifiedMpn(item.oem_part_number);
   const isNew = String(item.condition || 'Used').toLowerCase() === 'new';
   const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
@@ -204,7 +225,7 @@ function buildRichStructuredDescription(item, settings = {}) {
       ? `Local Pickup Only: Available at Aldridge Auto's Service & Repair, 5115 66th St W, Bldg B, University Place / Tacoma, WA 98467.`
       : `Shipping & Pickup: Calculated parcel shipping (+ $10.00 handling) or Free Local Counter Pickup at Aldridge Auto's Service & Repair, 5115 66th St W, Bldg B, University Place / Tacoma, WA 98467.`,
     laborHours > 0
-      ? `Optional Certified Shop Installation (University Place, WA 98467): $${installPrice.toFixed(2)} estimated turnkey installed (Part $${priceWePull.toFixed(2)} + ${laborHours.toFixed(1)} hrs certified labor @ $${rate.toFixed(2)}/hr).`
+      ? `Optional Certified Shop Bay Installation (5115 66th St W, Bldg B, University Place, WA 98467): $${(priceWePull + laborSub).toFixed(2)} part + labor (Part $${priceWePull.toFixed(2)} + ${laborHours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr; est. $${installWithTax.toFixed(2)} out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax).`
       : ''
   ].filter(Boolean);
 
@@ -215,14 +236,17 @@ function enrichAllActiveInventoryInDb() {
   const settings = getSettings();
   const laborRate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
   const donors = db.prepare('SELECT * FROM donor_vehicles').all();
-  const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active'").all();
+  const rows = db.prepare("SELECT * FROM inventory_items WHERE status IN ('active', 'pending_verification')").all();
   const now = new Date().toISOString();
 
   let updatedCount = 0;
   let complianceBlockedCount = 0;
+  let pendingVerificationCount = 0;
   const blockedSkus = [];
+  const pendingSkus = [];
 
   const blockStmt = db.prepare("UPDATE inventory_items SET status = 'compliance_blocked', quantity = 0, updated_at = ? WHERE id = ?");
+  const pendingStmt = db.prepare("UPDATE inventory_items SET status = 'pending_verification', quantity = 0, fitment_notes = ?, updated_at = ? WHERE id = ?");
   const updateStmt = db.prepare(`
     UPDATE inventory_items SET
       title = ?,
@@ -249,6 +273,8 @@ function enrichAllActiveInventoryInDb() {
       width_in = ?,
       height_in = ?,
       shipping_class = ?,
+      status = ?,
+      quantity = ?,
       updated_at = ?
     WHERE id = ?
   `);
@@ -332,6 +358,7 @@ function enrichAllActiveInventoryInDb() {
         fitment_make: fitmentMake,
         fitment_model: fitmentModel,
         fitment_engine: fitmentEngine,
+        fitment_notes: fitmentNotesParts.join(' | '),
         defect_disclosure: defectDisclosure,
         price_we_pull: priceWePull,
         install_labor_hours: laborHours,
@@ -342,6 +369,23 @@ function enrichAllActiveInventoryInDb() {
         shipping_class: shippingClass
       };
       const richDescription = buildRichStructuredDescription(enrichedCandidate, { ...settings, labor_rate_hourly: laborRate });
+
+      // MANDATORY ZERO-TOLERANCE VALIDATION GATE:
+      // Any SKU lacking verified Year/Make/Model/Part Name/Weight/Dims is quarantined to pending_verification!
+      const gate = validateInventoryItemForPublish({ ...enrichedCandidate, description: richDescription });
+      if (!gate.valid) {
+        if (gate.recommended_status === 'compliance_blocked') {
+          blockStmt.run(now, row.id);
+          complianceBlockedCount++;
+          blockedSkus.push(row.sku);
+        } else {
+          const reasonNote = `${fitmentNotesParts.join(' | ')} | PENDING VERIFICATION: ${gate.reasons.join('; ')}`;
+          pendingStmt.run(reasonNote, now, row.id);
+          pendingVerificationCount++;
+          pendingSkus.push({ sku: row.sku, title, reasons: gate.reasons });
+        }
+        continue;
+      }
 
       updateStmt.run(
         title,
@@ -368,6 +412,8 @@ function enrichAllActiveInventoryInDb() {
         dims.width_in,
         dims.height_in,
         shippingClass,
+        'active',
+        1,
         now,
         row.id
       );
@@ -385,7 +431,7 @@ function enrichAllActiveInventoryInDb() {
     'sanitize_enrich_174_99',
     'ALL',
     'success',
-    `Enriched ${updatedCount} active single-variant SKUs at $${laborRate.toFixed(2)}/hr labor (0 placeholders, 0 fake MPNs, exact dimensions/weights & Country of Origin); quarantined ${complianceBlockedCount} photo-verified SRS SKUs (${blockedSkus.join(', ')}).`
+    `Enriched ${updatedCount} verified single-variant OEM SKUs at $${laborRate.toFixed(2)}/hr labor; quarantined ${complianceBlockedCount} SRS SKUs (${blockedSkus.join(', ')}) and ${pendingVerificationCount} pending_verification SKUs lacking full YMM.`
   );
 
   return {
@@ -393,7 +439,9 @@ function enrichAllActiveInventoryInDb() {
     labor_rate_hourly: laborRate,
     enriched_active_skus: updatedCount,
     compliance_blocked_count: complianceBlockedCount,
-    compliance_blocked_skus: blockedSkus
+    compliance_blocked_skus: blockedSkus,
+    pending_verification_count: pendingVerificationCount,
+    pending_verification_skus: pendingSkus
   };
 }
 

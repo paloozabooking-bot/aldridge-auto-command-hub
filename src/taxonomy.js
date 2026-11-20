@@ -1,41 +1,55 @@
 /**
- * Inter-Platform Automotive Taxonomy, Standard eBay US (ebay.com) Category Routing,
- * Country of Origin, & Structured Metafields
+ * Inter-Platform Automotive Taxonomy, Official Shopify Standard Product Taxonomy (vp-1-4-*),
+ * Standard eBay US (ebay.com) Category Routing, Country of Origin, & Structured Metafields.
  *
  * Strict Anti-Placeholder Rules:
  * 1. Standard eBay US (ebay.com, SiteID=US) ONLY — NEVER eBay Motors (SiteID=eBayMotors).
- * 2. Exact Shopify Standard Product Taxonomy category & Google Merchant Product Category.
- * 3. NEVER output "Does Not Apply" or hex/UUID hashes as MPN — return verified OEM MPN or "".
- * 4. NEVER output "Universal" as fitment — use exact Year/Make/Model or specific part-size fitment.
+ * 2. Official Shopify Standard Product Taxonomy category (gid://shopify/TaxonomyCategory/vp-1-4-*)
+ *    plus leaf-node lookup hint (`shopifyTaxonomySearch`) resolved dynamically via GraphQL taxonomy API.
+ * 3. NEVER output "Does Not Apply", hex/UUID hashes, or YYYY-MAKE tokens as MPN — return verified OEM MPN or "".
+ * 4. NEVER output "Universal" as fitment — use exact verified Year/Make/Model only.
  */
 
 const TAXONOMY_RULES = [
+  {
+    match: /coolant\s*(reservoir|overflow|recovery|expansion)\s*(tank|bottle)?|radiator\s*overflow\s*tank|overflow\s*tank/i,
+    partType: 'Radiator Overflow Tanks',
+    ebayUsCategoryId: '33602',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Engine Cooling Components > Expansion & Overflow Tanks',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Cooling Systems',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Cooling Systems > Radiator Overflow Tanks',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-22',
+    shopifyTaxonomySearch: 'Radiator Overflow Tanks'
+  },
   {
     match: /alternator|generator/i,
     partType: 'Alternators & Generators',
     ebayUsCategoryId: '177697',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Starters, Alternators, ECUs & Wiring > Alternators & Generators',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems > Motor Vehicle Alternators',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems > Motor Vehicle Alternators',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-4-1'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems > Alternators',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-14',
+    shopifyTaxonomySearch: 'Motor Vehicle Alternators'
   },
   {
     match: /\bstarter\b/i,
     partType: 'Starter Motors',
     ebayUsCategoryId: '177699',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Starters, Alternators, ECUs & Wiring > Starters',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems > Motor Vehicle Starter Motors',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems > Motor Vehicle Starter Motors',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-4-2'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems > Starter Motors',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-14',
+    shopifyTaxonomySearch: 'Starter Motors'
   },
   {
     match: /cluster|speedometer|tachometer|gauge/i,
     partType: 'Instrument Clusters & Gauges',
     ebayUsCategoryId: '33675',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Gauges > Instrument Clusters',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Controls & Displays > Motor Vehicle Gauges & Instrument Clusters',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Interior Fittings',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-8'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Sensors & Gauges',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Sensors & Gauges',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-16',
+    shopifyTaxonomySearch: 'Motor Vehicle Sensors & Gauges'
   },
   {
     match: /\b(abs\s*pump|abs\s*module|anti[- ]lock|caliper|rotor|brake|master\s*cylinder|booster)\b/i,
@@ -44,52 +58,58 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Brakes & Brake Parts > Calipers & Brackets',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Braking',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Braking',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-1'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-1',
+    shopifyTaxonomySearch: 'Motor Vehicle Braking'
   },
   {
     match: /\b(ecm|ecu|pcm|tcm|bcm|tpms|mpx|module|computer|fuse\s*box|junction|relay|wiring|harness|amplifier|amp|radio|stereo|infotainment|navigation|display\s*screen|camera|sensor|receiver)\b/i,
     partType: 'ECUs, Modules & Automotive Electronics',
     ebayUsCategoryId: '33596',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Starters, Alternators, ECUs & Wiring > ECUs & Computer Modules',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical & Electronic Systems',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-4'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Power & Electrical Systems',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-14',
+    shopifyTaxonomySearch: 'Motor Vehicle Power & Electrical Systems'
   },
   {
     match: /headlight|headlamp|fog\s*light|corner\s*light|parking\s*(light|turn\s*signal)|turn\s*signal\s*(light|lamp)|marker\s*light/i,
     partType: 'Headlight & Front Lamp Assemblies',
     ebayUsCategoryId: '33710',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Lighting & Lamps > Headlight Assemblies',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Headlights',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Headlights',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-9-1'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-12',
+    shopifyTaxonomySearch: 'Motor Vehicle Headlights'
   },
   {
     match: /tail\s*light|taillight|tail\s*lamp|brake\s*light|third\s*brake/i,
     partType: 'Tail Light Assemblies',
     ebayUsCategoryId: '33716',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Lighting & Lamps > Tail Light Assemblies',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Tail & Brake Lights',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting > Motor Vehicle Tail & Brake Lights',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-9-2'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Lighting',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-12',
+    shopifyTaxonomySearch: 'Motor Vehicle Tail & Brake Lights'
   },
   {
     match: /door\s*shell|complete\s*door/i,
-    partType: 'Doors & Automotive Glass',
+    partType: 'Doors & Exterior Door Shells',
     ebayUsCategoryId: '33642',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Doors & Door Skins',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Vehicle Doors',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Doors',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-9',
+    shopifyTaxonomySearch: 'Motor Vehicle Doors'
   },
   {
     match: /mirror/i,
     partType: 'Exterior & Interior Mirrors',
     ebayUsCategoryId: '33649',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Mirrors > Side View Mirrors',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Mirrors',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Mirrors',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7-4'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Mirrors',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Mirrors',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-13',
+    shopifyTaxonomySearch: 'Motor Vehicle Mirrors'
   },
   {
     match: /strut|shock|coil\s*spring|control\s*arm|knuckle|spindle|sway\s*bar|subframe|steering\s*rack|power\s*steering|tie\s*rod|suspension/i,
@@ -98,7 +118,8 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Steering & Suspension > Shocks, Struts & Assemblies',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Suspension Parts',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Suspension Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-10'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-17',
+    shopifyTaxonomySearch: 'Motor Vehicle Suspension Parts'
   },
   {
     match: /compressor|condenser|evaporator|heater|blower|hvac|climate\s*control/i,
@@ -107,7 +128,8 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Air Conditioning & Heating > A/C Compressors & Clutches',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Climate Control',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Climate Control',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-2'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-3',
+    shopifyTaxonomySearch: 'Motor Vehicle Climate Control'
   },
   {
     match: /radiator|cooling\s*fan|fan\s*shroud|water\s*pump|thermostat|coolant|intercooler|washer\s*(fluid|reservoir|tank)/i,
@@ -116,7 +138,8 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Engine Cooling Components > Radiators',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Cooling Systems',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Cooling Systems',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-3'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-22',
+    shopifyTaxonomySearch: 'Motor Vehicle Cooling Systems'
   },
   {
     match: /(?<!steering\s)\b(wheels?|rims?|tires?|hubcaps?|center\s*caps?)\b/i,
@@ -125,7 +148,8 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Wheels, Tires & Parts > Wheels',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Wheel Systems',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Wheel Systems',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-12'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-20',
+    shopifyTaxonomySearch: 'Motor Vehicle Wheel Systems'
   },
   {
     match: /transmission|transfer\s*case|differential|axle|driveshaft|cv\s*joint|torque\s*converter/i,
@@ -134,7 +158,18 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Transmission & Drivetrain > Automatic Transmission',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Transmission & Drivetrain Parts',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Transmission & Drivetrain Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-11'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-19',
+    shopifyTaxonomySearch: 'Motor Vehicle Transmission & Drivetrain Parts'
+  },
+  {
+    match: /air\s*intake|intake\s*box|air\s*cleaner|maf\b/i,
+    partType: 'Air Intake & Fuel Delivery',
+    ebayUsCategoryId: '33659',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Air & Fuel Delivery > Air Intake Systems',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Air Intake',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Air Intake',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-23',
+    shopifyTaxonomySearch: 'Motor Vehicle Air Intake'
   },
   {
     match: /\b(engine\s*assembly|long\s*block|short\s*block|cylinder\s*head|intake\s*manifold|throttle\s*body|fuel\s*(injection\s*)?rail|fuel\s*pump|injector|valve\s*cover|timing|turbo|supercharger|oil\s*pan|harmonic\s*balancer|crankshaft|camshaft|ignition\s*coil)\b/i,
@@ -143,44 +178,61 @@ const TAXONOMY_RULES = [
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Engines & Engine Parts > Complete Engines',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Engine Parts',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Engine Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-5'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-6',
+    shopifyTaxonomySearch: 'Motor Vehicle Engine Parts'
   },
-  // Interior Trim, Door Panels, Seats, Consoles & Dash BEFORE Exterior Door Shell!
+  // Seats -> Motor Vehicle Seating (vp-1-4-15)
+  {
+    match: /\b(bucket\s*seat|front\s*seat|rear\s*seat|car\s*seats?|seat\s*backrest|seat\s*assembly|seat\s*cushion|bench\s*seat)\b/i,
+    partType: 'Interior Seats & Seating Assemblies',
+    ebayUsCategoryId: '33701',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Seats',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Seating',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Seating',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-15',
+    shopifyTaxonomySearch: 'Motor Vehicle Seating'
+  },
+  // Interior Trim, Door Panels, Consoles & Dash -> Motor Vehicle Interior Fittings (vp-1-4-11)
   {
     match: /door\s*(trim\s*)?panel|interior\s*door|seat|console|dash|trim\s*panel|air\s*vent|bezel|visor|headliner|carpet|steering\s*column\s*cover|shifter|glove\s*box|cup\s*holder|armrest/i,
-    partType: 'Interior Trim, Door Panels & Seats',
+    partType: 'Interior Trim & Door Panels',
     ebayUsCategoryId: '33701',
-    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Door Panels & Seats',
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Interior Parts & Accessories > Door Panels',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Interior Fittings',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Interior Fittings',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-8'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-11',
+    shopifyTaxonomySearch: 'Motor Vehicle Interior Fittings'
   },
+  // Window Glass, Regulators & Wipers -> Motor Vehicle Window Parts & Accessories (vp-1-4-21)
   {
-    match: /wiper|windshield\s*wiper/i,
-    partType: 'Wipers & Windshield Hardware',
+    match: /wiper|windshield\s*wiper|window\s*glass|quarter\s*window|window\s*regulator/i,
+    partType: 'Window Glass, Regulators & Wipers',
     ebayUsCategoryId: '179850',
-    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Windshield Wiper Systems',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
+    ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Glass & Window Parts',
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Window Parts & Accessories',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Window Parts & Accessories',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-21',
+    shopifyTaxonomySearch: 'Motor Vehicle Window Parts & Accessories'
   },
   {
-    match: /front\s*door|rear\s*door|passenger\s*door|driver\s*door|door\s*shell|quarter\s*window|window\s*glass/i,
-    partType: 'Doors & Automotive Glass',
+    match: /front\s*door|rear\s*door|passenger\s*door|driver\s*door/i,
+    partType: 'Doors & Exterior Door Shells',
     ebayUsCategoryId: '33642',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Doors & Door Skins',
-    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Vehicle Doors',
-    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
+    googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
+    shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts > Motor Vehicle Doors',
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-9',
+    shopifyTaxonomySearch: 'Motor Vehicle Doors'
   },
   {
-    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|window\s*regulator|latch|handle|liner|tow\s*hook|splash\s*guard/i,
+    match: /bumper|grille|fender|hood|liftgate|tailgate|trunk\s*lid|quarter\s*panel|rocker|latch|handle|liner|tow\s*hook|splash\s*guard/i,
     partType: 'Exterior Body Panels & Trim',
     ebayUsCategoryId: '33640',
     ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Exterior Parts & Accessories > Bumpers & Reinforcements',
     googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
     shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Frame & Body Parts',
-    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5-7'
+    shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4-9',
+    shopifyTaxonomySearch: 'Motor Vehicle Frame & Body Parts'
   }
 ];
 
@@ -190,7 +242,8 @@ const FALLBACK_TAXONOMY = {
   ebayUsCategoryName: 'eBay US > Parts & Accessories > Car & Truck Parts & Accessories > Other Car & Truck Parts & Accessories',
   googleProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts',
   shopifyProductCategory: 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts',
-  shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-2-5'
+  shopifyTaxonomyId: 'gid://shopify/TaxonomyCategory/vp-1-4',
+  shopifyTaxonomySearch: 'Motor Vehicle Parts'
 };
 
 function sanitizeVerifiedMpn(rawMpn) {
@@ -252,49 +305,43 @@ function resolvePartTaxonomyAndMetafields(item, settings = {}) {
   const customLabel0 = ymm.slice(0, 100);
   const customLabel1 = isLocalPickupOnly ? 'Local_Pickup_98467' : 'Parcel_Ship';
 
-  const cleanMakeSlug = fitmentMake.replace(/[^A-Za-z0-9]/g, '');
-  const cleanModelSlug = fitmentModel.replace(/[^A-Za-z0-9]/g, '');
-  const hashtags = [
-    '#OEMAutoParts',
-    '#TacomaAutoParts',
-    '#UniversityPlaceWA',
-    cleanMakeSlug ? `#${cleanMakeSlug}Parts` : null,
-    cleanMakeSlug && cleanModelSlug ? `#${cleanMakeSlug}${cleanModelSlug}` : null
-  ].filter(Boolean);
-
-  const seoTags = Array.from(new Set([
-    fitmentYears || null,
-    fitmentMake || null,
-    fitmentModel || null,
-    matched.partType,
-    mpn ? `MPN:${mpn}` : null,
-    mpn || null,
-    `Condition:${condNormalized === 'new' ? 'New' : 'Used'}`,
-    condNormalized === 'new' ? 'New Aftermarket' : 'Used OEM',
-    `Origin:${countryCodeOfOrigin}`,
-    'Single-Variant-1-In-Stock',
-    customLabel1,
-    item?.bin_location ? `BIN:${item.bin_location}` : null,
-    secMark ? `SEC:${secMark}` : null
-  ].filter(Boolean)));
+  // Specific, searchable tags — never generic filler
+  const seoTags = Array.from(
+    new Set(
+      [
+        fitmentYears || null,
+        fitmentMake || null,
+        fitmentModel || null,
+        matched.partType,
+        mpn ? `MPN:${mpn}` : null,
+        mpn || null,
+        condNormalized === 'new' ? 'Condition:New' : 'Condition:Used',
+        condNormalized === 'new' ? 'New OEM' : 'Used OEM',
+        `Origin:${countryCodeOfOrigin}`,
+        'Single-Variant-1-In-Stock',
+        customLabel1,
+        item?.bin_location ? `BIN:${item.bin_location}` : null,
+        secMark ? `SEC:${secMark}` : null
+      ].filter(Boolean)
+    )
+  );
 
   return {
-    ebaySiteId: 'US', // STRICT: ebay.com US ONLY — NEVER eBayMotors
+    partType: matched.partType,
     ebayUsCategoryId: matched.ebayUsCategoryId,
     ebayUsCategoryName: matched.ebayUsCategoryName,
     googleProductCategory: matched.googleProductCategory,
     shopifyProductCategory: matched.shopifyProductCategory,
     shopifyTaxonomyId: matched.shopifyTaxonomyId,
-    partType: matched.partType,
+    shopifyTaxonomySearch: matched.shopifyTaxonomySearch || matched.partType,
+    countryCodeOfOrigin,
     brand,
     mpn,
-    countryCodeOfOrigin,
     condition: condNormalized,
     identifierExists: Boolean(mpn),
     customLabel0,
     customLabel1,
-    seoTags,
-    hashtags
+    seoTags
   };
 }
 

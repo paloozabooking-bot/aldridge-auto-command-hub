@@ -11,15 +11,22 @@ if (fs.existsSync(ENV_FILE_PATH) && typeof process.loadEnvFile === 'function') {
 const {
   db,
   DATA_DIR,
+  SAAS_PLAN_TIERS,
   getSettings,
   updateSettings,
   generateSecurityCode,
   computeShippingClass,
   validateVinStrict,
   validatePartCompliance,
+  validateInventoryItemForPublish,
   upsertCustomer,
   logSync,
   seedAuditGroundTruthCatalog,
+  resolveOrganization,
+  listOrganizationsWithSubscriptions,
+  createOrganizationTenant,
+  updateOrganizationTenant,
+  addOrganizationUserSeat,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
   getPhotoReviewSummary,
@@ -448,8 +455,11 @@ const server = http.createServer(async (req, res) => {
     // Bootstrap Bundle
     if (method === 'GET' && pathname === '/api/bootstrap') {
       const settings = getSettings();
+      const requestedOrg = urlObj.searchParams.get('org') || req.headers['x-org-slug'] || req.headers.host || 1;
+      const organization = resolveOrganization(requestedOrg);
       const donorMap = buildDonorMap();
-      const items = db.prepare("SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const items = db.prepare("SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification') ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const pendingVerificationItems = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
       const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC').all();
       const specials = db.prepare('SELECT * FROM specials WHERE active = 1 ORDER BY id DESC').all();
       const appointments = db.prepare('SELECT * FROM appointments ORDER BY id DESC LIMIT 100').all().map((a) => ({
@@ -481,7 +491,10 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, {
         settings,
+        organization,
+        saasPlans: SAAS_PLAN_TIERS,
         inventory: items,
+        pendingVerificationItems,
         donors,
         specials,
         appointments,
@@ -496,6 +509,7 @@ const server = http.createServer(async (req, res) => {
         audit: getAuditSummaryPayload(baseUrl),
         weightDimensionAudit: {
           total_active_skus: activeItems.length,
+          pending_verification_count: pendingVerificationItems.length,
           parcel_calculated_count: parcelCount,
           local_pickup_only_98467_count: localPickupCount,
           single_variant_only: true,
@@ -867,10 +881,22 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Inventory CRUD
+    if (method === 'GET' && pathname === '/api/inventory/pending-verification') {
+      const donorMap = buildDonorMap();
+      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      sendJson(res, 200, { ok: true, count: rows.length, items: rows });
+      return;
+    }
+
     if (pathname === '/api/inventory') {
       if (method === 'GET') {
         const donorMap = buildDonorMap();
-        const rows = db.prepare("SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+        const includePending = urlObj.searchParams.get('include_pending') === '1';
+        const rows = db.prepare(
+          includePending
+            ? "SELECT * FROM inventory_items WHERE status != 'compliance_blocked' ORDER BY id DESC"
+            : "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification') ORDER BY id DESC"
+        ).all().map((r) => hydrateInventoryItem(r, donorMap));
         sendJson(res, 200, rows);
         return;
       }
@@ -905,12 +931,12 @@ const server = http.createServer(async (req, res) => {
         const now = new Date().toISOString();
         const sku = (b.sku || `ALD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`).trim();
         const secCode = (b.security_mark_code || generateSecurityCode()).trim();
-        const weightLbs = Number(b.weight_lbs || 10);
-        const lengthIn = Number(b.length_in || 14);
-        const widthIn = Number(b.width_in || 10);
-        const heightIn = Number(b.height_in || 8);
+        const weightLbs = Number(b.weight_lbs || 0);
+        const lengthIn = Number(b.length_in || 0);
+        const widthIn = Number(b.width_in || 0);
+        const heightIn = Number(b.height_in || 0);
         const heavyThreshold = Number(settings.freight_weight_threshold_lbs || 70);
-        const computedShip = computeShippingClass(weightLbs, `${b.category || ''} ${b.title || ''}`, lengthIn, widthIn, heightIn);
+        const computedShip = computeShippingClass(weightLbs || 10, `${b.category || ''} ${b.title || ''}`, lengthIn || 14, widthIn || 10, heightIn || 8);
         const shippingClass = weightLbs >= heavyThreshold || b.shipping_class === 'local_pickup_only' || b.shipping_class === 'freight_ltl'
           ? 'local_pickup_only'
           : computedShip;
@@ -930,7 +956,7 @@ const server = http.createServer(async (req, res) => {
           craigslist: true
         };
 
-        // 4. Lock Condition to Used (unless explicitly New) & wipe counterfeit MPNs
+        // 4. Lock Condition to Used (unless explicitly New) & wipe counterfeit/placeholder MPNs
         const rawCond = String(b.condition || 'Used').trim();
         const condStr = rawCond.toLowerCase() === 'new' ? 'New' : 'Used';
         const condId = condStr === 'New' ? 1000 : 3000;
@@ -938,7 +964,30 @@ const server = http.createServer(async (req, res) => {
         const cleanOem = (!rawMpn || /^does\s+not\s+apply$/i.test(rawMpn) || isCounterfeitMpn(rawMpn)) ? '' : rawMpn;
         const pricePart = Number(b.price_we_pull || 0);
         const laborHours = Number(b.install_labor_hours || 1.5);
-        const priceInstallInfo = Number(b.price_pull_install || Math.round(pricePart + laborHours * Number(settings.labor_rate_hourly || 174.99)));
+        const priceInstallInfo = Number(b.price_pull_install || Number((pricePart + laborHours * Number(settings.labor_rate_hourly || 174.99)).toFixed(2)));
+        const cleanTitle = String(b.title || '').trim();
+        const cleanCategory = String(b.category || '').trim();
+
+        // 5. PERMANENT ANTI-PLACEHOLDER VALIDATION GATE: Force incomplete/placeholder SKUs into pending_verification
+        const pubGate = validateInventoryItemForPublish({
+          title: cleanTitle,
+          category: cleanCategory,
+          oem_part_number: cleanOem,
+          fitment_years: b.fitment_years || '',
+          fitment_make: b.fitment_make || '',
+          fitment_model: b.fitment_model || '',
+          fitment_notes: b.fitment_notes || '',
+          description: b.description || '',
+          weight_lbs: weightLbs,
+          length_in: lengthIn,
+          width_in: widthIn,
+          height_in: heightIn
+        });
+        const initialStatus = pubGate.valid ? 'active' : pubGate.recommended_status;
+        const initialQty = initialStatus === 'active' ? Math.max(1, Number(b.quantity ?? 1)) : 0;
+        const finalFitmentNotes = pubGate.valid
+          ? (b.fitment_notes || '')
+          : `${b.fitment_notes || ''}${b.fitment_notes ? ' | ' : ''}PENDING VERIFICATION: ${pubGate.reasons.join('; ')}`;
 
         const r = db.prepare(`
           INSERT INTO inventory_items (
@@ -952,40 +1001,42 @@ const server = http.createServer(async (req, res) => {
             handling_fee, handling_days, channels_json, status, created_at, updated_at
           ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, 'pulled_shelved', 0, 0, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?
+            ?, ?, 'pulled_shelved', 0, 0, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           )
         `).run(
-          sku, b.title || 'Tested OEM Auto Part', b.category || 'OEM Auto Parts', condStr, condId,
+          sku, cleanTitle, cleanCategory, condStr, condId,
           b.brand || 'OEM', cleanOem, b.interchange_number || '', b.hollander_number || '',
           b.placement_on_vehicle || '', b.donor_vehicle_id ? Number(b.donor_vehicle_id) : null,
-          b.fitment_years || '', b.fitment_make || '', b.fitment_model || '', b.fitment_engine || '', b.fitment_notes || '',
+          b.fitment_years || '', b.fitment_make || '', b.fitment_model || '', b.fitment_engine || '', finalFitmentNotes,
           b.description || '', b.defect_disclosure || 'Inspected & verified.', b.bin_location || (shippingClass === 'local_pickup_only' ? 'LOCAL-PICKUP-98467' : 'RACK-A1'),
           secCode, b.security_mark_verified ? 1 : 1, b.security_mark_photo || '',
           JSON.stringify(photos),
           pricePart,
           priceInstallInfo, laborHours,
-          Number(b.cost_basis || 0), Math.max(1, Number(b.quantity ?? 1)),
+          Number(b.cost_basis || 0), initialQty,
           weightLbs, lengthIn, widthIn, heightIn, shippingClass,
           Number(b.handling_fee ?? settings.handling_fee_default ?? 10),
           Number(b.handling_days ?? settings.handling_days_default ?? 3),
-          JSON.stringify(channels), now, now
+          JSON.stringify(channels), initialStatus, now, now
         );
 
         let created = hydrateInventoryItem(db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(r.lastInsertRowid));
         const qrCard = generatePartQrCardPng(created, settings, UPLOADS_DIR);
-        const shopifySync = b.auto_push_shopify === false
-          ? { pushed: false, skipped: true }
+        const shopifySync = (b.auto_push_shopify === false || initialStatus !== 'active')
+          ? { pushed: false, skipped: true, reason: initialStatus !== 'active' ? `Quarantined (${initialStatus}): ${pubGate.reasons.join('; ')}` : 'auto_push_disabled' }
           : await pushSingleItemToShopify(created, settings, UPLOADS_DIR);
         created = hydrateInventoryItem(db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(r.lastInsertRowid));
-        logSync('outbound', 'all_channels', 'intake_publish_sku', sku, 'success', `Camera Intake published Single-Variant ${sku} (${created.title}) [${photos.length} clean photo(s) + ${qrCard.fileName} Shopify final QR card, ${condStr}, MPN: ${cleanOem || 'unstamped'}, ${shippingClass}, ShopInstallCallout=$${priceInstallInfo.toFixed(2)}, Shopify Live=${Boolean(shopifySync.pushed)}] with Security ID ${secCode}.`);
+        logSync('outbound', 'all_channels', 'intake_publish_sku', sku, initialStatus === 'active' ? 'success' : 'staged', `Camera Intake saved Single-Variant ${sku} (${created.title}) [status=${initialStatus}, ${photos.length} clean photo(s) + ${qrCard.fileName} Shopify final QR card, ${condStr}, MPN: ${cleanOem || 'unstamped'}, ${shippingClass}, ShopInstallCallout=$${priceInstallInfo.toFixed(2)}, Shopify Live=${Boolean(shopifySync.pushed)}] with Security ID ${secCode}.`);
         sendJson(res, 201, {
           ...created,
           single_variant_only: true,
+          validation_passed: pubGate.valid,
+          validation_reasons: pubGate.reasons,
           qr_card_attached_shopify_final: true,
           qr_tracking_url: qrCard.trackingUrl,
           ebay_google_photos_clean: true,
           shopify_live_sync: shopifySync,
-          ebay_queued: true
+          ebay_queued: initialStatus === 'active'
         });
         return;
       }
@@ -1055,11 +1106,51 @@ const server = http.createServer(async (req, res) => {
         const b = JSON.parse((await readRawBody(req)) || '{}');
         const existing = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id);
         if (!existing) return sendJson(res, 404, { error: 'Item not found' });
-        const nextQty = b.quantity !== undefined ? Number(b.quantity) : existing.quantity;
-        const nextStatus = b.status || (nextQty <= 0 ? 'sold' : 'active');
+        let nextQty = b.quantity !== undefined ? Number(b.quantity) : existing.quantity;
+        let nextStatus = b.status || (nextQty <= 0 ? 'sold' : 'active');
+        const cleanedFitNotes = String(b.fitment_notes !== undefined ? b.fitment_notes : (existing.fitment_notes || ''))
+          .replace(/\s*\|\s*PENDING VERIFICATION:.*$/i, '')
+          .replace(/^PENDING VERIFICATION:.*$/i, '')
+          .trim();
+        const mergedCandidate = {
+          ...existing,
+          title: b.title !== undefined ? b.title : existing.title,
+          category: b.category !== undefined ? b.category : existing.category,
+          oem_part_number: b.oem_part_number !== undefined ? b.oem_part_number : existing.oem_part_number,
+          fitment_years: b.fitment_years !== undefined ? b.fitment_years : existing.fitment_years,
+          fitment_make: b.fitment_make !== undefined ? b.fitment_make : existing.fitment_make,
+          fitment_model: b.fitment_model !== undefined ? b.fitment_model : existing.fitment_model,
+          fitment_notes: cleanedFitNotes,
+          weight_lbs: b.weight_lbs !== undefined ? Number(b.weight_lbs) : existing.weight_lbs,
+          length_in: b.length_in !== undefined ? Number(b.length_in) : existing.length_in,
+          width_in: b.width_in !== undefined ? Number(b.width_in) : existing.width_in,
+          height_in: b.height_in !== undefined ? Number(b.height_in) : existing.height_in
+        };
+        let validationReasons = [];
+        if (nextStatus === 'active') {
+          const gate = validateInventoryItemForPublish(mergedCandidate);
+          if (!gate.valid) {
+            nextStatus = gate.recommended_status;
+            nextQty = 0;
+            validationReasons = gate.reasons;
+          }
+        }
+        const savedFitNotes = validationReasons.length
+          ? `${cleanedFitNotes}${cleanedFitNotes ? ' | ' : ''}PENDING VERIFICATION: ${validationReasons.join('; ')}`
+          : cleanedFitNotes;
         db.prepare(`
           UPDATE inventory_items SET
             title = COALESCE(?, title),
+            category = COALESCE(?, category),
+            oem_part_number = COALESCE(?, oem_part_number),
+            fitment_years = COALESCE(?, fitment_years),
+            fitment_make = COALESCE(?, fitment_make),
+            fitment_model = COALESCE(?, fitment_model),
+            fitment_notes = ?,
+            weight_lbs = COALESCE(?, weight_lbs),
+            length_in = COALESCE(?, length_in),
+            width_in = COALESCE(?, width_in),
+            height_in = COALESCE(?, height_in),
             price_we_pull = COALESCE(?, price_we_pull),
             price_self_pull = COALESCE(?, price_self_pull),
             price_pull_install = COALESCE(?, price_pull_install),
@@ -1071,6 +1162,16 @@ const server = http.createServer(async (req, res) => {
           WHERE id = ?
         `).run(
           b.title ?? null,
+          b.category ?? null,
+          b.oem_part_number ?? null,
+          b.fitment_years ?? null,
+          b.fitment_make ?? null,
+          b.fitment_model ?? null,
+          savedFitNotes,
+          b.weight_lbs !== undefined ? Number(b.weight_lbs) : null,
+          b.length_in !== undefined ? Number(b.length_in) : null,
+          b.width_in !== undefined ? Number(b.width_in) : null,
+          b.height_in !== undefined ? Number(b.height_in) : null,
           b.price_we_pull !== undefined ? Number(b.price_we_pull) : null,
           b.price_self_pull !== undefined ? Number(b.price_self_pull) : null,
           b.price_pull_install !== undefined ? Number(b.price_pull_install) : null,
@@ -1083,7 +1184,7 @@ const server = http.createServer(async (req, res) => {
         );
         const updated = hydrateInventoryItem(db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id));
         logSync('outbound', 'co_master_sync', 'update_sku', updated.sku, 'success', `Updated ${updated.sku} -> Qty: ${updated.quantity}, Status: ${updated.status}`);
-        sendJson(res, 200, updated);
+        sendJson(res, 200, { ...updated, validation_passed: validationReasons.length === 0, validation_reasons: validationReasons });
         return;
       }
       if (method === 'DELETE') {
@@ -1091,6 +1192,55 @@ const server = http.createServer(async (req, res) => {
         db.prepare('DELETE FROM inventory_items WHERE id = ?').run(id);
         if (existing) logSync('outbound', 'all_channels', 'delete_sku', existing.sku, 'success', `Removed SKU ${existing.sku} from Co-Master inventory.`);
         sendJson(res, 200, { ok: true });
+        return;
+      }
+    }
+
+    /* ==================== MULTI-TENANT WHITE-LABEL SAAS LICENSING APIs ==================== */
+    if (pathname === '/api/saas/organizations') {
+      if (method === 'GET') {
+        const orgs = listOrganizationsWithSubscriptions();
+        const totalMrr = orgs.reduce((sum, o) => sum + Number(o.subscription?.estimated_monthly_total_usd || 0), 0);
+        sendJson(res, 200, {
+          ok: true,
+          count: orgs.length,
+          total_mrr_usd: Number(totalMrr.toFixed(2)),
+          plan_tiers: SAAS_PLAN_TIERS,
+          organizations: orgs
+        });
+        return;
+      }
+      if (method === 'POST') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const createdOrg = createOrganizationTenant(b);
+        sendJson(res, 201, { ok: true, organization: createdOrg });
+        return;
+      }
+    }
+
+    const saasSeatMatch = pathname.match(/^\/api\/saas\/organizations\/(\d+)\/seats$/);
+    if (method === 'POST' && saasSeatMatch) {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const updatedOrg = addOrganizationUserSeat(Number(saasSeatMatch[1]), b);
+      sendJson(res, 201, { ok: true, organization: updatedOrg });
+      return;
+    }
+
+    const saasOrgMatch = pathname.match(/^\/api\/saas\/organizations\/([^/]+)$/);
+    if (saasOrgMatch) {
+      const key = decodeURIComponent(saasOrgMatch[1]);
+      if (method === 'GET') {
+        const org = resolveOrganization(key);
+        if (!org) return sendJson(res, 404, { error: 'Organization not found' });
+        sendJson(res, 200, { ok: true, organization: org });
+        return;
+      }
+      if (method === 'PUT' || method === 'PATCH') {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const target = resolveOrganization(key);
+        if (!target) return sendJson(res, 404, { error: 'Organization not found' });
+        const updatedOrg = updateOrganizationTenant(target.id, b);
+        sendJson(res, 200, { ok: true, organization: updatedOrg });
         return;
       }
     }
@@ -1198,7 +1348,7 @@ const server = http.createServer(async (req, res) => {
       const updateExisting = Boolean(opts.update_existing || opts.updateExisting);
       const result = await syncAllToShopifyCoMaster({ updateExisting });
       if (updateExisting && result.mode === 'live_api' && (!result.errors || result.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v2: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v3: new Date().toISOString() });
       }
       sendJson(res, 200, { ...result, enrichment: enrichmentSummary });
       return;
@@ -2727,7 +2877,7 @@ async function autoSyncKeepItemsOnStartup() {
     });
     const enrichRes = enrichAllActiveInventoryInDb();
     console.log(
-      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Enriched Active SKUs=${enrichRes.enriched_active_skus} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
+      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Enriched Active SKUs=${enrichRes.enriched_active_skus} | Pending Verification=${enrichRes.pending_verification_count || 0} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
     );
 
     // 2. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
@@ -2766,7 +2916,7 @@ async function autoSyncKeepItemsOnStartup() {
 
     // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment sync across all live Shopify products
     const latestCfg = getSettings();
-    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v2;
+    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v3;
     const unsyncedShopifyCount = db.prepare(
       "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
     ).get().c;
@@ -2774,10 +2924,10 @@ async function autoSyncKeepItemsOnStartup() {
     if (needsFullEnrichmentSync || unsyncedShopifyCount > 0) {
       const syncRes = await syncAllToShopifyCoMaster({ updateExisting: needsFullEnrichmentSync });
       console.log(
-        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | errors=${(syncRes.errors || []).length}`
+        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | errors=${(syncRes.errors || []).length}`
       );
       if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v2: new Date().toISOString() });
+        updateSettings({ shopify_enrichment_synced_v3: new Date().toISOString() });
       }
     }
   } catch (err) {

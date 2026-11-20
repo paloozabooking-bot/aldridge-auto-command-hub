@@ -932,9 +932,13 @@ async function runKeepBatchIntakeAndPublish({
     throw err;
   }
 
-  // Generate QR Info & App Cards for all processed active SKUs so Shopify gets final QR card
+  // Always run permanent anti-placeholder enrichment + validation gate before QR cards & Shopify sync
+  const { enrichAllActiveInventoryInDb } = require('./catalog-enrichment');
+  const enrichSummary = enrichAllActiveInventoryInDb();
+
+  // Generate QR Info & App Cards for all active validated SKUs so Shopify gets final QR card
   for (const sku of processedSkus) {
-    const item = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(sku);
+    const item = db.prepare("SELECT * FROM inventory_items WHERE sku = ? AND status = 'active'").get(sku);
     if (item) {
       try {
         generatePartQrCardPng(item, settings, uploadsDir);
@@ -950,7 +954,7 @@ async function runKeepBatchIntakeAndPublish({
   };
   if (pushShopify) {
     try {
-      shopifySync = await syncAllToShopifyCoMaster();
+      shopifySync = await syncAllToShopifyCoMaster({ updateExisting: true });
     } catch (err) {
       shopifySync = {
         mode: 'error',

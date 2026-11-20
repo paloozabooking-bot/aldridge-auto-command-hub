@@ -9,6 +9,7 @@ const {
   computeShippingClass,
   validateVinStrict,
   validatePartCompliance,
+  validateInventoryItemForPublish,
   logSync
 } = require('./db');
 const { generateAllPolicies } = require('./policies');
@@ -77,12 +78,8 @@ function isMarketplaceSafeItem(item) {
   if (PROHIBITED_CAT_SKUS.has(skuUpper) || PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper)) {
     return false;
   }
-  const comp = validatePartCompliance({
-    title: item.title,
-    category: item.category,
-    description: item.description
-  });
-  if (!comp.compliant) return false;
+  const gate = validateInventoryItemForPublish(item);
+  if (!gate.valid) return false;
 
   if (item.donor_vehicle_id) {
     const dv = db.prepare('SELECT vin FROM donor_vehicles WHERE id = ?').get(item.donor_vehicle_id);
@@ -138,8 +135,14 @@ function computeInstallEstimate(item, settings) {
   const base = Number(item.price_we_pull || 0);
   const hours = Number(item.install_labor_hours || 1.5);
   const rate = Number(settings?.labor_rate_hourly || 174.99);
-  const computedInstall = Math.round((base + hours * rate) * 100) / 100;
-  return { installTotal: computedInstall, hours, rate };
+  const supplyRate = Number(settings?.shop_supply_fee_rate ?? 0.07);
+  const supplyCap = Number(settings?.shop_supply_fee_cap ?? 45);
+  const taxRate = Number(settings?.tax_rate ?? 0.101);
+  const laborSub = Math.round(hours * rate * 100) / 100;
+  const supplyFee = laborSub > 0 ? Math.round(Math.min(supplyCap, laborSub * supplyRate) * 100) / 100 : 0;
+  const installTotal = Math.round((base + laborSub) * 100) / 100;
+  const otdTotal = Math.round((base + laborSub + supplyFee) * (1 + taxRate) * 100) / 100;
+  return { installTotal, otdTotal, supplyFee, supplyCap, taxRate, hours, rate };
 }
 
 function stripOffEbayContactText(text) {
@@ -166,13 +169,13 @@ function renderShopifyHtml(item, settings, baseUrl) {
   const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const { installTotal, otdTotal, supplyFee, supplyCap, taxRate, hours, rate } = computeInstallEstimate(item, settings);
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const phone = settings.phone || '(253) 245-4206';
 
   const installCalloutHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
       <strong style="color:#0369a1;">🔧 OPTIONAL CERTIFIED SHOP BAY INSTALLATION (INFO-ONLY — SINGLE-UNIT PART):</strong><br/>
-      Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> <em>(includes this inspected OEM part + ~${hours.toFixed(1)} hrs certified technician labor at $${rate.toFixed(2)}/hr at 5115 66th St W, Bldg B)</em>.<br/>
+      Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> part + labor <em>(~${hours.toFixed(1)} hrs certified technician labor @ $${rate.toFixed(2)}/hr; est. <strong>$${otdTotal.toFixed(2)}</strong> out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax at 5115 66th St W, Bldg B)</em>.<br/>
       <span style="font-size:12px;color:#334155;">To prevent double-booking this 1-of-1 part, purchase the part here first to lock it in, then schedule your bay installation on our <a href="${pwaUrl}" style="color:#0369a1;font-weight:700;">Live Website &amp; Mobile App (${pwaUrl.replace(/^https?:\/\//i, '')})</a> or call/text <strong>${phone}</strong>.</span>
     </div>`;
 
@@ -216,12 +219,12 @@ function renderEbayHtml(item, settings) {
   const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const { installTotal, otdTotal, supplyFee, supplyCap, taxRate, hours, rate } = computeInstallEstimate(item, settings);
 
   // 100% eBay Policy Compliant Callout — ZERO external URLs, domains, or phone numbers!
   const installCalloutEbayHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
       <strong style="color:#0369a1;">OPTIONAL CERTIFIED IN-HOUSE SHOP INSTALLATION (UNIVERSITY PLACE, WA 98467):</strong><br/>
-      Informational Turnkey Part + Certified Bay Installation Estimate: <strong>$${installTotal.toFixed(2)}</strong> <em>(~${hours.toFixed(1)} hrs certified technician labor at $${rate.toFixed(2)}/hr at our 5.0★ University Place, WA 98467 shop)</em>. Listed strictly as 1 single physical unit so inventory is never double-booked — local Pierce County buyers may message us directly via <strong>eBay Messages</strong> regarding counter pickup or bay installation availability!
+      Informational Turnkey Part + Certified Bay Installation Estimate: <strong>$${installTotal.toFixed(2)}</strong> part + labor <em>(~${hours.toFixed(1)} hrs certified technician labor @ $${rate.toFixed(2)}/hr; est. $${otdTotal.toFixed(2)} out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax)</em>. Listed strictly as 1 single physical unit so inventory is never double-booked — local Pierce County buyers may message us directly via <strong>eBay Messages</strong> regarding counter pickup or bay installation availability!
     </div>`;
 
   const shipLabel = heavyPickupOnly
@@ -475,10 +478,32 @@ function importInventoryCsv(csvText) {
 
       const secCode = row.security_mark_code || generateSecurityCode();
       const rawQty = parseInt(row.quantity || row.Quantity || row['Variant Inventory Qty'] || row['*Quantity'] || '1', 10);
-      const finalQty = isNaN(rawQty) ? 1 : rawQty;
-      const rowStatus = row.Status && ['archived', 'draft'].includes(String(row.Status).toLowerCase())
+      let finalQty = isNaN(rawQty) ? 1 : rawQty;
+      let rowStatus = row.Status && ['archived', 'draft', 'pending_verification'].includes(String(row.Status).toLowerCase())
         ? String(row.Status).toLowerCase()
         : (finalQty > 0 ? 'active' : 'sold');
+
+      if (rowStatus === 'active') {
+        const pubGate = validateInventoryItemForPublish({
+          title,
+          category,
+          oem_part_number: cleanOem,
+          fitment_years: row.fitment_years || '',
+          fitment_make: row.fitment_make || '',
+          fitment_model: row.fitment_model || '',
+          fitment_notes: row.fitment_notes || '',
+          description: cleanDesc,
+          weight_lbs: weightLbs,
+          length_in: lengthIn,
+          width_in: widthIn,
+          height_in: heightIn
+        });
+        if (!pubGate.valid) {
+          rowStatus = pubGate.recommended_status;
+          finalQty = 0;
+          errors.push(`Row ${origIdx + 2} (${sku}): Quarantined to ${rowStatus} — ${pubGate.reasons.join('; ')}`);
+        }
+      }
 
       let donorId = null;
       if (donorVin) {
@@ -595,10 +620,11 @@ function generateShopifyCsv(items, settings, baseUrl) {
 
   const rows = [headers.join(',')];
   for (const item of items) {
-    // Hard compliance, fake-VIN & real-photo guard: never export SRS/catalytic, fake-VIN, or photo-less items!
+    // Hard compliance, anti-placeholder, fake-VIN & real-photo guard: never export SRS/catalytic, pending_verification, fake-VIN, or photo-less items!
+    if (item.status === 'pending_verification' || item.status === 'compliance_blocked') continue;
     if (!hasRealPhotos(item)) continue;
-    const comp = validatePartCompliance({ title: item.title, category: item.category, description: item.description });
-    if (!comp.compliant) continue;
+    const gate = validateInventoryItemForPublish(item);
+    if (!gate.valid) continue;
     if (item.donor_vehicle_id) {
       const dv = db.prepare('SELECT vin FROM donor_vehicles WHERE id = ?').get(item.donor_vehicle_id);
       if (dv && dv.vin && !validateVinStrict(dv.vin).valid) continue;
@@ -1107,7 +1133,7 @@ function buildShopifyProductMetafields(item, settings, tax) {
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
   const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
   const weightLbs = Number(item.weight_lbs || 8);
-  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const { installTotal, otdTotal, hours, rate } = computeInstallEstimate(item, settings);
   const donorVehicle = [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim() || tax.customLabel0;
   const condLabel = normalizeExportCondition(item.condition) === 'New' ? 'New OEM' : 'Used OEM';
   const fulfillmentLabel = heavyPickupOnly
@@ -1126,7 +1152,8 @@ function buildShopifyProductMetafields(item, settings, tax) {
     { namespace: 'custom', key: 'fitment_years', value: String(item.fitment_years || '').trim(), type: 'single_line_text_field' },
     { namespace: 'custom', key: 'part_condition', value: condLabel, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'fulfillment_type', value: fulfillmentLabel, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'shop_install_price', value: `$${installTotal.toFixed(2)} (Part + ~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr)`, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'shop_install_price', value: `$${installTotal.toFixed(2)} part+labor (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr; est. $${otdTotal.toFixed(2)} OTD w/ 7% supplies & 10.1% WA tax)`, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'packed_dimensions', value: `${dimsLabel} (${weightLbs} lbs)`, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'package_dimensions', value: `${dimsLabel} (${weightLbs} lbs)`, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'bin_location', value: String(item.bin_location || '').trim(), type: 'single_line_text_field' },
     { namespace: 'custom', key: 'security_mark', value: String(item.security_mark_code || '').trim(), type: 'single_line_text_field' },
@@ -1138,6 +1165,53 @@ function buildShopifyProductMetafields(item, settings, tax) {
 
   // Shopify metafieldsSet rejects empty string values — omit blank optional keys (e.g., unstamped MPN).
   return raw.filter((m) => String(m.value || '').trim().length > 0);
+}
+
+const _shopifyTaxonomyGidCache = new Map();
+
+async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, settings, tax }) {
+  const searchTerm = String(tax?.shopifyTaxonomySearch || tax?.partType || '').trim();
+  const cacheKey = `${domain}|${searchTerm.toLowerCase()}`;
+  if (searchTerm && _shopifyTaxonomyGidCache.has(cacheKey)) {
+    return _shopifyTaxonomyGidCache.get(cacheKey);
+  }
+  if (searchTerm) {
+    try {
+      const resp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `query LookupTax($q: String!) {
+              taxonomy {
+                categories(search: $q, first: 8) {
+                  nodes { id name fullName }
+                }
+              }
+            }`,
+            variables: { q: searchTerm }
+          })
+        },
+        { authMode, settings, tokenRef }
+      );
+      if (resp.ok) {
+        const data = await resp.json();
+        const nodes = data?.data?.taxonomy?.categories?.nodes || [];
+        const vehicleNode =
+          nodes.find((n) => /motor vehicle|vehicles & parts/i.test(String(n.fullName || '')) && String(n.name || '').toLowerCase() === searchTerm.toLowerCase()) ||
+          nodes.find((n) => /motor vehicle|vehicles & parts/i.test(String(n.fullName || ''))) ||
+          null;
+        if (vehicleNode?.id) {
+          _shopifyTaxonomyGidCache.set(cacheKey, vehicleNode.id);
+          return vehicleNode.id;
+        }
+      }
+    } catch (_) {}
+  }
+  const fallback = tax?.shopifyTaxonomyId || 'gid://shopify/TaxonomyCategory/vp-1-4';
+  if (searchTerm) _shopifyTaxonomyGidCache.set(cacheKey, fallback);
+  return fallback;
 }
 
 async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRef }) {
@@ -1178,11 +1252,12 @@ async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRe
 
 async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, settings, productId, inventoryItemId, item, tax }) {
   const countryCode = resolveCountryOfOrigin(item);
+  const resolvedTaxGid = await resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, settings, tax });
   const results = {
     country_code_of_origin: countryCode,
     origin_updated: false,
     category_updated: false,
-    category_gid: tax.shopifyTaxonomyId,
+    category_gid: resolvedTaxGid,
     metafields_count: 0,
     warnings: []
   };
@@ -1219,7 +1294,7 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
   // 2. Assign Shopify Standard Product Taxonomy Category + Structured Metafields via GraphQL
   const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
   const productGid = `gid://shopify/Product/${productId}`;
-  const metafieldsList = buildShopifyProductMetafields(item, settings, tax);
+  const metafieldsList = buildShopifyProductMetafields(item, settings, { ...tax, shopifyTaxonomyId: resolvedTaxGid });
 
   const runCategoryMutation = async (catGid) => {
     const resp = await shopifyFetchWithRetry(
@@ -1249,11 +1324,14 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
   };
 
   try {
-    let catRes = await runCategoryMutation(tax.shopifyTaxonomyId);
-    if (!catRes.ok && tax.shopifyTaxonomyId !== 'gid://shopify/TaxonomyCategory/vp-2') {
-      // Fallback to verified root Motor Vehicle Parts taxonomy node if sub-node ID differs by Shopify taxonomy release
-      catRes = await runCategoryMutation('gid://shopify/TaxonomyCategory/vp-2');
-      if (catRes.ok) results.category_gid = 'gid://shopify/TaxonomyCategory/vp-2';
+    let catRes = await runCategoryMutation(resolvedTaxGid);
+    if (!catRes.ok && resolvedTaxGid !== tax.shopifyTaxonomyId) {
+      catRes = await runCategoryMutation(tax.shopifyTaxonomyId);
+      if (catRes.ok) results.category_gid = tax.shopifyTaxonomyId;
+    }
+    if (!catRes.ok && tax.shopifyTaxonomyId !== 'gid://shopify/TaxonomyCategory/vp-1-4') {
+      catRes = await runCategoryMutation('gid://shopify/TaxonomyCategory/vp-1-4');
+      if (catRes.ok) results.category_gid = 'gid://shopify/TaxonomyCategory/vp-1-4';
     }
     if (catRes.ok) {
       results.category_updated = true;
@@ -1318,6 +1396,12 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       .filter((r) => r.status === 'compliance_blocked' || !validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
       .map((r) => String(r.sku || '').trim().toUpperCase())
   ]);
+  const pendingVerificationSkusSet = new Set(
+    allDbItems
+      .filter((r) => r.status === 'pending_verification' || (r.status === 'active' && !validateInventoryItemForPublish(r).valid))
+      .map((r) => String(r.sku || '').trim().toUpperCase())
+      .filter((s) => s && !blockedSkusSet.has(s))
+  );
 
   const auth = await resolveShopifyAccessToken(settings);
   if (!auth.shopDomain || !auth.token) {
@@ -1381,6 +1465,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   let pushed = 0;
   let updatedCount = 0;
   let draftedBlocked = 0;
+  let archivedPending = 0;
   let skippedProtected = 0;
   const errors = [];
 
@@ -1442,6 +1527,38 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       await new Promise((r) => setTimeout(r, 260));
     } catch (err) {
       errors.push(`draft-blocked ${blockedSku}: ${err.message}`);
+    }
+  }
+
+  // 1b. ZERO-PLACEHOLDER QUARANTINE: Archive any pending_verification SKU currently live on Shopify!
+  for (const pendSku of pendingVerificationSkusSet) {
+    const livePend = existingSkus.get(pendSku);
+    if (!livePend || livePend.status === 'archived') continue;
+    try {
+      const archResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/products/${livePend.product_id}.json`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            product: {
+              id: Number(livePend.product_id),
+              status: 'archived',
+              tags: 'PENDING-VERIFICATION, AWAITING-YMM-REVIEW'
+            }
+          })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (archResp.ok) {
+        archivedPending++;
+        logSync('outbound', 'shopify_co_master', 'archive_pending_verification', pendSku, 'success', `Archived pending_verification SKU ${pendSku} on ${domain} (Product ID ${livePend.product_id}) until verified YMM/part details are completed.`);
+      } else {
+        errors.push(`archive-pending ${pendSku}: HTTP ${archResp.status}`);
+      }
+      await new Promise((r) => setTimeout(r, 260));
+    } catch (err) {
+      errors.push(`archive-pending ${pendSku}: ${err.message}`);
     }
   }
 
@@ -1670,7 +1787,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     updateExisting ? 'live_api_full_enrichment_sync' : 'live_api_push',
     'ALL',
     errors.length ? 'partial' : 'success',
-    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
+    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, archived_pending=${archivedPending}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
   );
   return {
     mode: 'live_api',
@@ -1679,6 +1796,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     synced_count: pushed,
     updated_count: updatedCount,
     drafted_blocked_count: draftedBlocked,
+    archived_pending_count: archivedPending,
     skipped_protected: skippedProtected,
     total_active_catalog_skus: finalActiveCount,
     errors
@@ -2181,7 +2299,7 @@ async function inspectLiveShopifyProducts(skus = []) {
   }
   const domain = auth.shopDomain;
   const tokenRef = { token: auth.token };
-  const targetSkus = (Array.isArray(skus) && skus.length ? skus : ['ALD-KEEP-P0818', 'ALD-KEEP-P0294', 'ALD-KEEP-P0544', 'ALD-KEEP-P0691', 'ALD-PKNW51'])
+  const targetSkus = (Array.isArray(skus) && skus.length ? skus : ['ALD-12TOY-COOLANT-RESE-P0840', 'ALD-KEEP-P0818', 'ALD-KEEP-P0294', 'ALD-KEEP-P0544', 'ALD-KEEP-P0691'])
     .map((s) => String(s || '').trim().toUpperCase())
     .filter(Boolean);
 

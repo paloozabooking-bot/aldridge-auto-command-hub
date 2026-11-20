@@ -456,6 +456,75 @@ db.exec(`
     FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_cust_notif_customer ON customer_notifications(customer_id);
+
+  -- Multi-Tenant White-Label SaaS Architecture (Organizations, Subscriptions & Role Seats)
+  CREATE TABLE IF NOT EXISTS organizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    tagline TEXT DEFAULT '',
+    logo_url TEXT DEFAULT '',
+    primary_color TEXT DEFAULT '#0b1628',
+    accent_color TEXT DEFAULT '#ea580c',
+    custom_domain TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    state TEXT DEFAULT '',
+    zip TEXT DEFAULT '',
+    labor_rate_hourly REAL NOT NULL DEFAULT 174.99,
+    shop_supply_fee_rate REAL NOT NULL DEFAULT 0.07,
+    shop_supply_fee_cap REAL NOT NULL DEFAULT 45.00,
+    tax_rate REAL NOT NULL DEFAULT 0.101,
+    handling_fee_default REAL NOT NULL DEFAULT 10.00,
+    handling_days_default INTEGER NOT NULL DEFAULT 3,
+    freight_weight_threshold_lbs REAL NOT NULL DEFAULT 70.0,
+    shopify_domain TEXT DEFAULT '',
+    shopify_client_id TEXT DEFAULT '',
+    shopify_admin_token TEXT DEFAULT '',
+    ebay_username TEXT DEFAULT '',
+    uhaul_dealer_id TEXT DEFAULT '',
+    branding_json TEXT DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS org_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER UNIQUE NOT NULL,
+    plan_tier TEXT NOT NULL DEFAULT 'pro_yard',
+    status TEXT NOT NULL DEFAULT 'active',
+    onboarding_buildout_fee_usd REAL NOT NULL DEFAULT 2500.00,
+    onboarding_fee_status TEXT NOT NULL DEFAULT 'pending',
+    monthly_org_fee_usd REAL NOT NULL DEFAULT 299.00,
+    per_seat_fee_usd REAL NOT NULL DEFAULT 29.00,
+    included_seats INTEGER NOT NULL DEFAULT 5,
+    active_user_seats INTEGER NOT NULL DEFAULT 1,
+    max_locations INTEGER NOT NULL DEFAULT 1,
+    billing_cycle_start TEXT NOT NULL,
+    next_billing_date TEXT NOT NULL,
+    license_key TEXT UNIQUE NOT NULL,
+    features_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS org_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    full_name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'technician',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_org_users_org ON org_users(org_id);
 `);
 
 function ensureColumnExists(table, column, definition) {
@@ -464,6 +533,20 @@ function ensureColumnExists(table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
   }
 }
+
+// Non-breaking multi-tenant org_id scoping across core operational tables (default Tenant #1 = Aldridge Auto's)
+for (const tbl of ['inventory_items', 'donor_vehicles', 'crm_customers', 'appointments', 'orders', 'work_orders', 'dvi_inspections', 'service_quotes']) {
+  ensureColumnExists(tbl, 'org_id', 'INTEGER NOT NULL DEFAULT 1');
+}
+
+// Permanent labor rate migration: replace any legacy $135/$125 hourly rows with locked $174.99/hr
+try {
+  db.exec(`
+    UPDATE work_orders SET labor_rate = 174.99 WHERE labor_rate IN (125, 135);
+    UPDATE service_quotes SET labor_rate = 174.99 WHERE labor_rate IN (125, 135);
+    UPDATE quote_line_items SET labor_rate = 174.99 WHERE labor_rate IN (125, 135);
+  `);
+} catch (_) {}
 
 function normalizePhoneDigits(rawPhone) {
   const digits = String(rawPhone || '').replace(/\D/g, '');
@@ -1887,18 +1970,432 @@ function getPhotoReviewSummary() {
   };
 }
 
+/**
+ * PERMANENT INTAKE-TO-SALE ANTI-PLACEHOLDER VALIDATION GATE
+ * Invoked on EVERY insert, update, AI intake, CSV import, and multi-channel sync.
+ * Blocks any placeholder/incomplete SKU from entering `active` or publishing to Shopify/eBay/Google/Meta/Craigslist.
+ */
+function validateInventoryItemForPublish(item = {}) {
+  const reasons = [];
+  const title = String(item.title || '').trim();
+  const category = String(item.category || '').trim();
+  const mpn = String(item.oem_part_number || '').trim();
+  const fitYears = String(item.fitment_years || '').trim();
+  const fitMake = String(item.fitment_make || '').trim();
+  const fitModel = String(item.fitment_model || '').trim();
+  const fitNotes = String(item.fitment_notes || '').trim();
+  const weight = Number(item.weight_lbs || 0);
+  const lengthIn = Number(item.length_in || 0);
+  const widthIn = Number(item.width_in || 0);
+  const heightIn = Number(item.height_in || 0);
+
+  // 1. Hard safety/emissions compliance block (SRS, airbag, clockspring, seatbelt pretensioner, catalytic converter)
+  const comp = validatePartCompliance({
+    title,
+    category,
+    description: item.description || ''
+  });
+  if (!comp.compliant) {
+    return {
+      valid: false,
+      recommended_status: 'compliance_blocked',
+      reasons: [comp.reason]
+    };
+  }
+
+  // 2. Banned placeholder / raw camera title checks
+  if (!title || title.length < 10) {
+    reasons.push('Title is blank or too short');
+  }
+  if (/tested\s+oem\s+auto\s+part/i.test(title)) {
+    reasons.push('Title contains banned placeholder "Tested OEM Auto Part"');
+  }
+  if (/does\s+not\s+apply/i.test(title)) {
+    reasons.push('Title contains banned placeholder "Does Not Apply"');
+  }
+  if (/\buniversal\b/i.test(title)) {
+    reasons.push('Title contains banned "Universal" claim');
+  }
+  if (/manual\s+review/i.test(title)) {
+    reasons.push('Title contains unfinished "Manual Review" placeholder');
+  }
+  if (/\(\s*P0\d{3}\s*\)|\b(IMG|PXL|DSC|Screenshot)_[0-9]/i.test(title)) {
+    reasons.push('Title contains raw camera filename or photo ID placeholder');
+  }
+
+  // 3. Verified Year + Make + Model + Specific Part Name
+  const hasRealYear = /(19[6-9]\d|20[0-2]\d)/.test(fitYears) || /^(19[6-9]\d|20[0-2]\d)\b/.test(title);
+  if (!hasRealYear) {
+    reasons.push('Missing verified 4-digit vehicle Year / Year Range');
+  }
+  if (!fitMake || /\b(universal|generic|unknown|unverified|n\/a)\b/i.test(fitMake)) {
+    reasons.push('Missing verified vehicle Make');
+  }
+  if (!fitModel || /\b(universal|generic|unknown|unverified|verify|n\/a|application|wiper\s*arm)\b/i.test(fitModel)) {
+    reasons.push('Missing verified vehicle Model');
+  }
+  if (/\buniversal\b/i.test(`${fitYears} ${fitMake} ${fitModel} ${fitNotes}`)) {
+    reasons.push('Fitment contains banned "Universal" wording');
+  }
+
+  // 4. Banned / fake MPN checks (blank is allowed when unstamped; placeholders & hashes are banned)
+  if (mpn) {
+    if (/does\s+not\s+apply|^n\/?a$/i.test(mpn)) {
+      reasons.push('MPN contains banned placeholder "Does Not Apply" / "N/A"');
+    }
+    if (/^[0-9a-f]{4}-[0-9a-f]{4}/i.test(mpn) || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(mpn)) {
+      reasons.push(`MPN "${mpn}" matches fake hex/UUID hash pattern`);
+    }
+    if (/^(19|20)\d{2}-[A-Z]/i.test(mpn)) {
+      reasons.push(`MPN "${mpn}" is a fake Year-Make filename prefix`);
+    }
+    if (/^ALD-/i.test(mpn)) {
+      reasons.push(`MPN "${mpn}" is an internal SKU, not an OEM part number`);
+    }
+  }
+
+  // 5. Category, item-specific shipping weight & packed L x W x H dimensions
+  if (!category) {
+    reasons.push('Missing automotive taxonomy category');
+  }
+  if (!Number.isFinite(weight) || weight <= 0) {
+    reasons.push('Missing or zero shipping weight (weight_lbs)');
+  } else if (weight === 2) {
+    reasons.push('Default fallback 2 lb shipping weight is blocked — specify accurate packed weight');
+  }
+  if (!Number.isFinite(lengthIn) || lengthIn <= 0 || !Number.isFinite(widthIn) || widthIn <= 0 || !Number.isFinite(heightIn) || heightIn <= 0) {
+    reasons.push('Missing or zero packed box dimensions (L x W x H in inches)');
+  }
+
+  return {
+    valid: reasons.length === 0,
+    recommended_status: reasons.length === 0 ? 'active' : 'pending_verification',
+    reasons
+  };
+}
+
+/* ==================== MULTI-TENANT WHITE-LABEL SAAS LAYER ==================== */
+const SAAS_PLAN_TIERS = {
+  starter: { label: 'Starter Shop / Mobile Tech', monthly_org_fee_usd: 149.00, per_seat_fee_usd: 25.00, included_seats: 3, max_locations: 1, onboarding_buildout_fee_usd: 1500.00 },
+  pro_yard: { label: 'Pro Auto Dismantler & Repair', monthly_org_fee_usd: 299.00, per_seat_fee_usd: 29.00, included_seats: 10, max_locations: 2, onboarding_buildout_fee_usd: 2500.00 },
+  enterprise_franchise: { label: 'Enterprise Multi-Location Franchise', monthly_org_fee_usd: 599.00, per_seat_fee_usd: 24.00, included_seats: 25, max_locations: 10, onboarding_buildout_fee_usd: 4950.00 }
+};
+
+function seedDefaultOrganizationIfNeeded() {
+  const existing = db.prepare('SELECT id FROM organizations WHERE id = 1 OR slug = ?').get('aldridge-autos');
+  const now = new Date().toISOString();
+  const nextMonth = new Date(Date.now() + 30 * 86400 * 1000).toISOString().slice(0, 10);
+
+  if (!existing) {
+    const s = getSettings();
+    db.prepare(`
+      INSERT INTO organizations (
+        id, slug, name, tagline, logo_url, primary_color, accent_color, custom_domain,
+        phone, email, address, city, state, zip,
+        labor_rate_hourly, shop_supply_fee_rate, shop_supply_fee_cap, tax_rate,
+        handling_fee_default, handling_days_default, freight_weight_threshold_lbs,
+        shopify_domain, ebay_username, uhaul_dealer_id, branding_json, active, created_at, updated_at
+      ) VALUES (1, 'aldridge-autos', ?, ?, '/assets/aldridge-crest.jpg', '#0b1628', '#ea580c', ?, ?, ?, ?, 'University Place', 'WA', ?, 174.99, 0.07, 45.00, 0.101, 10.00, 3, 70.0, ?, 'aabcas', '046117', ?, 1, ?, ?)
+    `).run(
+      "Aldridge Auto's Service & Repair",
+      s.tagline || '5.0★ Full-Service Auto Repair, Verified Photographed OEM Auto Parts & U-Haul #046117',
+      s.canonical_domain || 'https://aldridgeautosupply.com',
+      s.phone || '(253) 245-4206',
+      s.email || 'service@aldridgeautosupply.com',
+      s.address || '5115 66th St W, Bldg B, University Place, WA 98467',
+      s.zip || '98467',
+      s.shopify_domain || 'aldridgesales.myshopify.com',
+      JSON.stringify({ white_label_enabled: true, google_rating: '5.0', google_reviews: 87, uhaul_enabled: true }),
+      now,
+      now
+    );
+
+    db.prepare(`
+      INSERT OR IGNORE INTO org_subscriptions (
+        org_id, plan_tier, status, onboarding_buildout_fee_usd, onboarding_fee_status,
+        monthly_org_fee_usd, per_seat_fee_usd, included_seats, active_user_seats,
+        max_locations, billing_cycle_start, next_billing_date, license_key, features_json, created_at, updated_at
+      ) VALUES (1, 'enterprise_franchise', 'active', 2500.00, 'waived', 299.00, 29.00, 10, 4, 5, ?, ?, 'LIC-ALDRIDGE-FLAGSHIP-0001', ?, ?, ?)
+    `).run(
+      now.slice(0, 10),
+      nextMonth,
+      JSON.stringify({ dvi_gemini_vision: true, shopify_co_master: true, crosslist_ebay_sync: true, customer_portal: true, multi_location: true, white_label_domain: true }),
+      now,
+      now
+    );
+
+    const defaultSeats = [
+      { full_name: 'Chris Aldridge', email: 'chris@aldridgeautosupply.com', phone: '(253) 245-4206', role: 'owner' },
+      { full_name: 'Maria (Office Manager)', email: 'office@aldridgeautosupply.com', phone: '(253) 245-4206', role: 'office_manager' },
+      { full_name: 'Lead ASE Bay Technician', email: 'bays@aldridgeautosupply.com', phone: '(253) 245-4206', role: 'technician' },
+      { full_name: 'Customer Portal Guest Seat', email: 'portal@aldridgeautosupply.com', phone: '', role: 'customer' }
+    ];
+    const insUser = db.prepare(`
+      INSERT INTO org_users (org_id, full_name, email, phone, role, active, created_at, updated_at)
+      VALUES (1, ?, ?, ?, ?, 1, ?, ?)
+    `);
+    for (const u of defaultSeats) {
+      insUser.run(u.full_name, u.email, u.phone, u.role, now, now);
+    }
+  } else {
+    // Ensure Tenant #1 always stays locked at $174.99/hr and 10.1% Tacoma/UP WA tax
+    db.prepare(`
+      UPDATE organizations
+      SET labor_rate_hourly = 174.99, shop_supply_fee_rate = 0.07, shop_supply_fee_cap = 45.00, tax_rate = 0.101, updated_at = ?
+      WHERE id = 1 AND labor_rate_hourly != 174.99
+    `).run(now);
+  }
+}
+
+function hydrateOrganization(orgRow) {
+  if (!orgRow) return null;
+  const sub = db.prepare('SELECT * FROM org_subscriptions WHERE org_id = ?').get(orgRow.id) || null;
+  const users = db.prepare('SELECT id, org_id, full_name, email, phone, role, active, created_at FROM org_users WHERE org_id = ? ORDER BY id ASC').all(orgRow.id);
+  const activeSeats = users.filter((u) => u.active).length;
+  const seatCountsByRole = { owner: 0, office_manager: 0, technician: 0, customer: 0 };
+  for (const u of users) {
+    if (u.active && seatCountsByRole[u.role] !== undefined) seatCountsByRole[u.role]++;
+  }
+  const extraSeats = sub ? Math.max(0, activeSeats - Number(sub.included_seats || 0)) : 0;
+  const estimatedMonthlyTotal = sub
+    ? Number((Number(sub.monthly_org_fee_usd || 0) + extraSeats * Number(sub.per_seat_fee_usd || 0)).toFixed(2))
+    : 0;
+  return {
+    ...orgRow,
+    shopify_admin_token: orgRow.shopify_admin_token ? '***configured***' : '',
+    branding: (() => { try { return JSON.parse(orgRow.branding_json || '{}'); } catch (_) { return {}; } })(),
+    subscription: sub ? {
+      ...sub,
+      active_user_seats: activeSeats,
+      extra_billable_seats: extraSeats,
+      estimated_monthly_total_usd: estimatedMonthlyTotal,
+      features: (() => { try { return JSON.parse(sub.features_json || '{}'); } catch (_) { return {}; } })()
+    } : null,
+    seat_counts_by_role: seatCountsByRole,
+    users
+  };
+}
+
+function resolveOrganization(slugOrHostOrId = 1) {
+  seedDefaultOrganizationIfNeeded();
+  if (typeof slugOrHostOrId === 'number' || /^\d+$/.test(String(slugOrHostOrId))) {
+    const byId = db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(slugOrHostOrId));
+    if (byId) return hydrateOrganization(byId);
+  }
+  const key = String(slugOrHostOrId || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (key) {
+    const bySlug = db.prepare('SELECT * FROM organizations WHERE LOWER(slug) = ?').get(key);
+    if (bySlug) return hydrateOrganization(bySlug);
+    const byDomain = db.prepare("SELECT * FROM organizations WHERE LOWER(REPLACE(REPLACE(custom_domain, 'https://', ''), 'http://', '')) LIKE ?").get(`${key}%`);
+    if (byDomain) return hydrateOrganization(byDomain);
+  }
+  return hydrateOrganization(db.prepare('SELECT * FROM organizations WHERE id = 1').get());
+}
+
+function listOrganizationsWithSubscriptions() {
+  seedDefaultOrganizationIfNeeded();
+  return db.prepare('SELECT * FROM organizations ORDER BY id ASC').all().map(hydrateOrganization);
+}
+
+function createOrganizationTenant(payload = {}) {
+  seedDefaultOrganizationIfNeeded();
+  const name = String(payload.name || '').trim();
+  if (!name) throw new Error('Organization name is required.');
+  const rawSlug = String(payload.slug || name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const slug = rawSlug || `shop-${Date.now()}`;
+  const existing = db.prepare('SELECT id FROM organizations WHERE slug = ?').get(slug);
+  if (existing) throw new Error(`Organization slug "${slug}" already exists.`);
+
+  const tierKey = SAAS_PLAN_TIERS[payload.plan_tier] ? payload.plan_tier : 'pro_yard';
+  const tier = SAAS_PLAN_TIERS[tierKey];
+  const now = new Date().toISOString();
+  const nextMonth = new Date(Date.now() + 30 * 86400 * 1000).toISOString().slice(0, 10);
+  const licenseKey = `LIC-${slug.slice(0, 10).toUpperCase().replace(/[^A-Z0-9]/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+  const ins = db.prepare(`
+    INSERT INTO organizations (
+      slug, name, tagline, logo_url, primary_color, accent_color, custom_domain,
+      phone, email, address, city, state, zip,
+      labor_rate_hourly, shop_supply_fee_rate, shop_supply_fee_cap, tax_rate,
+      handling_fee_default, handling_days_default, freight_weight_threshold_lbs,
+      shopify_domain, shopify_client_id, shopify_admin_token, ebay_username, uhaul_dealer_id,
+      branding_json, active, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(
+    slug,
+    name,
+    String(payload.tagline || `${name} — Verified OEM Parts & Auto Repair`),
+    String(payload.logo_url || '/assets/aldridge-crest.jpg'),
+    String(payload.primary_color || '#0b1628'),
+    String(payload.accent_color || '#ea580c'),
+    String(payload.custom_domain || ''),
+    String(payload.phone || ''),
+    String(payload.email || ''),
+    String(payload.address || ''),
+    String(payload.city || ''),
+    String(payload.state || ''),
+    String(payload.zip || ''),
+    Number(payload.labor_rate_hourly ?? 174.99),
+    Number(payload.shop_supply_fee_rate ?? 0.07),
+    Number(payload.shop_supply_fee_cap ?? 45.00),
+    Number(payload.tax_rate ?? 0.101),
+    Number(payload.handling_fee_default ?? 10.00),
+    Number(payload.handling_days_default ?? 3),
+    Number(payload.freight_weight_threshold_lbs ?? 70.0),
+    String(payload.shopify_domain || ''),
+    String(payload.shopify_client_id || ''),
+    String(payload.shopify_admin_token || ''),
+    String(payload.ebay_username || ''),
+    String(payload.uhaul_dealer_id || ''),
+    JSON.stringify(payload.branding || { white_label_enabled: true }),
+    now,
+    now
+  );
+
+  const orgId = Number(ins.lastInsertRowid);
+  db.prepare(`
+    INSERT INTO org_subscriptions (
+      org_id, plan_tier, status, onboarding_buildout_fee_usd, onboarding_fee_status,
+      monthly_org_fee_usd, per_seat_fee_usd, included_seats, active_user_seats,
+      max_locations, billing_cycle_start, next_billing_date, license_key, features_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    orgId,
+    tierKey,
+    String(payload.subscription_status || 'active'),
+    Number(payload.onboarding_buildout_fee_usd ?? tier.onboarding_buildout_fee_usd),
+    String(payload.onboarding_fee_status || 'pending'),
+    Number(payload.monthly_org_fee_usd ?? tier.monthly_org_fee_usd),
+    Number(payload.per_seat_fee_usd ?? tier.per_seat_fee_usd),
+    Number(payload.included_seats ?? tier.included_seats),
+    Number(payload.max_locations ?? tier.max_locations),
+    now.slice(0, 10),
+    nextMonth,
+    licenseKey,
+    JSON.stringify({ dvi_gemini_vision: true, shopify_co_master: true, crosslist_ebay_sync: true, customer_portal: true, white_label_domain: true }),
+    now,
+    now
+  );
+
+  db.prepare(`
+    INSERT INTO org_users (org_id, full_name, email, phone, role, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'owner', 1, ?, ?)
+  `).run(orgId, String(payload.owner_name || `${name} Owner`), String(payload.email || ''), String(payload.phone || ''), now, now);
+
+  logSync('outbound', 'saas_tenants', 'provision_tenant', slug, 'success', `Provisioned white-label tenant #${orgId} (${name}, tier=${tierKey}, labor=$${Number(payload.labor_rate_hourly ?? 174.99).toFixed(2)}/hr, license=${licenseKey}).`);
+  return resolveOrganization(orgId);
+}
+
+function updateOrganizationTenant(orgId, patch = {}) {
+  seedDefaultOrganizationIfNeeded();
+  const current = db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(orgId));
+  if (!current) throw new Error(`Organization #${orgId} not found.`);
+  const now = new Date().toISOString();
+
+  db.prepare(`
+    UPDATE organizations SET
+      name = COALESCE(?, name),
+      tagline = COALESCE(?, tagline),
+      logo_url = COALESCE(?, logo_url),
+      primary_color = COALESCE(?, primary_color),
+      accent_color = COALESCE(?, accent_color),
+      custom_domain = COALESCE(?, custom_domain),
+      phone = COALESCE(?, phone),
+      email = COALESCE(?, email),
+      address = COALESCE(?, address),
+      city = COALESCE(?, city),
+      state = COALESCE(?, state),
+      zip = COALESCE(?, zip),
+      labor_rate_hourly = COALESCE(?, labor_rate_hourly),
+      shop_supply_fee_rate = COALESCE(?, shop_supply_fee_rate),
+      shop_supply_fee_cap = COALESCE(?, shop_supply_fee_cap),
+      tax_rate = COALESCE(?, tax_rate),
+      shopify_domain = COALESCE(?, shopify_domain),
+      ebay_username = COALESCE(?, ebay_username),
+      uhaul_dealer_id = COALESCE(?, uhaul_dealer_id),
+      updated_at = ?
+    WHERE id = ?
+  `).run(
+    patch.name ?? null,
+    patch.tagline ?? null,
+    patch.logo_url ?? null,
+    patch.primary_color ?? null,
+    patch.accent_color ?? null,
+    patch.custom_domain ?? null,
+    patch.phone ?? null,
+    patch.email ?? null,
+    patch.address ?? null,
+    patch.city ?? null,
+    patch.state ?? null,
+    patch.zip ?? null,
+    patch.labor_rate_hourly !== undefined ? Number(patch.labor_rate_hourly) : null,
+    patch.shop_supply_fee_rate !== undefined ? Number(patch.shop_supply_fee_rate) : null,
+    patch.shop_supply_fee_cap !== undefined ? Number(patch.shop_supply_fee_cap) : null,
+    patch.tax_rate !== undefined ? Number(patch.tax_rate) : null,
+    patch.shopify_domain ?? null,
+    patch.ebay_username ?? null,
+    patch.uhaul_dealer_id ?? null,
+    now,
+    Number(orgId)
+  );
+
+  if (patch.plan_tier || patch.subscription_status || patch.onboarding_fee_status || patch.monthly_org_fee_usd !== undefined || patch.onboarding_buildout_fee_usd !== undefined) {
+    db.prepare(`
+      UPDATE org_subscriptions SET
+        plan_tier = COALESCE(?, plan_tier),
+        status = COALESCE(?, status),
+        onboarding_fee_status = COALESCE(?, onboarding_fee_status),
+        onboarding_buildout_fee_usd = COALESCE(?, onboarding_buildout_fee_usd),
+        monthly_org_fee_usd = COALESCE(?, monthly_org_fee_usd),
+        updated_at = ?
+      WHERE org_id = ?
+    `).run(
+      patch.plan_tier ?? null,
+      patch.subscription_status ?? null,
+      patch.onboarding_fee_status ?? null,
+      patch.onboarding_buildout_fee_usd !== undefined ? Number(patch.onboarding_buildout_fee_usd) : null,
+      patch.monthly_org_fee_usd !== undefined ? Number(patch.monthly_org_fee_usd) : null,
+      now,
+      Number(orgId)
+    );
+  }
+  return resolveOrganization(Number(orgId));
+}
+
+function addOrganizationUserSeat(orgId, seat = {}) {
+  seedDefaultOrganizationIfNeeded();
+  const org = db.prepare('SELECT id FROM organizations WHERE id = ?').get(Number(orgId));
+  if (!org) throw new Error(`Organization #${orgId} not found.`);
+  const fullName = String(seat.full_name || '').trim();
+  if (!fullName) throw new Error('Seat full_name is required.');
+  const role = ['owner', 'office_manager', 'technician', 'customer'].includes(String(seat.role || '').toLowerCase())
+    ? String(seat.role).toLowerCase()
+    : 'technician';
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO org_users (org_id, full_name, email, phone, role, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(Number(orgId), fullName, String(seat.email || ''), String(seat.phone || ''), role, now, now);
+
+  const count = db.prepare('SELECT COUNT(*) c FROM org_users WHERE org_id = ? AND active = 1').get(Number(orgId)).c;
+  db.prepare('UPDATE org_subscriptions SET active_user_seats = ?, updated_at = ? WHERE org_id = ?').run(count, now, Number(orgId));
+  return resolveOrganization(Number(orgId));
+}
+
 if (getSettings().clean_slate_mode) {
   ensureCleanSlateBaseline();
 } else {
   seedDemoDataIfNeeded();
   seedAuditGroundTruthCatalog(false);
 }
+seedDefaultOrganizationIfNeeded();
 seedPhotoReviewCatalogIfNeeded(false);
 ensureNonDescriptivePendingFilteredOnce();
 
 module.exports = {
   db,
   DATA_DIR,
+  SAAS_PLAN_TIERS,
   getSettings,
   updateSettings,
   generateSecurityCode,
@@ -1906,12 +2403,19 @@ module.exports = {
   computeShippingClass,
   validateVinStrict,
   validatePartCompliance,
+  validateInventoryItemForPublish,
   normalizePhoneDigits,
   upsertCustomer,
   logSync,
   ensureCleanSlateBaseline,
   seedDemoDataIfNeeded,
   seedAuditGroundTruthCatalog,
+  seedDefaultOrganizationIfNeeded,
+  resolveOrganization,
+  listOrganizationsWithSubscriptions,
+  createOrganizationTenant,
+  updateOrganizationTenant,
+  addOrganizationUserSeat,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
   getPhotoReviewSummary,
