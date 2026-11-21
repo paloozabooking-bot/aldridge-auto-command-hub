@@ -15,7 +15,8 @@
     activeChannel: 'all',
     lastResponse: null,
     activeVinSession: null,
-    uploadedPhotoDataUrls: []
+    queuedFiles: [],
+    lastBatchResult: null
   };
 
   function esc(s) {
@@ -367,36 +368,68 @@
             ` : ''}
           </div>
 
-          <!-- STEP 2: PART PHOTO UPLOAD & SINGLE-VARIANT PUBLISH (DISABLED UNTIL STEP 1 LOCKED!) -->
+          <!-- STEP 2: 100% HANDS-FREE AI MULTI-INPUT BATCH INTAKE (DISABLED UNTIL STEP 1 LOCKED!) -->
           <div class="surface-card" style="position:relative;border:2px solid ${locked ? '#1f1711' : '#d6d3d1'};opacity:${locked ? '1' : '0.62'};">
             <div style="font-size:0.75rem;font-weight:800;color:${locked ? '#1f1711' : '#78716c'};text-transform:uppercase;margin-bottom:0.35rem;">
-              ${locked ? '🔓 STEP 2 UNLOCKED — UPLOAD PART PHOTOS & PUBLISH (1 IN STOCK)' : '🔒 STEP 2 LOCKED — COMPLETE STEP 1 VIN DECODE FIRST'}
+              ${locked ? '🔓 STEP 2 UNLOCKED — 100% HANDS-FREE AI MULTI-INPUT BATCH INTAKE (ZERO TYPING)' : '🔒 STEP 2 LOCKED — COMPLETE STEP 1 VIN DECODE FIRST'}
             </div>
-            <form id="emp-step2-part-form">
+            <p style="margin:0 0 0.7rem;font-size:0.82rem;color:#5c4b39;">
+              Drop <strong>shop photos</strong>, capture directly from your <strong>phone/tablet camera</strong>, drop a <strong>.zip archive</strong>, or paste a <strong>Google Drive folder/file link</strong>. AI Vision automatically identifies every OEM part, reads stamped MPNs, prices, sets <code>vp-1-4-*</code> taxonomy &amp; box weight/dims, merges duplicate angles, attaches QR tags, and publishes live (Qty: 1).
+            </p>
+            <form id="emp-step2-batch-form">
               <fieldset ${locked ? '' : 'disabled'} style="border:none;padding:0;margin:0;">
-                <div class="form-group">
-                  <label>Upload Real Part Photo(s) * (Camera or Shop Folder)</label>
-                  <input type="file" id="emp-step2-photo-input" class="input" accept="image/*" multiple />
-                  <div id="emp-step2-photo-preview" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
+                <div id="emp-ai-dropzone" class="ai-batch-dropzone">
+                  <div class="ai-dropzone-actions">
+                    <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">
+                      📸 Snap Camera Photo(s)
+                      <input type="file" id="emp-step2-camera-input" accept="image/*" capture="environment" multiple style="display:none;" />
+                    </label>
+                    <label class="btn btn-dark btn-sm" style="cursor:pointer;margin:0;">
+                      🖼 Upload Photos or .ZIP Archive
+                      <input type="file" id="emp-step2-files-input" accept="image/*,.zip,application/zip,application/x-zip-compressed" multiple style="display:none;" />
+                    </label>
+                  </div>
+                  <div class="ai-dropzone-hint">Drag &amp; drop multiple part photos or a <code>.zip</code> archive here — zero manual part typing required</div>
+                  <div id="emp-step2-file-queue" class="ai-file-queue"></div>
                 </div>
-                <div class="form-group">
-                  <label>Specific OEM Part Name *</label>
-                  <input name="part_name" class="input" required placeholder="e.g. Front Left Driver Door Shell, Engine Control Module (ECM)" />
+
+                <div class="form-group" style="margin-top:0.7rem;">
+                  <label for="emp-step2-drive-url">☁️ Or Paste Google Drive Folder / File Link (Optional — Auto-Fetched &amp; Unpacked Server-Side)</label>
+                  <input id="emp-step2-drive-url" name="drive_url" class="input" type="url" placeholder="https://drive.google.com/drive/folders/... or /file/d/..." />
                 </div>
-                <div class="grid-2" style="gap:0.55rem;">
-                  <div class="form-group"><label>Stamped OEM Part # (Optional)</label><input name="oem_part_number" class="input mono" placeholder="e.g. 89661-35822" /></div>
-                  <div class="form-group"><label>Retail Price (USD) *</label><input name="price_we_pull" type="number" step="0.01" class="input" required value="125.00" /></div>
+
+                <div class="grid-3-compact" style="margin-top:0.5rem;">
+                  <div class="form-group">
+                    <label>Shelf / Bin Prefix</label>
+                    <input name="bin_location" class="input" value="BAY-B-SHELF" placeholder="BAY-B-SHELF" />
+                  </div>
+                  <div class="form-group">
+                    <label>Multi-Angle Grouping</label>
+                    <select name="grouping_mode" class="select">
+                      <option value="auto" selected>Auto-Detect &amp; Merge Angles</option>
+                      <option value="single_part">All Photos = 1 Part</option>
+                      <option value="one_per_photo">1 Photo = 1 Part</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Push Live to Shopify?</label>
+                    <select name="push_shopify" class="select">
+                      <option value="true" selected>Yes — Push Live Immediately</option>
+                      <option value="false">Save to Storefront First</option>
+                    </select>
+                  </div>
                 </div>
-                <div class="grid-2" style="gap:0.55rem;">
-                  <div class="form-group"><label>Shelf / Bin Location</label><input name="bin_location" class="input" value="BAY-B-SHELF" /></div>
-                  <div class="form-group"><label>Push Live to Shopify?</label><select name="push_shopify" class="select"><option value="true" selected>Yes — Push to Shopify Immediately</option><option value="false">Save to Storefront First</option></select></div>
-                </div>
-                <div id="emp-step2-msg" style="margin:0.55rem 0;"></div>
-                <button type="submit" class="btn btn-dark" style="width:100%;">Publish Single-Variant Verified OEM Part (Qty: 1)</button>
+
+                <div id="emp-step2-msg" style="margin:0.65rem 0;"></div>
+                <button type="submit" id="emp-step2-submit-btn" class="btn btn-dark" style="width:100%;padding:0.8rem 1rem;font-size:0.95rem;">
+                  ⚡ Run Hands-Free AI Intake &amp; Publish All Verified OEM Parts (Qty: 1)
+                </button>
               </fieldset>
             </form>
           </div>
         </div>
+
+        <div id="emp-batch-summary-out" style="margin-top:1rem;"></div>
       </div>
     `;
 
@@ -407,6 +440,119 @@
         if (el.id !== 'employee-vin-intake-gate') el.style.display = 'none';
       });
     }
+
+    function renderQueuedFiles() {
+      const qEl = document.getElementById('emp-step2-file-queue');
+      if (!qEl) return;
+      if (!aggState.queuedFiles.length) {
+        qEl.innerHTML = '';
+        return;
+      }
+      qEl.innerHTML = aggState.queuedFiles.map((f, idx) => {
+        const isZip = /\.zip$/i.test(f.name) || /zip/i.test(f.type);
+        const kb = Math.max(1, Math.round(f.size / 1024));
+        const sizeLabel = kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
+        return `
+          <div class="ai-queued-chip ${isZip ? 'is-zip' : ''}">
+            <span>${isZip ? '📦' : '📷'} <strong>${esc(f.name)}</strong> <small>(${sizeLabel})</small></span>
+            <button type="button" data-rm-file="${idx}" aria-label="Remove file">✕</button>
+          </div>
+        `;
+      }).join('');
+      qEl.querySelectorAll('[data-rm-file]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.getAttribute('data-rm-file'));
+          aggState.queuedFiles.splice(i, 1);
+          renderQueuedFiles();
+        });
+      });
+    }
+
+    function enqueueFiles(fileList) {
+      const incoming = Array.from(fileList || []);
+      for (const f of incoming) {
+        if (aggState.queuedFiles.length >= 60) break;
+        const dup = aggState.queuedFiles.some((x) => x.name === f.name && x.size === f.size);
+        if (!dup) aggState.queuedFiles.push(f);
+      }
+      renderQueuedFiles();
+    }
+
+    function renderBatchSummary(d) {
+      const box = document.getElementById('emp-batch-summary-out');
+      if (!box || !d) return;
+      const items = d.created_items || [];
+      const skipped = d.skipped_items || [];
+      box.innerHTML = `
+        <div class="ai-batch-summary-card">
+          <div class="ai-batch-summary-top">
+            <div>
+              <div class="eyebrow-label" style="color:#15803d;margin-bottom:0.15rem;">✓ HANDS-FREE AI BATCH INTAKE COMPLETE • VIN ${esc(d.session?.vin || '')}</div>
+              <h4 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.15rem;color:#14532d;">
+                ${items.length} Single-Variant OEM SKU${items.length === 1 ? '' : 's'} Auto-Created &amp; Published Live
+              </h4>
+            </div>
+            <div class="ai-batch-kpis">
+              <span>📷 ${d.total_photos_received || 0} Photos In</span>
+              <span>🔗 ${d.duplicate_angles_merged || 0} Duplicate Angles Merged</span>
+              ${skipped.length ? `<span style="background:#fef3c7;color:#92400e;">⚠ ${skipped.length} Skipped / Flagged</span>` : ''}
+            </div>
+          </div>
+
+          ${items.length ? `
+            <div class="ai-sku-cards-grid">
+              ${items.map((it) => {
+                const sh = it.shopify_push;
+                const shBadge = sh && sh.pushed
+                  ? '<span class="sku-badge-live">✓ Live on Shopify + QR Tag</span>'
+                  : (sh && sh.queued_for_shopify
+                    ? '<span class="sku-badge-queue">⏳ Queued for Shopify Sync</span>'
+                    : '<span class="sku-badge-store">✓ Live on Storefront &amp; Feeds</span>');
+                return `
+                  <article class="ai-sku-card">
+                    <div class="ai-sku-card-media">
+                      ${it.thumbnail ? `<img src="${esc(it.thumbnail)}" alt="${esc(it.title)}" />` : '<div class="ai-sku-noimg">OEM</div>'}
+                      <span class="ai-sku-photo-cnt">${it.photo_count} photo${it.photo_count === 1 ? '' : 's'} + QR</span>
+                    </div>
+                    <div class="ai-sku-card-body">
+                      <div class="ai-sku-meta-row">
+                        <code class="mono">${esc(it.sku)}</code>
+                        ${shBadge}
+                      </div>
+                      <h5>${esc(it.title)}</h5>
+                      <div class="ai-sku-specs">
+                        ${it.oem_part_number ? `<span><strong>MPN:</strong> <code>${esc(it.oem_part_number)}</code></span>` : ''}
+                        <span><strong>Taxonomy:</strong> <code>${esc(it.taxonomy?.shopify_taxonomy_id || '')}</code></span>
+                        <span><strong>Packed:</strong> ${it.weight_lbs} lb (${esc(it.dimensions_in)} in)</span>
+                        <span><strong>Bin:</strong> ${esc(it.bin_location)} • <strong>Qty:</strong> ${it.quantity}</span>
+                      </div>
+                      <div class="ai-sku-price-row">
+                        <div>Part Retail: <strong>${money(it.price_we_pull)}</strong></div>
+                        <div>Installed ($174.99/hr): <strong>${money(it.price_pull_install)}</strong></div>
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }).join('')}
+            </div>
+          ` : ''}
+
+          ${skipped.length ? `
+            <div class="ai-skipped-box">
+              <strong>Flagged / Skipped Items (${skipped.length}):</strong>
+              <ul>
+                ${skipped.map((s) => `<li><strong>${esc(s.filename)}</strong>: ${esc(s.reason)}</li>`).join('')}
+              </ul>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    if (aggState.lastBatchResult) {
+      renderBatchSummary(aggState.lastBatchResult);
+    }
+    renderQueuedFiles();
 
     host.querySelector('#btn-clean-slate-purge-trigger')?.addEventListener('click', async () => {
       const out = document.getElementById('emp-purge-status-out');
@@ -444,73 +590,95 @@
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'VIN decode failed (sign in to Employee Backend first).');
         aggState.activeVinSession = d.session;
-        aggState.uploadedPhotoDataUrls = [];
+        aggState.queuedFiles = [];
+        aggState.lastBatchResult = null;
         renderEmployeeVinIntakeGate();
       } catch (err) {
         out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
       }
     });
 
-    host.querySelector('#emp-step2-photo-input')?.addEventListener('change', (e) => {
-      const files = Array.from(e.target.files || []).slice(0, 6);
-      aggState.uploadedPhotoDataUrls = [];
-      const prev = document.getElementById('emp-step2-photo-preview');
-      if (prev) prev.innerHTML = '';
-      files.forEach((f) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          aggState.uploadedPhotoDataUrls.push(reader.result);
-          if (prev) {
-            const img = document.createElement('img');
-            img.src = reader.result;
-            img.style.cssText = 'width:58px;height:58px;object-fit:cover;border-radius:8px;border:1px solid #d6c5ae;';
-            prev.appendChild(img);
-          }
-        };
-        reader.readAsDataURL(f);
-      });
+    host.querySelector('#emp-step2-camera-input')?.addEventListener('change', (e) => {
+      enqueueFiles(e.target.files);
+      e.target.value = '';
     });
 
-    host.querySelector('#emp-step2-part-form')?.addEventListener('submit', async (e) => {
+    host.querySelector('#emp-step2-files-input')?.addEventListener('change', (e) => {
+      enqueueFiles(e.target.files);
+      e.target.value = '';
+    });
+
+    const dz = host.querySelector('#emp-ai-dropzone');
+    if (dz && locked) {
+      dz.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dz.classList.add('drag-over');
+      });
+      dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+      dz.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dz.classList.remove('drag-over');
+        if (e.dataTransfer?.files?.length) enqueueFiles(e.dataTransfer.files);
+      });
+    }
+
+    host.querySelector('#emp-step2-batch-form')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!aggState.activeVinSession) return;
-      const fd = new FormData(e.target);
-      const body = Object.fromEntries(fd.entries());
-      body.session_code = aggState.activeVinSession.session_code;
-      body.photos = aggState.uploadedPhotoDataUrls;
-      body.push_shopify = body.push_shopify === 'true';
+      const formEl = e.target;
+      const driveUrl = String(formEl.querySelector('[name="drive_url"]')?.value || '').trim();
       const out = document.getElementById('emp-step2-msg');
-      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">Running taxonomy (vp-1-4-*), dimensions, zero-duplicate check &amp; publishing...</p>';
+      if (!aggState.queuedFiles.length && !driveUrl) {
+        out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Attach at least 1 photo, drop a .zip archive, or paste a Google Drive link first.</div>';
+        return;
+      }
+
+      const fd = new FormData();
+      fd.append('session_code', aggState.activeVinSession.session_code);
+      fd.append('bin_location', String(formEl.querySelector('[name="bin_location"]')?.value || 'BAY-B-SHELF').trim());
+      fd.append('grouping_mode', String(formEl.querySelector('[name="grouping_mode"]')?.value || 'auto'));
+      fd.append('push_shopify', String(formEl.querySelector('[name="push_shopify"]')?.value || 'true'));
+      if (driveUrl) fd.append('drive_url', driveUrl);
+      for (const f of aggState.queuedFiles) {
+        fd.append('files', f, f.name);
+      }
+
+      const btn = document.getElementById('emp-step2-submit-btn');
+      if (btn) btn.disabled = true;
+      out.innerHTML = '<div class="agg-loading">⚡ Running Hands-Free AI Vision + Stamped MPN OCR, unpacking ZIP/Drive assets, assigning vp-1-4-* taxonomy &amp; box dimensions, merging duplicate angles, attaching QR security tags &amp; pushing live...</div>';
       try {
-        const r = await fetch('/api/employee/intake/part', {
+        const r = await fetch('/api/employee/intake/batch-ai', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          headers: { ...getEmployeeTokenHeader() },
           credentials: 'same-origin',
-          body: JSON.stringify(body)
+          body: fd
         });
         const d = await r.json();
-        if (!r.ok || !d.ok) throw new Error(d.error || 'Part publish failed.');
-        out.innerHTML = `<div style="background:#ecfdf5;border:1.5px solid #22c55e;border-radius:10px;padding:0.7rem;font-size:0.84rem;">
-          ✓ Published Single-Variant OEM SKU <strong>${esc(d.item.sku)}</strong> (${esc(d.item.title)}) • Taxonomy: <code>${esc(d.taxonomy.shopify_taxonomy_id)}</code> • Qty: 1
+        if (!r.ok || !d.ok) throw new Error(d.error || 'AI Batch Intake failed.');
+        aggState.lastBatchResult = d;
+        aggState.queuedFiles = [];
+        renderQueuedFiles();
+        formEl.querySelector('[name="drive_url"]').value = '';
+        out.innerHTML = `<div style="background:#ecfdf5;border:1.5px solid #22c55e;border-radius:10px;padding:0.65rem;font-size:0.84rem;color:#14532d;font-weight:700;">
+          ✓ Created ${d.created_count} verified OEM SKU${d.created_count === 1 ? '' : 's'} from ${d.total_photos_received} photo${d.total_photos_received === 1 ? '' : 's'} (${d.duplicate_angles_merged} duplicate angle${d.duplicate_angles_merged === 1 ? '' : 's'} merged). See summary cards below!
         </div>`;
-        aggState.uploadedPhotoDataUrls = [];
-        e.target.reset();
-        const prev = document.getElementById('emp-step2-photo-preview');
-        if (prev) prev.innerHTML = '';
+        renderBatchSummary(d);
       } catch (err) {
         out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
+      } finally {
+        if (btn) btn.disabled = false;
       }
     });
   }
 
-  function initV23() {
+  function initV24() {
     renderHeroVinAggregator();
     renderEmployeeVinIntakeGate();
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initV23);
+    document.addEventListener('DOMContentLoaded', initV24);
   } else {
-    initV23();
+    initV24();
   }
 })();

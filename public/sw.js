@@ -1,14 +1,14 @@
-const CACHE_NAME = 'aldridge-autos-hub-v23';
+const CACHE_NAME = 'aldridge-autos-hub-v24';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=23',
-  '/app.js?v=23',
-  '/storefront-menu.js?v=23',
-  '/sourcing-storefront.js?v=23',
-  '/vin-aggregator-ui.js?v=23',
-  '/dvi-portal.js?v=23',
-  '/wave1-studio.js?v=23',
+  '/styles.css?v=24',
+  '/app.js?v=24',
+  '/storefront-menu.js?v=24',
+  '/sourcing-storefront.js?v=24',
+  '/vin-aggregator-ui.js?v=24',
+  '/dvi-portal.js?v=24',
+  '/wave1-studio.js?v=24',
   '/manifest.webmanifest',
   '/assets/aldridge-crest.jpg?v=11',
   '/assets/app-icon.jpg?v=11',

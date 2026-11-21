@@ -101,6 +101,10 @@ const {
   placeAggregatorPartOrder
 } = require('./vin-intake-aggregator');
 const {
+  parseMultipartFormData,
+  runAiMultiInputBatchIntake
+} = require('./ai-batch-intake');
+const {
   decodeVin,
   analyzePartIntake,
   syncUhaulDealerPage,
@@ -279,22 +283,28 @@ function sendJson(res, status, data, extraHeaders = {}) {
   res.end(body);
 }
 
-function readRawBody(req, maxBytes = 24 * 1024 * 1024) {
+function readRawBuffer(req, maxBytes = 64 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > maxBytes) {
-        reject(new Error('Payload exceeds maximum size limit (24MB).'));
+        const err = new Error(`Payload exceeds maximum size limit (${Math.round(maxBytes / (1024 * 1024))}MB).`);
+        err.statusCode = 413;
+        reject(err);
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+function readRawBody(req, maxBytes = 24 * 1024 * 1024) {
+  return readRawBuffer(req, maxBytes).then((buf) => buf.toString('utf8'));
 }
 
 function getBaseUrl(req) {
@@ -700,13 +710,15 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v23',
+        sw_version: 'v24',
         business_plan_url: '/business-plan',
-        direct_camera_intake_endpoint: '/api/employee/intake/part',
+        direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
+        ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
         vin_vehicle_intake_endpoint: '/api/employee/intake/vehicle',
         parts_aggregator_endpoint: '/api/parts-aggregator/search',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
+        hands_free_multi_input_batch_intake: true,
         requires_google_drive: false
       });
       return;
@@ -1856,7 +1868,37 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // Step 2 Employee VIN-Locked Part Photo Intake & Publish
+      // Step 2 Employee VIN-Locked Hands-Free AI Multi-Input Batch Intake (Camera / Multi-Photo / ZIP / Google Drive Link)
+      if (method === 'POST' && pathname === '/api/employee/intake/batch-ai') {
+        try {
+          const ct = String(req.headers['content-type'] || '');
+          let payload = {};
+          if (/multipart\/form-data/i.test(ct)) {
+            const rawBuf = await readRawBuffer(req, 64 * 1024 * 1024);
+            const parsed = parseMultipartFormData(rawBuf, ct);
+            payload = {
+              ...parsed.fields,
+              uploaded_files: parsed.files
+            };
+          } else {
+            const rawStr = (await readRawBuffer(req, 64 * 1024 * 1024)).toString('utf8');
+            payload = JSON.parse(rawStr || '{}');
+          }
+          const result = await runAiMultiInputBatchIntake(payload, empSession.staff_name, {
+            uploadsDir: UPLOADS_DIR,
+            baseUrl
+          });
+          sendJson(res, 201, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 400, {
+            ok: false,
+            error: err.message || 'AI batch part intake failed.'
+          });
+        }
+        return;
+      }
+
+      // Step 2 Employee VIN-Locked Single Part Photo Intake & Publish
       if (method === 'POST' && pathname === '/api/employee/intake/part') {
         try {
           const b = JSON.parse((await readRawBody(req)) || '{}');
@@ -1864,7 +1906,7 @@ const server = http.createServer(async (req, res) => {
           let shopifyPush = null;
           if (b.push_shopify === true && result.item) {
             try {
-              shopifyPush = await pushSingleItemToShopify(result.item.id);
+              shopifyPush = await pushSingleItemToShopify(result.item, getSettings(), UPLOADS_DIR);
             } catch (shErr) {
               shopifyPush = { ok: false, error: shErr.message };
             }
