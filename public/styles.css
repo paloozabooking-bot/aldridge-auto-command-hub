@@ -2559,3 +2559,258 @@ button, input, select, textarea {
   font-family: 'Fraunces', Georgia, serif;
   color: #1f1711;
 }
+
+/* ==================== V23: UNIVERSAL VIN-CONFIRMED 4-NETWORK AGGREGATOR HERO & MANDATORY VIN INTAKE GATE ==================== */
+.vin-agg-hero {
+  background: linear-gradient(135deg, #1b140f 0%, #2c1d12 52%, #7c2d12 100%);
+  color: #fffaf2;
+  border-radius: 20px;
+  padding: 1.5rem 1.55rem;
+  margin: 0.75rem 0 1.6rem;
+  border: 1.5px solid #b45309;
+  box-shadow: 0 16px 40px rgba(27, 20, 15, 0.22);
+}
+.vin-agg-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+.vin-agg-eyebrow {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fdba74;
+  margin-bottom: 0.3rem;
+}
+.vin-agg-hero h2 {
+  margin: 0 0 0.4rem;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 1.65rem;
+  line-height: 1.2;
+  color: #fef3c7;
+}
+.vin-agg-sub {
+  margin: 0;
+  font-size: 0.91rem;
+  color: #f3e4cf;
+  max-width: 780px;
+  line-height: 1.48;
+}
+.vin-agg-network-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.net-pill {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(254, 215, 170, 0.32);
+  color: #ffedd5;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+.net-pill.net-live {
+  background: rgba(22, 163, 74, 0.26);
+  border-color: #4ade80;
+  color: #dcfce7;
+}
+.vin-agg-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.8rem;
+}
+.agg-mode-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1.5px solid rgba(255, 237, 213, 0.26);
+  color: #fef3c7;
+  padding: 0.42rem 0.85rem;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 0.81rem;
+  cursor: pointer;
+}
+.agg-mode-btn.active {
+  background: #f97316;
+  border-color: #fdba74;
+  color: #fff;
+}
+.vin-agg-inputs {
+  display: grid;
+  grid-template-columns: 1.25fr 1.25fr auto;
+  gap: 0.7rem;
+  align-items: end;
+}
+@media (max-width: 860px) {
+  .vin-agg-inputs { grid-template-columns: 1fr; }
+}
+.agg-field label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #fed7aa;
+  margin-bottom: 0.28rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.agg-field-pair { display: grid; grid-template-columns: 95px 1fr; gap: 0.5rem; }
+.agg-field-triple { display: grid; grid-template-columns: 0.8fr 1fr 1fr; gap: 0.5rem; }
+.vin-agg-submit { padding: 0.72rem 1.3rem; white-space: nowrap; }
+.agg-loading {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  font-weight: 700;
+  color: #fef3c7;
+}
+.agg-error {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: #fee2e2;
+  color: #991b1b;
+  border-radius: 12px;
+  font-weight: 700;
+}
+.agg-results-shell {
+  margin-top: 1.15rem;
+  background: #fffdf9;
+  color: #1f1711;
+  border-radius: 16px;
+  padding: 1.1rem;
+  border: 1.5px solid #e6d8c3;
+}
+.agg-vehicle-lock-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #eadcc7;
+  margin-bottom: 0.75rem;
+}
+.agg-vin-badge {
+  display: inline-block;
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.73rem;
+  font-weight: 800;
+  margin-right: 0.45rem;
+}
+.agg-staff-pill {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  padding: 0.22rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+.agg-warn-strip {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.agg-channel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+.agg-ch-tab {
+  border: 1.5px solid #dfd0b8;
+  background: #fcf8f1;
+  color: #3b2d1f;
+  border-radius: 999px;
+  padding: 0.34rem 0.78rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.agg-ch-tab.active {
+  background: #1f1711;
+  border-color: #1f1711;
+  color: #fff;
+}
+.agg-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
+  gap: 0.85rem;
+}
+.agg-option-card {
+  background: #fcf8f1;
+  border: 1.5px solid #e5d6bf;
+  border-radius: 14px;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+}
+.agg-option-card.agg-inhouse {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+.agg-opt-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.71rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.agg-opt-source { color: #9a3412; }
+.agg-opt-cond { color: #57534e; background: #fff; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid #e5d6bf; }
+.agg-opt-title { margin: 0; font-size: 0.94rem; color: #1f1711; line-height: 1.3; }
+.agg-opt-supplier { font-size: 0.8rem; font-weight: 700; color: #44403c; }
+.agg-opt-eta { font-size: 0.77rem; color: #5c4b39; }
+.agg-staff-cost-bar {
+  background: #fef3c7;
+  border: 1px dashed #d97706;
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  color: #78350f;
+}
+.agg-member-hint {
+  font-size: 0.76rem;
+  color: #166534;
+  background: #ecfdf5;
+  border-radius: 7px;
+  padding: 0.28rem 0.5rem;
+}
+.agg-opt-actions {
+  margin-top: auto;
+  padding-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.emp-vin-gate-shell {
+  background: #faf5ec;
+  border: 1.5px solid #e3d3bc;
+  border-radius: 16px;
+  padding: 1.15rem 1.25rem;
+  margin-bottom: 1.2rem;
+}
+.emp-vin-gate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}

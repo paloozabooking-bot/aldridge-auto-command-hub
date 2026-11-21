@@ -57,10 +57,10 @@ const {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
   handleShopifyWebhook
 } = require('./exporters');
-const { runKeepBatchIntakeAndPublish } = require('./keep-intake-batch');
 const { enrichAllActiveInventoryInDb, deduplicateCatalog, findCatalogDuplicateGroups, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
@@ -91,6 +91,15 @@ const {
   runGuidedHelperRecommendation,
   bookShopService
 } = require('./sourcing-services');
+const {
+  getConnectorStatuses,
+  purgeLegacyPreVinCatalog,
+  createVinIntakeVehicleSession,
+  listVinIntakeSessions,
+  intakePartForVinSession,
+  searchUniversalPartsAggregator,
+  placeAggregatorPartOrder
+} = require('./vin-intake-aggregator');
 const {
   decodeVin,
   analyzePartIntake,
@@ -591,10 +600,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Re-seed Audit Ground Truth Catalog on demand
+    // Re-seed Audit Ground Truth Catalog permanently disabled under Mandatory VIN / License Plate Intake Mode
     if (method === 'POST' && pathname === '/api/audit/reseed-catalog') {
-      const result = seedAuditGroundTruthCatalog(true);
-      sendJson(res, 200, { ok: true, ...result });
+      sendJson(res, 403, {
+        ok: false,
+        error: 'Legacy pre-VIN catalog reseeding is permanently disabled. All inventory must enter through Employee Backend -> POST /api/employee/intake/vehicle (17-char VIN or License Plate lock) -> POST /api/employee/intake/part.'
+      });
       return;
     }
 
@@ -659,12 +670,17 @@ const server = http.createServer(async (req, res) => {
       const cfg = getSettings();
       const activeCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'active'").get().c;
       const duplicateArchivedCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'duplicate_archived'").get().c;
+      const vinSessionsCount = db.prepare('SELECT COUNT(*) AS c FROM vin_intake_sessions').get().c;
       const revSummary = getPhotoReviewSummary();
       sendJson(res, 200, {
         ok: true,
         service: "Aldridge Auto's Command Hub + Mobile PWA",
         active_skus: activeCount,
         duplicate_archived_skus: duplicateArchivedCount,
+        vin_intake_sessions_count: vinSessionsCount,
+        mandatory_vin_intake_only: true,
+        clean_slate_purged: Boolean(cfg.clean_slate_vin_purge_v1),
+        shopify_clean_slate_purged: Boolean(cfg.shopify_clean_slate_purge_v1),
         zero_duplicate_gate: true,
         review_gallery_total: revSummary.total,
         review_gallery_pending: revSummary.pending,
@@ -684,9 +700,11 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v22',
+        sw_version: 'v23',
         business_plan_url: '/business-plan',
-        direct_camera_intake_endpoint: '/api/intake/snap-and-publish',
+        direct_camera_intake_endpoint: '/api/employee/intake/part',
+        vin_vehicle_intake_endpoint: '/api/employee/intake/vehicle',
+        parts_aggregator_endpoint: '/api/parts-aggregator/search',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
         requires_google_drive: false
@@ -805,9 +823,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 1-Tap Phone Camera Snap -> Autonomous AI Identify -> Save -> Auto-Generate QR Card -> Direct Single-Variant Publish to Shopify + eBay Queue
+    // 1-Tap Phone Camera Snap -> Mandatory VIN/Plate Session Gate -> Autonomous AI Identify -> Single-Variant Publish
     if (method === 'POST' && pathname === '/api/intake/snap-and-publish') {
       const body = JSON.parse((await readRawBody(req)) || '{}');
+      const sessionCode = String(body.session_code || body.intake_session_id || '').trim().toUpperCase();
+      const vinSession = sessionCode ? db.prepare('SELECT * FROM vin_intake_sessions WHERE UPPER(session_code) = ?').get(sessionCode) : null;
+      if (!vinSession || !validateVinStrict(vinSession.vin).valid) {
+        return sendJson(res, 422, {
+          ok: false,
+          error: 'Mandatory VIN / License Plate Gate: Decode and lock a 17-character VIN (or State + Plate) via POST /api/employee/intake/vehicle before uploading any part photos.'
+        });
+      }
       const rawPhotos = (Array.isArray(body.photos) && body.photos.length > 0
         ? body.photos
         : (body.imageBase64 ? [body.imageBase64] : [])
@@ -974,6 +1000,18 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST') {
         const b = JSON.parse((await readRawBody(req)) || '{}');
         const settings = getSettings();
+
+        // 0. MANDATORY VIN / LICENSE-PLATE INTAKE PIPELINE LOCK
+        const reqSessionCode = String(b.session_code || b.intake_session_id || '').trim().toUpperCase();
+        const lockedSession = reqSessionCode
+          ? db.prepare('SELECT * FROM vin_intake_sessions WHERE UPPER(session_code) = ?').get(reqSessionCode)
+          : null;
+        if (!lockedSession || !validateVinStrict(lockedSession.vin).valid) {
+          return sendJson(res, 422, {
+            ok: false,
+            error: 'Mandatory VIN / License Plate Gate: Decode and lock a 17-character VIN (or State + License Plate) via POST /api/employee/intake/vehicle before creating any inventory listing.'
+          });
+        }
 
         // 1. Hard Compliance Block on SRS/Airbags/Clocksprings/Pretensioners & Catalytic Converters
         const comp = validatePartCompliance({
@@ -1800,6 +1838,96 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, request: updated });
         return;
       }
+
+      // Mandatory Step 1 Employee VIN / License Plate Vehicle Intake Gate
+      if (method === 'POST' && pathname === '/api/employee/intake/vehicle') {
+        try {
+          const b = JSON.parse((await readRawBody(req)) || '{}');
+          const result = await createVinIntakeVehicleSession(b, empSession.staff_name);
+          sendJson(res, 201, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 400, { ok: false, error: err.message || 'Could not decode/lock VIN session.', details: err.details });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/intake/sessions') {
+        sendJson(res, 200, { ...listVinIntakeSessions(), staff_user: empSession.staff_name });
+        return;
+      }
+
+      // Step 2 Employee VIN-Locked Part Photo Intake & Publish
+      if (method === 'POST' && pathname === '/api/employee/intake/part') {
+        try {
+          const b = JSON.parse((await readRawBody(req)) || '{}');
+          const result = await intakePartForVinSession(b, empSession.staff_name, { uploadsDir: UPLOADS_DIR, baseUrl });
+          let shopifyPush = null;
+          if (b.push_shopify === true && result.item) {
+            try {
+              shopifyPush = await pushSingleItemToShopify(result.item.id);
+            } catch (shErr) {
+              shopifyPush = { ok: false, error: shErr.message };
+            }
+          }
+          sendJson(res, 201, { ...result, shopify_push: shopifyPush });
+        } catch (err) {
+          sendJson(res, err.statusCode || 400, { ok: false, error: err.message || 'Part intake failed.' });
+        }
+        return;
+      }
+
+      // Full Clean-Slate SQLite + Live Shopify Pre-VIN Catalog Purge
+      if (method === 'POST' && pathname === '/api/employee/catalog/purge-clean-slate') {
+        try {
+          const b = JSON.parse((await readRawBody(req)) || '{}');
+          const dbPurge = purgeLegacyPreVinCatalog({ actor: empSession.staff_name });
+          let shopifyPurge = { mode: 'skipped' };
+          if (b.skip_shopify !== true) {
+            shopifyPurge = await purgeAllShopifyPreVinListings({ deleteProducts: Boolean(b.delete_shopify_products) });
+            if (shopifyPurge.mode === 'live_api' && shopifyPurge.ok) {
+              updateSettings({ shopify_clean_slate_purge_v1: new Date().toISOString() });
+            }
+          }
+          sendJson(res, 200, { ok: true, sqlite_purge: dbPurge, shopify_purge: shopifyPurge });
+        } catch (err) {
+          sendJson(res, 500, { ok: false, error: err.message || 'Clean-slate purge failed.' });
+        }
+        return;
+      }
+    }
+
+    // UNIVERSAL VIN-CONFIRMED 4-NETWORK PARTS AGGREGATOR (In-House OEM + Car-Part Pro + Wholesale + eBay/PartsGeek/Amazon @ +50% Markup)
+    if (method === 'GET' && pathname === '/api/parts-aggregator/connectors') {
+      sendJson(res, 200, {
+        ok: true,
+        markup_pct: 50,
+        labor_rate_hourly: Number(getSettings().labor_rate_hourly || 174.99),
+        connectors: getConnectorStatuses()
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/parts-aggregator/search') {
+      try {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const empCheck = verifyEmployeeRequest(req);
+        const result = await searchUniversalPartsAggregator(b, { isEmployee: Boolean(empCheck) });
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err.message || 'Parts aggregator search failed.' });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/parts-aggregator/order') {
+      try {
+        const b = JSON.parse((await readRawBody(req)) || '{}');
+        const result = placeAggregatorPartOrder(b);
+        sendJson(res, 201, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err.message || 'Could not place aggregator order.' });
+      }
+      return;
     }
 
     // "If We Don't Have It, We Can Get It" 50%-Markup Parts Sourcing, Guided Helper & Instant Bookable Shop Services
@@ -2929,29 +3057,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === 'POST' && pathname === '/api/review-photos/intake-keep-batch') {
-      seedPhotoReviewCatalogIfNeeded(false);
-      const raw = await readRawBody(req);
-      let b = {};
-      try {
-        b = JSON.parse(raw || '{}');
-      } catch (_) {}
-      const patch = {};
-      if (b.shopify_admin_token && String(b.shopify_admin_token).trim()) {
-        patch.shopify_admin_token = String(b.shopify_admin_token).trim();
-      }
-      if (b.shopify_domain && String(b.shopify_domain).trim()) {
-        patch.shopify_domain = String(b.shopify_domain).trim();
-      }
-      if (Object.keys(patch).length > 0) {
-        updateSettings(patch);
-      }
-      const pushShopify = b.push_shopify !== false;
-      const result = await runKeepBatchIntakeAndPublish({
-        pushShopify,
-        baseUrl,
-        uploadsDir: UPLOADS_DIR
+      sendJson(res, 403, {
+        ok: false,
+        error: 'Legacy pre-VIN KEEP batch photo intake is permanently disabled. Use Employee Backend -> Step 1: VIN / License Plate Lock (POST /api/employee/intake/vehicle) -> Step 2: Part Photo Upload (POST /api/employee/intake/part).'
       });
-      sendJson(res, 200, result);
       return;
     }
 
@@ -3252,27 +3361,30 @@ async function autoSyncKeepItemsOnStartup() {
   if (process.env.DISABLE_STARTUP_KEEP_SYNC === '1') return;
   try {
     const cfg = getSettings();
-    const keepCount = db.prepare("SELECT COUNT(*) c FROM photo_review_items WHERE review_status = 'keep'").get().c;
-    if (!keepCount) return;
-
     const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
 
-    // 1. Ingest any un-ingested KEEP items into inventory_items, then run full anti-placeholder enrichment
-    // (locks $174.99/hr, quarantines SRS/airbag SKUs, assigns verified OEM MPNs, weights/dims & rich descriptions).
-    const result = await runKeepBatchIntakeAndPublish({
-      pushShopify: false,
-      baseUrl,
-      uploadsDir: UPLOADS_DIR
-    });
-    const enrichRes = enrichAllActiveInventoryInDb();
-    const dedupeRes = deduplicateCatalog();
-    console.log(
-      `[Startup Auto-Sync] KEEP=${result.keep_photos_total} | Active Unique SKUs=${enrichRes.enriched_active_skus} | Pending Verification=${enrichRes.pending_verification_count || 0} | Duplicate Archived=${dedupeRes.total_duplicate_archived || 0} | SRS Blocked=${enrichRes.compliance_blocked_count} | Labor=$${enrichRes.labor_rate_hourly}/hr | QR=${result.qr_cards_generated}`
-    );
+    // 1. MANDATORY CLEAN-SLATE VIN INVARIANT: Purge any legacy pre-VIN inventory records in SQLite on startup
+    const legacyPreVinCount = Number(db.prepare(`
+      SELECT COUNT(*) c FROM inventory_items
+      WHERE COALESCE(verified_vin, '') = ''
+         OR COALESCE(intake_session_id, '') = ''
+         OR COALESCE(intake_source, '') != 'vin_intake_pipeline'
+    `).get()?.c || 0);
 
-    // 2. If SHOPIFY_ADMIN_TOKEN starts with shpss_ and SHOPIFY_CLIENT_ID is set,
-    // exchange grant_type=client_credentials at https://${shopDomain}/admin/oauth/access_token
-    // for a fresh access_token BEFORE running Shopify webhooks & Co-Master sync.
+    if (!cfg.clean_slate_vin_purge_v1 || legacyPreVinCount > 0) {
+      const purgeRes = purgeLegacyPreVinCatalog({ actor: 'startup_clean_slate_v1' });
+      console.log(
+        `[Startup Clean-Slate VIN Purge] Purged legacy_items=${purgeRes.purged_inventory_items} | legacy_donors=${purgeRes.purged_legacy_donors} | remaining_vin_verified=${purgeRes.remaining_verified_vin_items} | Mandatory VIN Intake=ON`
+      );
+    } else {
+      const dedupeRes = deduplicateCatalog();
+      const verifiedCount = Number(db.prepare("SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND verified_vin != ''").get()?.c || 0);
+      console.log(
+        `[Startup Clean-Slate Ready] Verified VIN-Intake Active SKUs=${verifiedCount} | Duplicate Archived=${dedupeRes.total_duplicate_archived || 0} | Labor=$${Number(cfg.labor_rate_hourly || 174.99).toFixed(2)}/hr`
+      );
+    }
+
+    // 2. Authenticate Shopify Admin API (client_credentials OAuth if shpss_ + SHOPIFY_CLIENT_ID)
     let shopifyAuthReady = false;
     const rawToken = String(cfg.shopify_admin_token || process.env.SHOPIFY_ADMIN_TOKEN || '').trim();
     const clientId = String(cfg.shopify_client_id || process.env.SHOPIFY_CLIENT_ID || '').trim();
@@ -3285,7 +3397,7 @@ async function autoSyncKeepItemsOnStartup() {
             `[Startup Shopify Auth] Ready for ${auth.shopDomain} via ${auth.authMode}${auth.scope ? ` (scope=${auth.scope})` : ''}`
           );
         } else if (auth.authMode === 'shpss_missing_client_id') {
-          console.warn('[Startup Shopify Auth] SHOPIFY_ADMIN_TOKEN starts with shpss_ but SHOPIFY_CLIENT_ID is not set — skipping live Shopify push until SHOPIFY_CLIENT_ID is configured.');
+          console.warn('[Startup Shopify Auth] SHOPIFY_ADMIN_TOKEN starts with shpss_ but SHOPIFY_CLIENT_ID is not set.');
         }
       } catch (oauthErr) {
         console.error('[Startup Shopify OAuth Error]', oauthErr.message || oauthErr);
@@ -3304,24 +3416,36 @@ async function autoSyncKeepItemsOnStartup() {
       console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
     }
 
-    // 4. Push newly created SKUs AND run one-time full PUT/GraphQL enrichment + deduplication sync across all live Shopify products
+    // 4. FULL CLEAN-SLATE SHOPIFY PRE-VIN ARCHIVE/PURGE: Archive & zero ALL legacy pre-VIN Shopify listings automatically!
     const latestCfg = getSettings();
-    const needsFullEnrichmentSync = !latestCfg.shopify_enrichment_synced_v6;
-    const unsyncedShopifyCount = db.prepare(
-      "SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND quantity > 0 AND (shopify_product_id IS NULL OR shopify_product_id = '')"
-    ).get().c;
-
-    if (needsFullEnrichmentSync || unsyncedShopifyCount > 0) {
-      const syncRes = await syncAllToShopifyCoMaster({ updateExisting: needsFullEnrichmentSync });
+    if (!latestCfg.shopify_clean_slate_purge_v1) {
+      const shPurge = await purgeAllShopifyPreVinListings({ deleteProducts: false });
       console.log(
-        `[Startup Shopify Co-Master Sync] updateExisting=${needsFullEnrichmentSync} | created=${syncRes.synced_count || 0} | updated=${syncRes.updated_count || 0} | drafted_srs=${syncRes.drafted_blocked_count || 0} | archived_pending=${syncRes.archived_pending_count || 0} | archived_duplicates=${syncRes.archived_duplicates_count || 0} | errors=${(syncRes.errors || []).length}`
+        `[Startup Shopify Clean-Slate Purge] scanned=${shPurge.total_scanned || 0} | archived=${shPurge.archived_count || 0} | already_archived=${shPurge.already_archived_count || 0} | zeroed_qty=${shPurge.zeroed_inventory_count || 0} | kept_vin_verified=${shPurge.kept_verified_vin_count || 0} | errors=${(shPurge.errors || []).length}`
       );
-      if (needsFullEnrichmentSync && syncRes.mode === 'live_api' && (!syncRes.errors || syncRes.errors.length === 0)) {
-        updateSettings({ shopify_enrichment_synced_v6: new Date().toISOString() });
+      if (shPurge.mode === 'live_api' && shPurge.ok) {
+        updateSettings({ shopify_clean_slate_purge_v1: new Date().toISOString() });
       }
     }
+
+    // 5. Push any newly verified VIN-intake SKUs that have not synced to Shopify yet
+    const unsyncedVinCount = db.prepare(`
+      SELECT COUNT(*) c FROM inventory_items
+      WHERE status = 'active' AND quantity > 0
+        AND COALESCE(verified_vin, '') != ''
+        AND COALESCE(intake_session_id, '') != ''
+        AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+        AND (shopify_product_id IS NULL OR shopify_product_id = '')
+    `).get().c;
+
+    if (unsyncedVinCount > 0) {
+      const syncRes = await syncAllToShopifyCoMaster({ updateExisting: false });
+      console.log(
+        `[Startup Shopify VIN-Verified Sync] created=${syncRes.synced_count || 0} | errors=${(syncRes.errors || []).length}`
+      );
+    }
   } catch (err) {
-    console.error('[Startup Auto-Sync Error]', err.message || err);
+    console.error('[Startup Clean-Slate Error]', err.message || err);
   }
 }
 

@@ -636,6 +636,33 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_part_sourcing_status ON part_sourcing_requests(status, created_at);
   CREATE INDEX IF NOT EXISTS idx_part_sourcing_customer ON part_sourcing_requests(customer_id);
+
+  -- Mandatory VIN / License Plate Vehicle Intake Sessions (Step 1 Gate before any part photo upload)
+  CREATE TABLE IF NOT EXISTS vin_intake_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL DEFAULT 1,
+    session_code TEXT NOT NULL UNIQUE,
+    staff_name TEXT DEFAULT 'Shop Staff',
+    vin TEXT NOT NULL,
+    license_plate TEXT DEFAULT '',
+    plate_state TEXT DEFAULT '',
+    plate_lookup_provider TEXT DEFAULT '',
+    year INTEGER NOT NULL DEFAULT 0,
+    make TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    trim TEXT DEFAULT '',
+    engine TEXT DEFAULT '',
+    drivetrain TEXT DEFAULT '',
+    transmission TEXT DEFAULT '',
+    body_class TEXT DEFAULT '',
+    donor_vehicle_id INTEGER,
+    nhtsa_raw_json TEXT DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_vin_intake_sessions_vin ON vin_intake_sessions(UPPER(vin));
+  CREATE INDEX IF NOT EXISTS idx_vin_intake_sessions_code ON vin_intake_sessions(session_code);
 `);
 
 function ensureColumnExists(table, column, definition) {
@@ -649,6 +676,11 @@ function ensureColumnExists(table, column, definition) {
 for (const tbl of ['inventory_items', 'donor_vehicles', 'crm_customers', 'appointments', 'orders', 'work_orders', 'dvi_inspections', 'service_quotes']) {
   ensureColumnExists(tbl, 'org_id', 'INTEGER NOT NULL DEFAULT 1');
 }
+
+// Mandatory VIN / License Plate Intake provenance columns on every inventory_items row
+ensureColumnExists('inventory_items', 'verified_vin', "TEXT DEFAULT ''");
+ensureColumnExists('inventory_items', 'intake_session_id', "TEXT DEFAULT ''");
+ensureColumnExists('inventory_items', 'intake_source', "TEXT DEFAULT ''");
 
 // Permanent labor rate migration: replace any legacy $135/$125 hourly rows with locked $174.99/hr
 try {
@@ -725,6 +757,8 @@ const DEFAULT_SETTINGS = {
   handling_days_default: 3,
   freight_weight_threshold_lbs: 70,
   clean_slate_mode: true,
+  mandatory_vin_intake_only: true,
+  parts_sourcing_markup_pct: 50,
   single_variant_only: true,
   photos_required: true,
   canonical_domain: 'https://aldridgeautosupply.com',
@@ -2095,10 +2129,23 @@ function validateInventoryItemForPublish(item = {}) {
   const fitMake = String(item.fitment_make || '').trim();
   const fitModel = String(item.fitment_model || '').trim();
   const fitNotes = String(item.fitment_notes || '').trim();
+  const verifiedVin = String(item.verified_vin || '').trim().toUpperCase();
+  const intakeSessionId = String(item.intake_session_id || '').trim();
+  const intakeSource = String(item.intake_source || '').trim();
   const weight = Number(item.weight_lbs || 0);
   const lengthIn = Number(item.length_in || 0);
   const widthIn = Number(item.width_in || 0);
   const heightIn = Number(item.height_in || 0);
+
+  // 0. MANDATORY VIN / LICENSE-PLATE INTAKE PIPELINE INVARIANT:
+  // NO part may exist as active/publishable unless created through the verified VIN/Plate Vehicle Intake Pipeline.
+  const vinCheck = validateVinStrict(verifiedVin);
+  if (!vinCheck.valid) {
+    reasons.push(`Mandatory VIN Intake Gate: missing or invalid 17-character verified_vin (${vinCheck.reason || 'required'})`);
+  }
+  if (!intakeSessionId || intakeSource !== 'vin_intake_pipeline') {
+    reasons.push('Mandatory VIN Intake Gate: item must originate from a locked VIN / License Plate Vehicle Intake Session');
+  }
 
   // 1. Hard safety/emissions compliance block (SRS, airbag, clockspring, seatbelt pretensioner, catalytic converter)
   const comp = validatePartCompliance({

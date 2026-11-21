@@ -73,6 +73,8 @@ function getShopifyGalleryPhotos(item, settings, uploadsDir) {
 
 function isMarketplaceSafeItem(item) {
   if (!item || item.quantity <= 0 || item.status !== 'active') return false;
+  if (!item.verified_vin || !validateVinStrict(item.verified_vin).valid) return false;
+  if (!item.intake_session_id || item.intake_source !== 'vin_intake_pipeline') return false;
   if (!hasRealPhotos(item)) return false;
   const skuUpper = String(item.sku || '').trim().toUpperCase();
   if (PROHIBITED_CAT_SKUS.has(skuUpper) || PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper)) {
@@ -89,9 +91,9 @@ function isMarketplaceSafeItem(item) {
 }
 
 /**
- * PERMANENT PRE-EXPORT DEDUPLICATION GATE:
- * Runs deduplicateCatalog() before every marketplace CSV/XML export so duplicate physical
- * parts are NEVER exported and canonical items always carry their merged photo galleries.
+ * PERMANENT PRE-EXPORT DEDUPLICATION & MANDATORY VIN-INTAKE GATE:
+ * Runs deduplicateCatalog() before every marketplace CSV/XML export and strictly
+ * excludes any item that did not enter through the verified VIN/Plate Intake Pipeline.
  */
 function ensureDeduplicatedItems(items) {
   try {
@@ -99,7 +101,14 @@ function ensureDeduplicatedItems(items) {
     deduplicateCatalog();
   } catch (_) {}
   if (!Array.isArray(items) || !items.length) return [];
-  const activeRows = db.prepare("SELECT sku, status, quantity, photos_json FROM inventory_items WHERE status = 'active'").all();
+  const activeRows = db.prepare(`
+    SELECT sku, status, quantity, photos_json, verified_vin, intake_session_id, intake_source
+    FROM inventory_items
+    WHERE status = 'active'
+      AND COALESCE(verified_vin, '') != ''
+      AND COALESCE(intake_session_id, '') != ''
+      AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+  `).all();
   const activeBySku = new Map(activeRows.map((r) => [String(r.sku || '').trim().toUpperCase(), r]));
   const seen = new Set();
   const out = [];
@@ -109,7 +118,15 @@ function ensureDeduplicatedItems(items) {
     const live = activeBySku.get(skuKey);
     if (!live || Number(live.quantity || 0) <= 0) continue;
     seen.add(skuKey);
-    out.push({ ...item, status: live.status, quantity: live.quantity, photos_json: live.photos_json || item.photos_json });
+    out.push({
+      ...item,
+      status: live.status,
+      quantity: live.quantity,
+      photos_json: live.photos_json || item.photos_json,
+      verified_vin: live.verified_vin,
+      intake_session_id: live.intake_session_id,
+      intake_source: live.intake_source
+    });
   }
   return out;
 }
@@ -2638,6 +2655,167 @@ async function inspectLiveShopifyProducts(skus = []) {
   return { ok: true, shop_domain: domain, count: out.length, products: out };
 }
 
+/**
+ * FULL CLEAN-SLATE SHOPIFY PRE-VIN ARCHIVE/PURGE:
+ * Paginates ALL live products on the connected Shopify store and archives + zeros
+ * every listing that does NOT correspond to an active verified VIN-intake SKU in SQLite.
+ */
+async function purgeAllShopifyPreVinListings({ deleteProducts = false } = {}) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return {
+      ok: false,
+      mode: 'not_configured',
+      archived_count: 0,
+      deleted_count: 0,
+      zeroed_inventory_count: 0,
+      message: 'Shopify Admin API credentials not configured in this environment.'
+    };
+  }
+
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+  const verifiedActiveSkus = new Set(
+    db.prepare(`
+      SELECT UPPER(sku) AS sku
+      FROM inventory_items
+      WHERE status = 'active'
+        AND quantity > 0
+        AND COALESCE(verified_vin, '') != ''
+        AND COALESCE(intake_session_id, '') != ''
+        AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+    `).all().map((r) => r.sku)
+  );
+
+  const liveProducts = [];
+  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,title,status,variants`;
+  while (nextUrl) {
+    const resp = await shopifyFetchWithRetry(
+      nextUrl,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      { authMode: auth.authMode, settings, tokenRef }
+    );
+    if (!resp.ok) {
+      throw new Error(`Shopify product scan failed during clean-slate purge (HTTP ${resp.status})`);
+    }
+    const data = await resp.json();
+    for (const p of data.products || []) liveProducts.push(p);
+    const link = resp.headers.get('link') || '';
+    const m = link.match(/<([^>]+)>;\s*rel="next"/);
+    nextUrl = m ? m[1] : null;
+  }
+
+  let archivedCount = 0;
+  let deletedCount = 0;
+  let zeroedCount = 0;
+  let keptVerifiedCount = 0;
+  let alreadyArchivedCount = 0;
+  const errors = [];
+
+  for (const p of liveProducts) {
+    const skus = (p.variants || []).map((v) => String(v.sku || '').trim().toUpperCase()).filter(Boolean);
+    const isVerifiedVinItem = skus.length > 0 && skus.every((s) => verifiedActiveSkus.has(s));
+    if (isVerifiedVinItem) {
+      keptVerifiedCount++;
+      continue;
+    }
+
+    try {
+      if (deleteProducts) {
+        const delResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${p.id}.json`,
+          { method: 'DELETE', headers: { Accept: 'application/json' } },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (delResp.ok) deletedCount++;
+        else errors.push(`delete ${p.id}: HTTP ${delResp.status}`);
+      } else {
+        if (p.status !== 'archived') {
+          const archResp = await shopifyFetchWithRetry(
+            `https://${domain}/admin/api/2025-01/products/${p.id}.json`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({
+                product: {
+                  id: Number(p.id),
+                  status: 'archived',
+                  tags: 'PRE-VIN-PURGED, ARCHIVED-CLEAN-SLATE'
+                }
+              })
+            },
+            { authMode: auth.authMode, settings, tokenRef }
+          );
+          if (archResp.ok) archivedCount++;
+          else errors.push(`archive ${p.id}: HTTP ${archResp.status}`);
+        } else {
+          alreadyArchivedCount++;
+        }
+
+        // Zero inventory levels on every variant
+        for (const v of p.variants || []) {
+          if (Number(v.inventory_quantity || 0) > 0 && v.inventory_item_id) {
+            try {
+              const lvlResp = await shopifyFetchWithRetry(
+                `https://${domain}/admin/api/2025-01/inventory_levels.json?inventory_item_ids=${v.inventory_item_id}`,
+                { method: 'GET', headers: { Accept: 'application/json' } },
+                { authMode: auth.authMode, settings, tokenRef }
+              );
+              if (lvlResp.ok) {
+                const lvlData = await lvlResp.json();
+                for (const lvl of lvlData.inventory_levels || []) {
+                  if (Number(lvl.available || 0) > 0) {
+                    const setResp = await shopifyFetchWithRetry(
+                      `https://${domain}/admin/api/2025-01/inventory_levels/set.json`,
+                      {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                        body: JSON.stringify({
+                          location_id: lvl.location_id,
+                          inventory_item_id: Number(v.inventory_item_id),
+                          available: 0
+                        })
+                      },
+                      { authMode: auth.authMode, settings, tokenRef }
+                    );
+                    if (setResp.ok) zeroedCount++;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      }
+      await new Promise((r) => setTimeout(r, 240));
+    } catch (err) {
+      errors.push(`purge ${p.id}: ${err.message}`);
+    }
+  }
+
+  logSync(
+    'outbound',
+    'shopify_clean_slate_purge',
+    deleteProducts ? 'delete_pre_vin_products' : 'archive_pre_vin_products',
+    'ALL',
+    errors.length ? 'partial' : 'success',
+    `Shopify clean-slate purge on ${domain}: scanned=${liveProducts.length}, archived=${archivedCount}, deleted=${deletedCount}, already_archived=${alreadyArchivedCount}, zeroed_qty=${zeroedCount}, kept_vin_verified=${keptVerifiedCount}, errors=${errors.length}.`
+  );
+
+  return {
+    ok: errors.length === 0,
+    mode: 'live_api',
+    shop_domain: domain,
+    total_scanned: liveProducts.length,
+    archived_count: archivedCount,
+    deleted_count: deletedCount,
+    already_archived_count: alreadyArchivedCount,
+    zeroed_inventory_count: zeroedCount,
+    kept_verified_vin_count: keptVerifiedCount,
+    errors
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -2660,6 +2838,7 @@ module.exports = {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
   handleShopifyWebhook
 };
