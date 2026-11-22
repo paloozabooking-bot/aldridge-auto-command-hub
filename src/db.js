@@ -2151,9 +2151,17 @@ function validateInventoryItemForPublish(item = {}) {
   const heightIn = Number(item.height_in || 0);
 
   // 0. MANDATORY VIN / LICENSE-PLATE INTAKE PIPELINE INVARIANT:
-  // NO part may exist as active/publishable unless created through the verified VIN/Plate Vehicle Intake Pipeline.
+  // NO part may exist as active/publishable unless created through the verified VIN/Plate Vehicle Intake Pipeline
+  // (or an explicit staff-confirmed trust_folder_year title-check session locked in vin_intake_sessions).
   const vinCheck = validateVinStrict(verifiedVin);
-  if (!vinCheck.valid) {
+  const isApprovedTitleCheck =
+    verifiedVin === 'VIN-TITLE-CHECK' &&
+    Boolean(intakeSessionId) &&
+    intakeSource === 'vin_intake_pipeline' &&
+    Boolean(
+      db.prepare("SELECT id FROM vin_intake_sessions WHERE UPPER(session_code) = ? AND vin = 'VIN-TITLE-CHECK' AND status = 'active'").get(intakeSessionId.toUpperCase())
+    );
+  if (!vinCheck.valid && !isApprovedTitleCheck) {
     reasons.push(`Mandatory VIN Intake Gate: missing or invalid 17-character verified_vin (${vinCheck.reason || 'required'})`);
   }
   if (!intakeSessionId || intakeSource !== 'vin_intake_pipeline') {

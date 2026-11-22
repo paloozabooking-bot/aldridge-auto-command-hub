@@ -107,7 +107,7 @@ const {
   resolveUniversalVinFromInput,
   runAiMultiInputBatchIntake
 } = require('./ai-batch-intake');
-const { buildAutoBinPrefix } = require('./dedupe');
+const { buildAutoBinPrefix, isTitleCheckSessionVin } = require('./dedupe');
 const {
   decodeVin,
   analyzePartIntake,
@@ -716,7 +716,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v26',
+        sw_version: 'v27',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -727,6 +727,7 @@ const server = http.createServer(async (req, res) => {
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
         hands_free_multi_input_batch_intake: true,
         unified_vin_extraction: true,
+        folder_vin_conflict_override: true,
         video_keyframe_intake: true,
         sold_order_and_srs_filter: true,
         requires_google_drive: false
@@ -1028,7 +1029,11 @@ const server = http.createServer(async (req, res) => {
         const lockedSession = reqSessionCode
           ? db.prepare('SELECT * FROM vin_intake_sessions WHERE UPPER(session_code) = ?').get(reqSessionCode)
           : null;
-        if (!lockedSession || !validateVinStrict(lockedSession.vin).valid) {
+        const isValidLockedSession =
+          Boolean(lockedSession) &&
+          lockedSession.status === 'active' &&
+          (validateVinStrict(lockedSession.vin).valid || isTitleCheckSessionVin(lockedSession.vin));
+        if (!isValidLockedSession) {
           return sendJson(res, 422, {
             ok: false,
             error: 'Mandatory VIN / License Plate Gate: Decode and lock a 17-character VIN (or State + License Plate) via POST /api/employee/intake/vehicle before creating any inventory listing.'
@@ -1879,12 +1884,13 @@ const server = http.createServer(async (req, res) => {
           }
           const autoLock = payload.auto_lock === false || payload.auto_lock === 'false' ? false : true;
           const result = await resolveUniversalVinFromInput(payload, empSession.staff_name, { autoLock });
-          sendJson(res, autoLock ? 201 : 200, result);
+          const status = result.conflict_resolution_required ? 200 : (autoLock && result.session ? 201 : 200);
+          sendJson(res, status, result);
         } catch (err) {
           sendJson(res, err.statusCode || 400, {
             ok: false,
             error: err.message || 'Could not extract or decode VIN from media/source.',
-            details: err.details
+            ...(err.details || {})
           });
         }
         return;
@@ -1912,7 +1918,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // Step 2 Employee VIN-Locked Hands-Free AI Multi-Input Batch Intake (Camera / Multi-Photo / ZIP / Google Drive Link)
+      // Step 2 Employee VIN-Locked Hands-Free AI Multi-Input Batch Intake (Camera / Multi-Photo / Video / ZIP / Google Drive Link)
       if (method === 'POST' && pathname === '/api/employee/intake/batch-ai') {
         try {
           const ct = String(req.headers['content-type'] || '');
@@ -1936,7 +1942,8 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           sendJson(res, err.statusCode || 400, {
             ok: false,
-            error: err.message || 'AI batch part intake failed.'
+            error: err.message || 'AI batch part intake failed.',
+            ...(err.details || {})
           });
         }
         return;

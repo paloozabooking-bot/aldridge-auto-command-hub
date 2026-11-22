@@ -29,6 +29,9 @@ const {
   decodeVinLiveNhtsa
 } = require('./vin-intake-aggregator');
 const {
+  TITLE_CHECK_VIN_SENTINEL,
+  isTitleCheckSessionVin,
+  parseFolderYearMakeModel,
   extractIsoVinCandidates,
   detectFolderVinConflict,
   buildAutoBinPrefix,
@@ -321,9 +324,39 @@ function extractImagesFromZipBuffer(zipBuf, { maxFiles = 75, maxTotalBytes = 80 
 }
 
 /* ==================== 4. GOOGLE DRIVE FOLDER TITLE, VIN & FILE FETCHER ==================== */
+function validateFullDriveUrl(rawUrl = '') {
+  const s = String(rawUrl || '').trim();
+  if (!s) return { valid: false, error: 'Google Drive URL is empty.' };
+  if (/\.{3}|…/.test(s)) {
+    return {
+      valid: false,
+      error: 'Shortened or truncated Google Drive URL detected ("..."). Copy the full URL directly from your browser address bar (e.g. https://drive.google.com/drive/folders/<FOLDER_ID>).'
+    };
+  }
+  if (!/^https?:\/\/drive\.google\.com\//i.test(s)) {
+    return {
+      valid: false,
+      error: 'Enter a full https://drive.google.com/drive/folders/<ID> or https://drive.google.com/file/d/<ID>/view URL.'
+    };
+  }
+  const folderMatch = s.match(/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|embeddedfolderview\?id=)([A-Za-z0-9_-]{18,})/i);
+  if (folderMatch) {
+    return { valid: true, target: { type: 'folder', id: folderMatch[1], url: s } };
+  }
+  const fileMatch = s.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[^#]*&)?id=)([A-Za-z0-9_-]{18,})/i);
+  if (fileMatch) {
+    return { valid: true, target: { type: 'file', id: fileMatch[1], url: s } };
+  }
+  return {
+    valid: false,
+    error: 'Invalid or incomplete Google Drive folder/file ID. Make sure you pasted the complete URL (e.g. https://drive.google.com/drive/folders/1JexH2KFk9Z0TQi_CubZQWHNlPhKiPPP9).'
+  };
+}
+
 function parseGoogleDriveTarget(rawUrl = '') {
   const s = String(rawUrl || '').trim();
   if (!s) return null;
+  if (/\.{3}|…/.test(s)) return null;
 
   const folderMatch = s.match(/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|embeddedfolderview\?id=)([A-Za-z0-9_-]{10,})/i);
   if (folderMatch) {
@@ -333,7 +366,7 @@ function parseGoogleDriveTarget(rawUrl = '') {
   if (fileMatch) {
     return { type: 'file', id: fileMatch[1], url: s };
   }
-  if (/^https?:\/\//i.test(s)) {
+  if (/^https?:\/\//i.test(s) && !/drive\.google\.com/i.test(s)) {
     return { type: 'direct_url', id: '', url: s };
   }
   return null;
@@ -745,6 +778,21 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
   const licensePlate = String(payload.license_plate || payload.plate || '').trim().toUpperCase();
   const plateState = String(payload.plate_state || payload.state || '').trim().toUpperCase();
   const driveUrl = String(payload.drive_url || payload.google_drive_url || '').trim();
+  const trustFolderYear = payload.trust_folder_year === true || payload.trust_folder_year === 'true';
+  const confirmVinDecode = payload.confirm_vin_decode === true || payload.confirm_vin_decode === 'true';
+
+  if (driveUrl && /drive\.google\.com/i.test(driveUrl)) {
+    const vCheck = validateFullDriveUrl(driveUrl);
+    if (!vCheck.valid) {
+      const err = new Error(vCheck.error);
+      err.statusCode = 400;
+      throw err;
+    }
+  } else if (driveUrl && /\.{3}|…/.test(driveUrl)) {
+    const err = new Error('Shortened or truncated URL detected ("..."). Paste the full https://drive.google.com/drive/folders/<ID> URL from your browser address bar.');
+    err.statusCode = 400;
+    throw err;
+  }
 
   let folderTitle = String(payload.folder_title || payload.folder_name || '').trim();
   const allHintStrings = [folderTitle, String(payload.zip_filename || ''), String(payload.filename || '')];
@@ -794,6 +842,7 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
   }
 
   // 3) Inspect Google Drive URL metadata (folder title + filenames) FIRST
+  let driveDiscoveredCount = 0;
   if (driveUrl) {
     const meta = await fetchImagesFromGoogleDriveUrl(driveUrl, { metadataOnly: true, fetchImpl });
     if (meta.folder_title) {
@@ -801,7 +850,15 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
       allHintStrings.unshift(meta.folder_title);
     }
     if (Array.isArray(meta.discovered_filenames)) {
+      driveDiscoveredCount = meta.discovered_filenames.length;
       allHintStrings.push(...meta.discovered_filenames);
+    }
+    if (!meta.folder_title && driveDiscoveredCount === 0 && !manualVin && !(licensePlate && plateState)) {
+      const err = new Error(
+        'Could not read this Google Drive folder. Verify you pasted the full URL and set Google Drive sharing to "Anyone with the link (Viewer)", OR download the folder as a .zip and drop it into Step 2.'
+      );
+      err.statusCode = 422;
+      throw err;
     }
   }
 
@@ -840,6 +897,65 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
     }
   }
 
+  const labelForConflict = folderTitle || allHintStrings.filter(Boolean).slice(0, 3).join(' ');
+  const parsedFolderVehicle = parseFolderYearMakeModel(labelForConflict);
+
+  // Explicit staff override: trust_folder_year=true (lock folder Year/Make/Model & clear wrong/missing VIN for title-check)
+  if (trustFolderYear) {
+    const fy = parseInt(payload.folder_year || parsedFolderVehicle?.year || 0, 10);
+    const fm = String(payload.folder_make || parsedFolderVehicle?.make || '').trim();
+    const fmod = String(payload.folder_model || parsedFolderVehicle?.model || '').trim();
+    if (!fy || !fm || !fmod) {
+      const err = new Error('trust_folder_year requires a valid Year, Make, and Model in the folder title (e.g., "1996 Toyota Camry").');
+      err.statusCode = 422;
+      throw err;
+    }
+    const folderVeh = { year: fy, make: fm, model: fmod, auto_bin_prefix: buildAutoBinPrefix({ year: fy, make: fm, model: fmod }) };
+    const nhtsaPreview = resolvedVin ? await decodeVinLiveNhtsa(resolvedVin) : null;
+    const conflictObj = nhtsaPreview ? detectFolderVinConflict(labelForConflict, nhtsaPreview) : { has_conflict: false, warning: '' };
+
+    const session = autoLock
+      ? createFolderOverrideTitleCheckSession({
+          folderVehicle: folderVeh,
+          conflictingVin: resolvedVin,
+          nhtsaVehicle: nhtsaPreview,
+          folderTitle: labelForConflict
+        }, staffUser)
+      : null;
+
+    return {
+      ok: true,
+      conflict_resolution_required: false,
+      conflict_resolved_by: 'trust_folder_year',
+      title_check_required: true,
+      cleared_wrong_vin: resolvedVin || '',
+      vin_detected: TITLE_CHECK_VIN_SENTINEL,
+      vin_source: 'folder_year_override_title_check',
+      decode_source: 'folder_label_staff_override',
+      folder_title: folderTitle,
+      drive_url: driveUrl,
+      drive_files_discovered: driveDiscoveredCount,
+      vin_label_conflict: conflictObj,
+      folder_vehicle: folderVeh,
+      nhtsa_vehicle: conflictObj.nhtsa_vehicle || nhtsaPreview || null,
+      auto_bin_prefix: folderVeh.auto_bin_prefix,
+      gemini_vision_configured: geminiConfigured,
+      extracted_video_frames_count: extractedVideoFramesCount,
+      session,
+      vehicle: {
+        vin: TITLE_CHECK_VIN_SENTINEL,
+        year: fy,
+        make: fm,
+        model: fmod,
+        trim: '',
+        engine: '',
+        drivetrain: '',
+        transmission: '',
+        title_check_required: true
+      }
+    };
+  }
+
   // Priority D: State + License Plate fallback (delegated to createVinIntakeVehicleSession)
   if (!resolvedVin && !(licensePlate && plateState)) {
     const err = new Error(
@@ -851,8 +967,34 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
     throw err;
   }
 
+  // Decode via NHTSA vPIC FIRST before locking so we NEVER silently bind conflicting years!
+  const preDecoded = resolvedVin ? await decodeVinLiveNhtsa(resolvedVin) : null;
+  const vinLabelConflict = preDecoded ? detectFolderVinConflict(labelForConflict, preDecoded) : { has_conflict: false, warning: '' };
+
+  // Permanent Conflict Gate: if folder label disagrees with NHTSA VIN decode and staff has NOT clicked confirm_vin_decode or trust_folder_year, pause and ask staff in 1 click!
+  if (vinLabelConflict.has_conflict && !confirmVinDecode && !manualVin) {
+    return {
+      ok: true,
+      conflict_resolution_required: true,
+      vin_detected: preDecoded.vin,
+      vin_source: vinSource,
+      decode_source: preDecoded.source || 'nhtsa_vpic_live',
+      folder_title: folderTitle,
+      drive_url: driveUrl,
+      drive_files_discovered: driveDiscoveredCount,
+      vin_label_conflict: vinLabelConflict,
+      folder_vehicle: vinLabelConflict.folder_vehicle,
+      nhtsa_vehicle: vinLabelConflict.nhtsa_vehicle,
+      auto_bin_prefix: vinLabelConflict.nhtsa_vehicle?.auto_bin_prefix || buildAutoBinPrefix(preDecoded),
+      gemini_vision_configured: geminiConfigured,
+      extracted_video_frames_count: extractedVideoFramesCount,
+      session: null,
+      vehicle: vinLabelConflict.nhtsa_vehicle
+    };
+  }
+
   let sessionResult = null;
-  let decodedObj = null;
+  let decodedObj = preDecoded;
   if (autoLock) {
     sessionResult = await createVinIntakeVehicleSession(
       resolvedVin
@@ -862,21 +1004,24 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
     );
     decodedObj = sessionResult.session;
     if (!vinSource) vinSource = 'license_plate_lookup';
-  } else {
-    decodedObj = await decodeVinLiveNhtsa(resolvedVin);
   }
 
-  const labelForConflict = folderTitle || allHintStrings.filter(Boolean).slice(0, 3).join(' ');
-  const vinLabelConflict = detectFolderVinConflict(labelForConflict, decodedObj);
+  const finalConflict = detectFolderVinConflict(labelForConflict, decodedObj);
   const autoBinPrefix = buildAutoBinPrefix(decodedObj);
 
   return {
     ok: true,
+    conflict_resolution_required: false,
+    conflict_resolved_by: finalConflict.has_conflict ? 'confirm_vin_decode' : '',
     vin_detected: decodedObj.vin,
     vin_source: vinSource,
     decode_source: sessionResult?.decode_source || decodedObj.source || 'nhtsa_vpic_live',
     folder_title: folderTitle,
-    vin_label_conflict: vinLabelConflict,
+    drive_url: driveUrl,
+    drive_files_discovered: driveDiscoveredCount,
+    vin_label_conflict: finalConflict,
+    folder_vehicle: finalConflict.folder_vehicle || parsedFolderVehicle,
+    nhtsa_vehicle: finalConflict.nhtsa_vehicle || null,
     auto_bin_prefix: autoBinPrefix,
     gemini_vision_configured: geminiConfigured,
     extracted_video_frames_count: extractedVideoFramesCount,
@@ -892,6 +1037,45 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
       transmission: decodedObj.transmission || ''
     }
   };
+}
+
+function createFolderOverrideTitleCheckSession({ folderVehicle, conflictingVin = '', nhtsaVehicle = null, folderTitle = '' }, staffUser = 'Shop Staff') {
+  const now = new Date().toISOString();
+  const sessionCode = `VIN-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const rawMeta = {
+    trust_folder_year: true,
+    title_check_required: true,
+    folder_title: folderTitle,
+    cleared_conflicting_vin: conflictingVin || '',
+    original_nhtsa_decode: nhtsaVehicle ? `${nhtsaVehicle.year || ''} ${nhtsaVehicle.make || ''} ${nhtsaVehicle.model || ''}`.trim() : ''
+  };
+  const ins = db.prepare(`
+    INSERT INTO vin_intake_sessions (
+      org_id, session_code, staff_name, vin, license_plate, plate_state, plate_lookup_provider,
+      year, make, model, trim, engine, drivetrain, transmission, body_class,
+      donor_vehicle_id, nhtsa_raw_json, status, created_at, updated_at
+    ) VALUES (1, ?, ?, ?, '', '', 'folder_year_override', ?, ?, ?, 'Title-Check Pending', '', '', '', '', NULL, ?, 'active', ?, ?)
+  `).run(
+    sessionCode,
+    staffUser,
+    TITLE_CHECK_VIN_SENTINEL,
+    Number(folderVehicle.year),
+    String(folderVehicle.make),
+    String(folderVehicle.model),
+    JSON.stringify(rawMeta),
+    now,
+    now
+  );
+  const session = db.prepare('SELECT * FROM vin_intake_sessions WHERE id = ?').get(Number(ins.lastInsertRowid));
+  logSync(
+    'internal',
+    'vin_intake_pipeline',
+    'folder_year_override_locked',
+    sessionCode,
+    'warning',
+    `${staffUser} locked folder override ${folderVehicle.year} ${folderVehicle.make} ${folderVehicle.model} (bin=${folderVehicle.auto_bin_prefix}; cleared conflicting VIN ${conflictingVin || 'none'} — flagged for title-check).`
+  );
+  return session;
 }
 
 /* ==================== 5. AUTOMOTIVE COMPONENT + MPN INTELLIGENCE ==================== */
@@ -1109,13 +1293,28 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     : null;
   let vinResolutionMeta = null;
 
-  // Unified v26 Auto-VIN Lock: if Step 1 wasn't manually locked yet, automatically extract VIN from Drive folder title, ZIP/filenames, or photo/video sticker OCR!
+  // Unified v27 Auto-VIN Lock: if Step 1 wasn't manually locked yet, extract VIN (or honor trust_folder_year=true), NEVER silently binding a conflicting year!
   if (!session) {
     try {
       vinResolutionMeta = await resolveUniversalVinFromInput(payload, staffUser, { fetchImpl, autoLock: true });
+      if (vinResolutionMeta.conflict_resolution_required) {
+        const err = new Error(
+          `Folder label vs. NHTSA VIN conflict detected: ${vinResolutionMeta.vin_label_conflict?.warning || 'Year/model mismatch'}. Pass trust_folder_year=true to lock folder year (${vinResolutionMeta.folder_vehicle?.year || ''} ${vinResolutionMeta.folder_vehicle?.make || ''} ${vinResolutionMeta.folder_vehicle?.model || ''}) or confirm_vin_decode=true to use NHTSA VIN decode.`
+        );
+        err.statusCode = 409;
+        err.details = {
+          conflict_resolution_required: true,
+          vin_label_conflict: vinResolutionMeta.vin_label_conflict,
+          folder_vehicle: vinResolutionMeta.folder_vehicle,
+          nhtsa_vehicle: vinResolutionMeta.nhtsa_vehicle,
+          drive_url: vinResolutionMeta.drive_url
+        };
+        throw err;
+      }
       session = vinResolutionMeta.session;
       sessionCode = session?.session_code || '';
     } catch (vinErr) {
+      if (vinErr.statusCode === 409 || vinErr.statusCode === 400) throw vinErr;
       const err = new Error(
         vinErr.message || 'Mandatory Step 1 Lock: Decode and lock a 17-character VIN (or State + License Plate) before running AI Batch Intake.'
       );
@@ -1124,7 +1323,8 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     }
   }
 
-  if (!session || !validateVinStrict(session.vin).valid) {
+  const isTitleCheckOverrideSession = Boolean(session && isTitleCheckSessionVin(session.vin));
+  if (!session || (!validateVinStrict(session.vin).valid && !isTitleCheckOverrideSession)) {
     const err = new Error(`Invalid or expired VIN intake session "${sessionCode}". Complete Step 1 VIN decode first.`);
     err.statusCode = 422;
     throw err;
@@ -1235,6 +1435,18 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
   // --- D. Google Drive Folder / File URL ---
   const driveUrl = String(payload.drive_url || payload.google_drive_url || '').trim();
   if (driveUrl) {
+    if (/drive\.google\.com/i.test(driveUrl)) {
+      const vCheck = validateFullDriveUrl(driveUrl);
+      if (!vCheck.valid) {
+        const err = new Error(vCheck.error);
+        err.statusCode = 400;
+        throw err;
+      }
+    } else if (/\.{3}|…/.test(driveUrl)) {
+      const err = new Error('Shortened or truncated URL detected ("..."). Paste the full https://drive.google.com/drive/folders/<ID> URL from your browser address bar.');
+      err.statusCode = 400;
+      throw err;
+    }
     inputSources.google_drive_links += 1;
     const driveRes = await fetchImagesFromGoogleDriveUrl(driveUrl, { fetchImpl });
     if (driveRes.folder_title) driveFolderTitle = driveRes.folder_title;
@@ -1371,8 +1583,11 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     const pricePullInstall = laborHours > 0 ? Number((priceWePull + laborHours * laborRate).toFixed(2)) : priceWePull;
     const shippingClass = computeShippingClass(dims.weight_lbs, `${tax.partType} ${fullTitle}`, dims.length_in, dims.width_in, dims.height_in);
     const secCode = generateSecurityCode();
+    const isTitleCheckOverride = isTitleCheckSessionVin(session.vin);
     const cleanNotes = stripDriveUrlsFromPublicText(
-      `VIN-Verified Donor: ${session.year} ${session.make} ${session.model} ${session.trim} ${session.engine} ${session.drivetrain} | Session ${session.session_code} | AI Intake (${ident.provider})`
+      isTitleCheckOverride
+        ? `Staff Folder-Year Override (VIN Flagged for Title-Check): ${session.year} ${session.make} ${session.model} | Session ${session.session_code} | AI Intake (${ident.provider})`
+        : `VIN-Verified Donor: ${session.year} ${session.make} ${session.model} ${session.trim} ${session.engine} ${session.drivetrain} | Session ${session.session_code} | AI Intake (${ident.provider})`
     );
 
     const candidate = {
@@ -1388,7 +1603,9 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       fitment_model: session.model,
       fitment_engine: session.engine,
       fitment_notes: cleanNotes,
-      defect_disclosure: ident.condition_notes || 'Used OEM — pulled & inspected on-site from VIN-verified donor vehicle; see actual photos.',
+      defect_disclosure: ident.condition_notes || (isTitleCheckOverride
+        ? 'Used OEM — pulled & inspected on-site (folder-year locked by staff; VIN flagged for title-check); see actual photos.'
+        : 'Used OEM — pulled & inspected on-site from VIN-verified donor vehicle; see actual photos.'),
       price_we_pull: priceWePull,
       install_labor_hours: laborHours,
       weight_lbs: dims.weight_lbs,
@@ -1520,6 +1737,7 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     session: {
       session_code: session.session_code,
       vin: session.vin,
+      title_check_required: isTitleCheckSessionVin(session.vin),
       year: session.year,
       make: session.make,
       model: session.model,

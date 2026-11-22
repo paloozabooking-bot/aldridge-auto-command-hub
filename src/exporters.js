@@ -73,7 +73,15 @@ function getShopifyGalleryPhotos(item, settings, uploadsDir) {
 
 function isMarketplaceSafeItem(item) {
   if (!item || item.quantity <= 0 || item.status !== 'active') return false;
-  if (!item.verified_vin || !validateVinStrict(item.verified_vin).valid) return false;
+  const vVin = String(item.verified_vin || '').trim().toUpperCase();
+  const isTitleCheckOverride =
+    vVin === 'VIN-TITLE-CHECK' &&
+    Boolean(item.intake_session_id) &&
+    item.intake_source === 'vin_intake_pipeline' &&
+    Boolean(
+      db.prepare("SELECT id FROM vin_intake_sessions WHERE UPPER(session_code) = ? AND vin = 'VIN-TITLE-CHECK' AND status = 'active'").get(String(item.intake_session_id).toUpperCase())
+    );
+  if ((!vVin || !validateVinStrict(vVin).valid) && !isTitleCheckOverride) return false;
   if (!item.intake_session_id || item.intake_source !== 'vin_intake_pipeline') return false;
   if (!hasRealPhotos(item)) return false;
   const skuUpper = String(item.sku || '').trim().toUpperCase();

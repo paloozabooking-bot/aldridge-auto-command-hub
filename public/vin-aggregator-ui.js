@@ -17,6 +17,7 @@
     activeVinSession: null,
     autoBinPrefix: 'BAY-B-SHELF',
     vinLabelConflict: null,
+    pendingConflict: null,
     vinSource: '',
     pendingDriveUrl: '',
     geminiVisionConfigured: null,
@@ -405,20 +406,43 @@
               <button type="submit" class="btn btn-primary" style="width:100%;">Decode &amp; Lock Vehicle via NHTSA vPIC</button>
             </form>
 
-            ${conflict && conflict.has_conflict ? `
+            ${aggState.pendingConflict ? (() => {
+              const pc = aggState.pendingConflict;
+              const fv = pc.folder_vehicle || pc.vin_label_conflict?.folder_vehicle;
+              const nv = pc.nhtsa_vehicle || pc.vin_label_conflict?.nhtsa_vehicle;
+              const folderLbl = fv ? `${fv.year} ${fv.make} ${fv.model}` : (pc.folder_title || 'Folder Year');
+              const nhtsaLbl = nv ? `${nv.year} ${nv.make} ${nv.model}` : 'NHTSA VIN Decode';
+              return `
+                <div id="emp-vin-conflict-banner" style="margin-top:0.75rem;padding:0.85rem;background:#fffbeb;border:2px solid #d97706;border-radius:12px;font-size:0.82rem;color:#78350f;">
+                  <div style="font-weight:800;font-size:0.86rem;color:#9a3412;margin-bottom:0.35rem;">⚠️ FOLDER LABEL vs. NHTSA VIN MISMATCH — CHOOSE TRUE VEHICLE BEFORE LOCKING</div>
+                  <div style="margin-bottom:0.55rem;line-height:1.45;">
+                    <div><strong>Folder Label:</strong> ${esc(folderLbl)}${fv?.auto_bin_prefix ? ` (Bin: <code>${esc(fv.auto_bin_prefix)}</code>)` : ''}</div>
+                    <div><strong>NHTSA vPIC VIN Decode:</strong> ${esc(nhtsaLbl)} • VIN <code class="mono">${esc(nv?.vin || pc.vin_detected || '')}</code>${nv?.auto_bin_prefix ? ` (Bin: <code>${esc(nv.auto_bin_prefix)}</code>)` : ''}</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:0.45rem;">
+                    <button type="button" id="btn-conflict-use-nhtsa-vin" class="btn btn-primary btn-sm" style="width:100%;">
+                      ✓ Use True VIN Decode (${esc(nhtsaLbl)})
+                    </button>
+                    ${fv ? `
+                      <button type="button" id="btn-conflict-trust-folder-year" class="btn btn-dark btn-sm" style="width:100%;">
+                        ⚠ Keep Folder Year (${esc(folderLbl)}) &amp; Clear Wrong VIN
+                      </button>
+                    ` : ''}
+                  </div>
+                </div>
+              `;
+            })() : (conflict && conflict.has_conflict ? `
               <div style="margin-top:0.75rem;padding:0.7rem;background:#fef3c7;border:1.5px solid #d97706;border-radius:10px;font-size:0.82rem;color:#78350f;">
-                <strong>⚠️ Folder Label vs. NHTSA VIN Conflict Flagged:</strong><br/>
-                ${esc(conflict.warning)}<br/>
-                <span style="font-size:0.76rem;">Using authoritative NHTSA vPIC decode. Enter a different 17-char VIN above if needed.</span>
+                <strong>⚠️ Conflict Resolved:</strong> ${esc(conflict.warning)}
               </div>
-            ` : ''}
+            ` : '')}
 
             ${locked ? `
               <div style="margin-top:0.75rem;padding:0.75rem;background:#ecfdf5;border:1.5px solid #22c55e;border-radius:12px;font-size:0.84rem;">
                 <strong>Locked Donor Vehicle${aggState.vinSource ? ` (${esc(aggState.vinSource)})` : ''}:</strong><br/>
                 <span style="font-size:1rem;font-weight:800;color:#14532d;">${esc(locked.year)} ${esc(locked.make)} ${esc(locked.model)} ${esc(locked.trim || '')}</span><br/>
-                <span class="mono" style="font-size:0.78rem;">VIN: ${esc(locked.vin)} • Session: ${esc(locked.session_code)} • Auto-Bin: ${esc(autoBin)}</span><br/>
-                <span>Engine: ${esc(locked.engine || 'Verified')} • Drive: ${esc(locked.drivetrain || 'Verified')} • Trans: ${esc(locked.transmission || 'Verified')}</span>
+                <span class="mono" style="font-size:0.78rem;">VIN: ${esc(locked.vin === 'VIN-TITLE-CHECK' ? 'CLEARED (Flagged for Title-Check)' : locked.vin)} • Session: ${esc(locked.session_code)} • Auto-Bin: ${esc(autoBin)}</span><br/>
+                <span>Engine: ${esc(locked.engine || (locked.vin === 'VIN-TITLE-CHECK' ? 'Folder Year Override' : 'Verified'))} • Drive: ${esc(locked.drivetrain || 'Verified')} • Trans: ${esc(locked.transmission || 'Verified')}</span>
               </div>
             ` : ''}
           </div>
@@ -640,6 +664,115 @@
       }
     });
 
+    function validateClientDriveUrl(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return 'Paste a full Google Drive folder or file URL first.';
+      if (/\.{3}|…/.test(s)) {
+        return 'Shortened/truncated URL detected ("..."). Copy the full URL directly from your browser address bar (e.g. https://drive.google.com/drive/folders/<ID>).';
+      }
+      if (!/^https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|file\/d\/|open\?id=|uc\?)/i.test(s)) {
+        return 'Enter a full https://drive.google.com/drive/folders/<ID> or https://drive.google.com/file/d/<ID>/view URL.';
+      }
+      return '';
+    }
+
+    function applyVinResolveResponse(d, fallbackSource) {
+      if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
+      if (d.drive_url) aggState.pendingDriveUrl = d.drive_url;
+      if (d.conflict_resolution_required) {
+        aggState.pendingConflict = d;
+        aggState.activeVinSession = null;
+        aggState.vinLabelConflict = d.vin_label_conflict || null;
+        aggState.lastBatchResult = null;
+        renderEmployeeVinIntakeGate();
+        return;
+      }
+      aggState.pendingConflict = null;
+      aggState.activeVinSession = d.session;
+      aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
+      aggState.vinLabelConflict = d.vin_label_conflict || null;
+      aggState.vinSource = d.vin_source || fallbackSource;
+      aggState.lastBatchResult = null;
+      renderEmployeeVinIntakeGate();
+    }
+
+    // Live-sync Step 1 Google Drive URL straight into Step 2's Drive URL input (exact full URL preserved!)
+    const step1DriveInput = host.querySelector('#emp-step1-drive-extract-input');
+    const step2DriveInput = host.querySelector('#emp-step2-drive-url');
+    if (step1DriveInput) {
+      const mirrorDriveUrl = () => {
+        const val = String(step1DriveInput.value || '').trim();
+        aggState.pendingDriveUrl = val;
+        if (step2DriveInput && step2DriveInput.value !== val) {
+          step2DriveInput.value = val;
+        }
+      };
+      step1DriveInput.addEventListener('input', mirrorDriveUrl);
+      step1DriveInput.addEventListener('change', mirrorDriveUrl);
+    }
+    if (step2DriveInput) {
+      step2DriveInput.addEventListener('input', () => {
+        aggState.pendingDriveUrl = String(step2DriveInput.value || '').trim();
+      });
+    }
+
+    // Conflict Resolution Button 1: Use True NHTSA vPIC VIN Decode
+    host.querySelector('#btn-conflict-use-nhtsa-vin')?.addEventListener('click', async () => {
+      const pc = aggState.pendingConflict;
+      if (!pc) return;
+      const out = document.getElementById('emp-step1-msg');
+      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">Locking NHTSA vPIC VIN Decode...</p>';
+      try {
+        const r = await fetch('/api/employee/intake/decode-vin-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            drive_url: pc.drive_url || aggState.pendingDriveUrl || '',
+            folder_title: pc.folder_title || '',
+            vin: pc.nhtsa_vehicle?.vin || pc.vin_detected || '',
+            confirm_vin_decode: true,
+            auto_lock: true
+          })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Could not lock NHTSA VIN decode.');
+        applyVinResolveResponse(d, 'confirm_vin_decode');
+      } catch (err) {
+        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
+      }
+    });
+
+    // Conflict Resolution Button 2: Keep Folder Year & Clear Wrong VIN (trust_folder_year: true)
+    host.querySelector('#btn-conflict-trust-folder-year')?.addEventListener('click', async () => {
+      const pc = aggState.pendingConflict;
+      if (!pc) return;
+      const fv = pc.folder_vehicle || pc.vin_label_conflict?.folder_vehicle || {};
+      const out = document.getElementById('emp-step1-msg');
+      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">Locking Folder Year/Make/Model &amp; clearing conflicting VIN for title-check...</p>';
+      try {
+        const r = await fetch('/api/employee/intake/decode-vin-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            drive_url: pc.drive_url || aggState.pendingDriveUrl || '',
+            folder_title: pc.folder_title || '',
+            folder_year: fv.year || '',
+            folder_make: fv.make || '',
+            folder_model: fv.model || '',
+            trust_folder_year: true,
+            auto_lock: true
+          })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Could not apply folder-year override.');
+        applyVinResolveResponse(d, 'folder_year_override_title_check');
+      } catch (err) {
+        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
+      }
+    });
+
     // Step 1A: Scan VIN Sticker Photo/Video or .ZIP via unified /api/employee/intake/decode-vin-media
     host.querySelector('#emp-step1-vin-media-input')?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
@@ -659,13 +792,7 @@
         });
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'Could not extract VIN from media.');
-        aggState.activeVinSession = d.session;
-        aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
-        aggState.vinLabelConflict = d.vin_label_conflict || null;
-        aggState.vinSource = d.vin_source || 'media_ocr';
-        if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
-        aggState.lastBatchResult = null;
-        renderEmployeeVinIntakeGate();
+        applyVinResolveResponse(d, 'media_ocr');
       } catch (err) {
         out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
       }
@@ -675,11 +802,16 @@
     host.querySelector('#btn-step1-extract-drive-vin')?.addEventListener('click', async () => {
       const driveUrl = String(document.getElementById('emp-step1-drive-extract-input')?.value || '').trim();
       const out = document.getElementById('emp-step1-msg');
-      if (!driveUrl) {
-        out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Paste a Google Drive folder or file link first.</div>';
+      const urlErr = validateClientDriveUrl(driveUrl);
+      if (urlErr) {
+        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(urlErr)}</div>`;
         return;
       }
+      // Immediately mirror exact full Drive URL into Step 2!
       aggState.pendingDriveUrl = driveUrl;
+      const s2 = document.getElementById('emp-step2-drive-url');
+      if (s2) s2.value = driveUrl;
+
       out.innerHTML = '<p style="color:#9a3412;font-weight:700;">☁️ Reading Drive folder title &amp; decoding VIN via NHTSA vPIC...</p>';
       try {
         const r = await fetch('/api/employee/intake/decode-vin-media', {
@@ -690,13 +822,7 @@
         });
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'Could not extract VIN from Google Drive folder.');
-        aggState.activeVinSession = d.session;
-        aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
-        aggState.vinLabelConflict = d.vin_label_conflict || null;
-        aggState.vinSource = d.vin_source || 'folder_name_auto_extract';
-        if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
-        aggState.lastBatchResult = null;
-        renderEmployeeVinIntakeGate();
+        applyVinResolveResponse(d, 'folder_name_auto_extract');
       } catch (err) {
         out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
       }
@@ -718,6 +844,7 @@
         });
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'VIN decode failed (sign in to Employee Backend first).');
+        aggState.pendingConflict = null;
         aggState.activeVinSession = d.session;
         aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
         aggState.vinLabelConflict = null;
@@ -764,6 +891,13 @@
       if (!aggState.queuedFiles.length && !driveUrl) {
         out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Attach at least 1 photo/video, drop a .zip archive, or paste a Google Drive link first.</div>';
         return;
+      }
+      if (driveUrl) {
+        const driveErr = validateClientDriveUrl(driveUrl);
+        if (driveErr) {
+          out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(driveErr)}</div>`;
+          return;
+        }
       }
 
       const fd = new FormData();

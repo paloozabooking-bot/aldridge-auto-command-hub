@@ -42,14 +42,79 @@ function extractIsoVinCandidates(rawText = '') {
   return valid;
 }
 
+const TITLE_CHECK_VIN_SENTINEL = 'VIN-TITLE-CHECK';
+
+function isTitleCheckSessionVin(rawVin = '') {
+  return String(rawVin || '').trim().toUpperCase() === TITLE_CHECK_VIN_SENTINEL;
+}
+
+const KNOWN_MAKE_ALIASES = [
+  { re: /\btoyota\b/i, name: 'Toyota' },
+  { re: /\bfiat\b/i, name: 'Fiat' },
+  { re: /\bsubaru\b/i, name: 'Subaru' },
+  { re: /\b(chevrolet|chevy)\b/i, name: 'Chevrolet' },
+  { re: /\bdodge\b/i, name: 'Dodge' },
+  { re: /\bford\b/i, name: 'Ford' },
+  { re: /\bhonda\b/i, name: 'Honda' },
+  { re: /\bnissan\b/i, name: 'Nissan' },
+  { re: /\bgmc\b/i, name: 'GMC' },
+  { re: /\bjeep\b/i, name: 'Jeep' },
+  { re: /\bram\b/i, name: 'Ram' },
+  { re: /\bhyundai\b/i, name: 'Hyundai' },
+  { re: /\bkia\b/i, name: 'Kia' },
+  { re: /\bbmw\b/i, name: 'BMW' },
+  { re: /\bmercedes\b/i, name: 'Mercedes-Benz' },
+  { re: /\bmazda\b/i, name: 'Mazda' },
+  { re: /\blexus\b/i, name: 'Lexus' },
+  { re: /\bacura\b/i, name: 'Acura' },
+  { re: /\bvolkswagen|\bvw\b/i, name: 'Volkswagen' },
+  { re: /\bchrysler\b/i, name: 'Chrysler' },
+  { re: /\bbuick\b/i, name: 'Buick' },
+  { re: /\bcadillac\b/i, name: 'Cadillac' },
+  { re: /\bpontiac\b/i, name: 'Pontiac' },
+  { re: /\bvolvo\b/i, name: 'Volvo' },
+  { re: /\baudi\b/i, name: 'Audi' }
+];
+
+function parseFolderYearMakeModel(folderLabel = '') {
+  const cleaned = String(folderLabel || '')
+    .replace(/\b[A-HJ-NPR-Z0-9]{17}\b/gi, ' ')
+    .replace(/[_\-\/\\]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+
+  const yrMatch = cleaned.match(/\b(19[6-9]\d|20[0-2]\d)\b/);
+  const year = yrMatch ? parseInt(yrMatch[1], 10) : 0;
+  const makeEntry = KNOWN_MAKE_ALIASES.find((m) => m.re.test(cleaned));
+  if (!year || !makeEntry) return null;
+
+  const mMatch = cleaned.match(makeEntry.re);
+  const afterMake = mMatch ? cleaned.slice(mMatch.index + mMatch[0].length).trim() : '';
+  const modelTokens = afterMake
+    .split(/\s+/)
+    .filter((t) => t && !/^(parts?|photos?|images?|donor|car|truck|suv|sedan|van|folder|vin|oem|used|bay|lot|\d{4})$/i.test(t))
+    .slice(0, 2);
+  const model = modelTokens
+    .map((t) => (/^\d+$/.test(t) || t.length <= 2 ? t.toUpperCase() : t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()))
+    .join(' ')
+    .trim();
+  if (!model) return null;
+
+  const parsed = { year, make: makeEntry.name, model };
+  parsed.auto_bin_prefix = buildAutoBinPrefix(parsed);
+  return parsed;
+}
+
 function detectFolderVinConflict(folderLabel = '', decoded = {}) {
   const label = String(folderLabel || '').trim();
   if (!label || !decoded?.year) {
     return { has_conflict: false, warning: '' };
   }
 
+  const parsedFolder = parseFolderYearMakeModel(label);
   const yrMatch = label.match(/\b(19[6-9]\d|20[0-2]\d)\b/);
-  const folderYear = yrMatch ? parseInt(yrMatch[1], 10) : 0;
+  const folderYear = parsedFolder?.year || (yrMatch ? parseInt(yrMatch[1], 10) : 0);
   const decodedYear = parseInt(decoded.year, 10) || 0;
   const decodedMake = String(decoded.make || '').trim();
   const decodedModel = String(decoded.model || '').trim();
@@ -57,19 +122,36 @@ function detectFolderVinConflict(folderLabel = '', decoded = {}) {
   const warnings = [];
   if (folderYear && decodedYear && folderYear !== decodedYear) {
     warnings.push(
-      `Folder/label specifies year ${folderYear}, but VIN ${decoded.vin} decodes via NHTSA vPIC to ${decodedYear} ${decodedMake} ${decodedModel}`
+      `Folder label specifies ${folderYear}${parsedFolder ? ` ${parsedFolder.make} ${parsedFolder.model}` : ''}, but VIN ${decoded.vin} decodes via NHTSA vPIC to ${decodedYear} ${decodedMake} ${decodedModel}`
     );
   }
 
-  const knownMakes = ['toyota', 'fiat', 'subaru', 'chevrolet', 'chevy', 'dodge', 'ford', 'honda', 'nissan', 'gmc', 'jeep', 'ram', 'hyundai', 'kia', 'bmw', 'mercedes', 'mazda', 'lexus', 'acura'];
-  const lowerLabel = label.toLowerCase();
-  const labelMake = knownMakes.find((m) => new RegExp(`\\b${m}\\b`, 'i').test(lowerLabel));
-  const normLabelMake = labelMake === 'chevy' ? 'chevrolet' : labelMake;
-  if (normLabelMake && decodedMake && !decodedMake.toLowerCase().includes(normLabelMake)) {
+  if (parsedFolder?.make && decodedMake && !decodedMake.toLowerCase().includes(parsedFolder.make.toLowerCase())) {
     warnings.push(
-      `Folder/label mentions make "${labelMake.toUpperCase()}", but VIN ${decoded.vin} decodes via NHTSA vPIC to ${decodedMake}`
+      `Folder label specifies make "${parsedFolder.make}", but VIN ${decoded.vin} decodes via NHTSA vPIC to ${decodedMake}`
     );
   }
+
+  if (parsedFolder?.model && decodedModel) {
+    const fm = parsedFolder.model.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const dm = decodedModel.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (fm.length >= 3 && dm.length >= 3 && !dm.includes(fm) && !fm.includes(dm)) {
+      warnings.push(
+        `Folder label specifies model "${parsedFolder.model}", but VIN ${decoded.vin} decodes via NHTSA vPIC to ${decodedModel}`
+      );
+    }
+  }
+
+  const nhtsaVehicle = {
+    vin: decoded.vin || '',
+    year: decodedYear || null,
+    make: decodedMake,
+    model: decodedModel,
+    trim: decoded.trim || '',
+    engine: decoded.engine || '',
+    drivetrain: decoded.drivetrain || '',
+    auto_bin_prefix: buildAutoBinPrefix(decoded)
+  };
 
   return {
     has_conflict: warnings.length > 0,
@@ -77,6 +159,8 @@ function detectFolderVinConflict(folderLabel = '', decoded = {}) {
     folder_year: folderYear || null,
     decoded_year: decodedYear || null,
     decoded_vehicle: `${decodedYear} ${decodedMake} ${decodedModel}`.trim(),
+    folder_vehicle: parsedFolder,
+    nhtsa_vehicle: nhtsaVehicle,
     warning: warnings.join(' | ')
   };
 }
@@ -88,7 +172,7 @@ function buildAutoBinPrefix(session = {}) {
   const make = String(session.make || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const modelRaw = String(session.model || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  // Crisp mechanic-friendly bay bin labels: CAMRY-05-BAYB, FIAT500-15-BAYB, EQUINOX-16-BAYB, 4RUNNER-12-BAYB
+  // Crisp mechanic-friendly bay bin labels: CAMRY-05-BAYB, CAMRY-96-BAYB, FIAT500-15-BAYB, EQUINOX-16-BAYB
   let token = modelRaw;
   if (make === 'FIAT' && modelRaw.startsWith('500')) {
     token = 'FIAT500';
@@ -263,6 +347,9 @@ function checkSoldOrderAndSrsBlocklist({ filename = '', legacySku = '', title = 
 
 module.exports = {
   SHOPIFY_SOLD_ORDER_SKUS,
+  TITLE_CHECK_VIN_SENTINEL,
+  isTitleCheckSessionVin,
+  parseFolderYearMakeModel,
   extractIsoVinCandidates,
   detectFolderVinConflict,
   buildAutoBinPrefix,
