@@ -1863,9 +1863,22 @@ function seedAuditGroundTruthCatalog(forceReplace = false) {
   return { seeded: true, stats, active_count: cleanActiveItems.length };
 }
 
+function countVerifiedVinInventory() {
+  return Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c FROM inventory_items
+      WHERE status = 'active'
+        AND COALESCE(verified_vin, '') != ''
+        AND COALESCE(intake_session_id, '') != ''
+        AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+    `).get()?.c || 0
+  );
+}
+
 function ensureCleanSlateBaseline() {
   getSettings();
   const now = new Date().toISOString();
+  // Never clear or overwrite verified VIN-intake inventory_items or vin_intake_sessions on container restart/redeploy.
 
   // Ensure verified Modulo-11 yard donor vehicles are available in dropdown (zero fake/placeholder VINs)
   const donorCount = db.prepare('SELECT COUNT(*) as c FROM donor_vehicles').get().c;
@@ -3028,6 +3041,7 @@ module.exports = {
   upsertCustomer,
   logSync,
   ensureCleanSlateBaseline,
+  countVerifiedVinInventory,
   seedDemoDataIfNeeded,
   seedAuditGroundTruthCatalog,
   seedDefaultOrganizationIfNeeded,

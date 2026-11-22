@@ -58,10 +58,16 @@ function purgeLegacyPreVinCatalog({ actor = 'system' } = {}) {
     `).run();
     purgedInventory = Number(invDel.changes || 0);
 
-    // Clear legacy pre-VIN donor vehicles not linked to a verified vin_intake_sessions row
+    // Clear legacy pre-VIN donor vehicles not linked to a verified vin_intake_sessions OR verified inventory_items row
     const donorDel = db.prepare(`
       DELETE FROM donor_vehicles
       WHERE id NOT IN (SELECT COALESCE(donor_vehicle_id, -1) FROM vin_intake_sessions)
+        AND id NOT IN (
+          SELECT COALESCE(donor_vehicle_id, -1) FROM inventory_items
+          WHERE COALESCE(verified_vin, '') != ''
+            AND COALESCE(intake_session_id, '') != ''
+            AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+        )
     `).run();
     purgedDonors = Number(donorDel.changes || 0);
 

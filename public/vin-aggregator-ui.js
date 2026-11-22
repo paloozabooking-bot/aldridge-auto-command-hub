@@ -349,9 +349,9 @@
       <div class="emp-vin-gate-shell">
         <div class="emp-vin-gate-header">
           <div>
-            <div class="eyebrow-label" style="margin-bottom:0.15rem;">UNIFIED VIN-FIRST ENGINE (v28) • FOLDER/FILE + PHOTO/VIDEO OCR + MANUAL VIN</div>
+            <div class="eyebrow-label" style="margin-bottom:0.15rem;">UNIFIED VIN-FIRST ENGINE (v29) • MASTER PARENT FOLDER FLEET RUNNER + PHOTO/VIDEO OCR + MANUAL VIN</div>
             <h3 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.3rem;">Unified Mandatory VIN / Plate &amp; Hands-Free AI Media Intake</h3>
-            <p style="margin:0.25rem 0 0;font-size:0.86rem;color:#5c4b39;">Auto-extracts 17-char ISO-3779 VINs from Drive folder titles, .zip/file names, or VIN sticker photos/videos — with instant manual VIN &amp; License Plate override.</p>
+            <p style="margin:0.25rem 0 0;font-size:0.86rem;color:#5c4b39;">Run your entire multi-vehicle Google Drive fleet in 1 click OR lock a single vehicle via Drive folder title, .zip/file names, VIN sticker photo/video, or manual VIN/Plate.</p>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;">
             ${visionBadgeHtml}
@@ -367,6 +367,23 @@
             <button type="button" class="btn btn-primary btn-sm" id="btn-save-inline-gemini-key">Save &amp; Persist Key</button>
           </div>
           <div id="emp-inline-gemini-key-msg" style="margin-top:0.35rem;font-size:0.78rem;"></div>
+        </div>
+
+        <!-- MASTER PARENT GOOGLE DRIVE FOLDER MULTI-VEHICLE BATCH RUNNER (v29) -->
+        <div class="surface-card" style="margin-bottom:0.95rem;border:2px solid #0f766e;background:#f0fdfa;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">
+            <div>
+              <div style="font-size:0.74rem;font-weight:800;letter-spacing:0.06em;color:#0f766e;text-transform:uppercase;">🚀 1-CLICK MASTER FLEET RUNNER • ALL VERIFIED 17-VIN SUBFOLDERS</div>
+              <h4 style="margin:0.15rem 0 0.25rem;font-size:1.05rem;color:#134e4a;">Master Parent Google Drive Folder Multi-Vehicle Batch Intake</h4>
+              <p style="margin:0;font-size:0.82rem;color:#115e59;">Enumerates every subfolder, locks each verified 17-char VIN via NHTSA vPIC, runs Gemini 2.5 Flash Vision + multi-angle dedupe + Sold/SRS filtering, pushes live to Shopify &amp; all feeds, and flags folders missing a 17-char VIN without mis-tagging.</p>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" id="btn-master-shopify-sync-now" style="border-color:#0f766e;color:#0f766e;">🛍️ Sync All Verified SKUs to Shopify</button>
+          </div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.65rem;">
+            <input type="url" id="emp-master-drive-url-input" class="input mono" style="flex:1;min-width:280px;font-size:0.8rem;" value="${esc(aggState.masterDriveUrl || 'https://drive.google.com/drive/u/0/folders/1upmnO9StviS4Wasuhy_GFcg8h1el9T4y')}" placeholder="https://drive.google.com/drive/u/0/folders/..." />
+            <button type="button" class="btn btn-primary" id="btn-run-master-drive-batch" style="background:#0f766e;border-color:#0f766e;">🚀 Run Master Drive Folder Batch (All 17-VIN Vehicles)</button>
+          </div>
+          <div id="emp-master-batch-status" style="margin-top:0.65rem;"></div>
         </div>
 
         <div id="emp-purge-status-out" style="margin-bottom:0.8rem;"></div>
@@ -733,6 +750,134 @@
         renderEmployeeVinIntakeGate();
       } catch (err) {
         if (msg) msg.innerHTML = `<span style="color:#b91c1c;font-weight:700;">${esc(err.message)}</span>`;
+      }
+    });
+
+    // Master Parent Folder Multi-Vehicle Batch Runner (v29)
+    function renderMasterJobBox(job) {
+      const box = document.getElementById('emp-master-batch-status');
+      if (!box || !job) return;
+      const pct = job.verified_17vin_count > 0
+        ? Math.min(100, Math.round((Number(job.completed_folders || 0) / job.verified_17vin_count) * 100))
+        : 0;
+      const statusBadge = job.status === 'completed'
+        ? '<span class="sku-badge-live">✓ COMPLETED</span>'
+        : (job.status === 'failed'
+          ? '<span style="background:#dc2626;color:#fff;padding:2px 8px;border-radius:999px;font-size:0.72rem;font-weight:800;">✕ FAILED</span>'
+          : `<span class="sku-badge-store">⚡ RUNNING (${job.completed_folders}/${job.verified_17vin_count} vehicles • ${pct}%)</span>`);
+
+      const perFolderHtml = (job.per_folder_results || []).length
+        ? `<div style="margin-top:0.55rem;overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.77rem;background:#fff;border:1px solid #ccfbf1;border-radius:8px;">
+            <thead><tr style="background:#ccfbf1;color:#134e4a;text-align:left;">
+              <th style="padding:5px 8px;">Donor Vehicle (NHTSA Locked)</th>
+              <th style="padding:5px 8px;">17-Char VIN</th>
+              <th style="padding:5px 8px;">Bin</th>
+              <th style="padding:5px 8px;">Photos</th>
+              <th style="padding:5px 8px;">SKUs Created</th>
+              <th style="padding:5px 8px;">Merged / Blocked</th>
+            </tr></thead>
+            <tbody>${(job.per_folder_results || []).map((f) => `
+              <tr style="border-top:1px solid #e2e8f0;">
+                <td style="padding:5px 8px;font-weight:700;">${esc(f.vehicle || f.folder_title)}${f.error ? ` <span style="color:#b91c1c;">(${esc(f.error)})</span>` : ''}</td>
+                <td style="padding:5px 8px;" class="mono">${esc(f.vin || '')}</td>
+                <td style="padding:5px 8px;" class="mono">${esc(f.bin_location || '')}</td>
+                <td style="padding:5px 8px;">${Number(f.photos_received || 0)}</td>
+                <td style="padding:5px 8px;font-weight:800;color:#15803d;">${Number(f.created_count || 0)}</td>
+                <td style="padding:5px 8px;">${Number(f.angles_merged || 0)} merged • ${Number(f.sold_blocked || 0)} sold • ${Number(f.srs_blocked || 0)} SRS</td>
+              </tr>`).join('')}
+            </tbody>
+          </table></div>`
+        : '';
+
+      const needsVinHtml = (job.needs_vin_folders || []).length
+        ? `<div style="margin-top:0.65rem;padding:0.65rem 0.8rem;background:#fffbeb;border:1.5px solid #f59e0b;border-radius:10px;">
+            <div style="font-size:0.75rem;font-weight:800;color:#92400e;margin-bottom:0.35rem;">⚠️ NEEDS 17-CHAR VIN / PLATE LOOKUP (${job.needs_vin_folders.length} Folders Skipped — Zero Mis-Tagging)</div>
+            <ul style="margin:0;padding-left:1.15rem;font-size:0.78rem;color:#78350f;line-height:1.45;">
+              ${job.needs_vin_folders.map((nf) => `<li><strong>${esc(nf.title)}</strong> — ${esc(nf.reason || 'Missing 17-char VIN')}</li>`).join('')}
+            </ul>
+          </div>`
+        : '';
+
+      box.innerHTML = `
+        <div style="background:#fff;border:1.5px solid #99f6e4;border-radius:10px;padding:0.75rem;font-size:0.82rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.4rem;">
+            <div><strong>Master Job <code class="mono">${esc(job.job_id)}</code></strong> • ${job.verified_17vin_count} Verified 17-VIN Vehicles • ${job.needs_vin_count} Needs VIN</div>
+            ${statusBadge}
+          </div>
+          ${job.current_folder ? `<div style="margin-top:0.35rem;color:#0f766e;font-weight:700;">⏳ Currently processing: ${esc(job.current_folder)}</div>` : ''}
+          <div style="margin-top:0.4rem;color:#134e4a;">
+            <strong>Totals:</strong> ${Number(job.total_photos_received || 0)} photos processed • <strong>${Number(job.total_created_skus || 0)} verified OEM SKUs created</strong> • ${Number(job.total_angles_merged || 0)} duplicate angles merged • ${Number(job.total_sold_blocked || 0)} sold blocked • ${Number(job.total_srs_blocked || 0)} SRS blocked
+            ${job.shopify_sync_result ? ` • <strong>Shopify Sync:</strong> ${Number(job.shopify_sync_result.created || 0)} created / ${Number(job.shopify_sync_result.updated || 0)} updated` : ''}
+          </div>
+          ${perFolderHtml}
+          ${needsVinHtml}
+        </div>
+      `;
+    }
+
+    if (aggState.masterBatchJob) renderMasterJobBox(aggState.masterBatchJob);
+
+    host.querySelector('#btn-run-master-drive-batch')?.addEventListener('click', async () => {
+      const inp = document.getElementById('emp-master-drive-url-input');
+      const box = document.getElementById('emp-master-batch-status');
+      const driveUrl = String(inp?.value || '').trim();
+      const urlErr = validateClientDriveUrl(driveUrl);
+      if (urlErr) {
+        if (box) box.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.82rem;">${esc(urlErr)}</div>`;
+        return;
+      }
+      aggState.masterDriveUrl = driveUrl;
+      if (box) box.innerHTML = '<div class="agg-loading">🚀 Scanning parent Google Drive folder, verifying all 17-char VINs via NHTSA vPIC &amp; launching fleet batch intake...</div>';
+      try {
+        const r = await fetch('/api/employee/intake/batch-ai-master', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({ drive_url: driveUrl, async: true, push_shopify: true })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Sign in to Employee Backend first.');
+        aggState.masterBatchJob = d;
+        renderMasterJobBox(d);
+        if (d.status === 'running' && d.job_id) {
+          const pollId = setInterval(async () => {
+            try {
+              const pr = await fetch(`/api/employee/intake/batch-ai-master/${encodeURIComponent(d.job_id)}`, {
+                headers: { ...getEmployeeTokenHeader() },
+                credentials: 'same-origin'
+              });
+              const pd = await pr.json();
+              if (pr.ok && pd.ok) {
+                aggState.masterBatchJob = pd;
+                renderMasterJobBox(pd);
+                if (pd.status !== 'running') {
+                  clearInterval(pollId);
+                  if (typeof window.loadBootstrap === 'function') window.loadBootstrap();
+                }
+              }
+            } catch (_) {}
+          }, 4000);
+        }
+      } catch (err) {
+        if (box) box.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.82rem;">${esc(err.message)}</div>`;
+      }
+    });
+
+    host.querySelector('#btn-master-shopify-sync-now')?.addEventListener('click', async () => {
+      const box = document.getElementById('emp-master-batch-status');
+      if (box) box.innerHTML = '<div class="agg-loading">🛍️ Pushing all verified VIN-intake SKUs live to Shopify Co-Master...</div>';
+      try {
+        const r = await fetch('/api/employee/shopify/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({ async: true })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Shopify sync failed (sign in first).');
+        if (box) box.innerHTML = `<div style="background:#ecfdf5;border:1.5px solid #22c55e;border-radius:10px;padding:0.65rem;font-size:0.82rem;color:#14532d;font-weight:700;">🛍️ Shopify Co-Master Sync started (Job ${esc(d.job_id || 'LIVE')}) — pushing all verified SKUs live to aldridgesales.myshopify.com.</div>`;
+      } catch (err) {
+        if (box) box.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.82rem;">${esc(err.message)}</div>`;
       }
     });
 

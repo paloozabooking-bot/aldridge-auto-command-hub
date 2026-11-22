@@ -103,9 +103,13 @@ const {
   placeAggregatorPartOrder
 } = require('./vin-intake-aggregator');
 const {
+  DEFAULT_MASTER_DRIVE_URL,
   parseMultipartFormData,
   resolveUniversalVinFromInput,
-  runAiMultiInputBatchIntake
+  runAiMultiInputBatchIntake,
+  startMasterParentFolderBatchJob,
+  getMasterBatchJob,
+  getLatestMasterBatchJob
 } = require('./ai-batch-intake');
 const { buildAutoBinPrefix, isTitleCheckSessionVin } = require('./dedupe');
 const {
@@ -716,10 +720,12 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v28',
+        sw_version: 'v29',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
+        master_batch_endpoint: '/api/employee/intake/batch-ai-master',
+        employee_shopify_sync_endpoint: '/api/employee/shopify/sync',
         decode_vin_media_endpoint: '/api/employee/intake/decode-vin-media',
         vin_vehicle_intake_endpoint: '/api/employee/intake/vehicle',
         parts_aggregator_endpoint: '/api/parts-aggregator/search',
@@ -728,6 +734,8 @@ const server = http.createServer(async (req, res) => {
         gemini_vision_persisted: Boolean(cfg.gemini_api_key),
         public_product_detail_modal: true,
         vin_whitelist_fixed: true,
+        master_parent_folder_batch_runner: true,
+        verified_vin_inventory_protected: true,
         hands_free_multi_input_batch_intake: true,
         unified_vin_extraction: true,
         folder_vin_conflict_override: true,
@@ -1515,7 +1523,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (method === 'GET' && (pathname === '/api/feeds/meta-catalog.csv' || pathname === '/api/exports/meta.csv' || pathname === '/api/exports/meta-commerce.csv')) {
+    if (method === 'GET' && (pathname === '/api/feeds/meta.csv' || pathname === '/api/feeds/meta-catalog.csv' || pathname === '/api/exports/meta.csv' || pathname === '/api/exports/meta-commerce.csv')) {
       const items = db.prepare('SELECT * FROM inventory_items').all();
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
@@ -1960,6 +1968,103 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           sendJson(res, 400, { ok: false, error: err.message || 'Could not persist Gemini API key.' });
         }
+        return;
+      }
+
+      // Master Parent Google Drive Folder Multi-Vehicle Batch Runner (All Verified 17-VIN Subfolders in 1 Run)
+      if (method === 'POST' && pathname === '/api/employee/intake/batch-ai-master') {
+        try {
+          const rawStr = (await readRawBody(req)) || '{}';
+          const payload = JSON.parse(rawStr);
+          const { accepted, job } = await startMasterParentFolderBatchJob(
+            {
+              drive_url: payload.drive_url || payload.google_drive_url || DEFAULT_MASTER_DRIVE_URL,
+              ...payload
+            },
+            empSession.staff_name,
+            {
+              uploadsDir: UPLOADS_DIR,
+              baseUrl,
+              syncAllToShopifyFn: syncAllToShopifyCoMaster
+            }
+          );
+          sendJson(res, accepted ? 202 : 200, {
+            ok: true,
+            accepted,
+            ...job
+          });
+        } catch (err) {
+          sendJson(res, err.statusCode || 400, {
+            ok: false,
+            error: err.message || 'Master Drive Folder batch intake failed.'
+          });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/intake/batch-ai-master/latest') {
+        const job = getLatestMasterBatchJob();
+        sendJson(res, 200, { ok: true, job: job || null });
+        return;
+      }
+
+      if (method === 'GET' && pathname.startsWith('/api/employee/intake/batch-ai-master/')) {
+        const jobId = decodeURIComponent(pathname.replace('/api/employee/intake/batch-ai-master/', '')).trim();
+        const job = getMasterBatchJob(jobId);
+        if (!job) {
+          sendJson(res, 404, { ok: false, error: `Master batch job "${jobId}" not found.` });
+          return;
+        }
+        sendJson(res, 200, { ok: true, ...job });
+        return;
+      }
+
+      // Employee Co-Master Shopify Sync Endpoint (supports synchronous or async:true for large multi-vehicle catalogs)
+      if (method === 'POST' && pathname === '/api/employee/shopify/sync') {
+        try {
+          const rawStr = (await readRawBody(req)) || '{}';
+          const opts = rawStr ? JSON.parse(rawStr) : {};
+          const updateExisting = Boolean(opts.update_existing || opts.updateExisting);
+          const runAsync = Boolean(opts.async === true || opts.async === 'true');
+          const enrichmentSummary = opts.enrich !== false ? enrichAllActiveInventoryInDb() : null;
+          const dedupeSummary = deduplicateCatalog();
+          if (runAsync) {
+            const syncJobId = `SHSYNC-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            global.__aldridgeShopifySyncJob = {
+              job_id: syncJobId,
+              status: 'running',
+              started_at: new Date().toISOString(),
+              finished_at: '',
+              enrichment: enrichmentSummary,
+              deduplication: dedupeSummary,
+              result: null,
+              error: ''
+            };
+            setImmediate(async () => {
+              try {
+                const r = await syncAllToShopifyCoMaster({ updateExisting });
+                global.__aldridgeShopifySyncJob.result = r;
+                global.__aldridgeShopifySyncJob.status = 'completed';
+                global.__aldridgeShopifySyncJob.finished_at = new Date().toISOString();
+              } catch (syncErr) {
+                global.__aldridgeShopifySyncJob.error = syncErr.message || String(syncErr);
+                global.__aldridgeShopifySyncJob.status = 'failed';
+                global.__aldridgeShopifySyncJob.finished_at = new Date().toISOString();
+              }
+            });
+            sendJson(res, 202, { ok: true, accepted: true, ...global.__aldridgeShopifySyncJob, poll_url: '/api/employee/shopify/sync/status' });
+            return;
+          }
+          const result = await syncAllToShopifyCoMaster({ updateExisting });
+          sendJson(res, 200, { ok: true, ...result, enrichment: enrichmentSummary, deduplication: dedupeSummary });
+        } catch (err) {
+          sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify Co-Master sync failed.' });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/shopify/sync/status') {
+        sendJson(res, 200, { ok: true, job: global.__aldridgeShopifySyncJob || null });
         return;
       }
 
@@ -3501,7 +3606,16 @@ async function autoSyncKeepItemsOnStartup() {
     const cfg = getSettings();
     const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
 
-    // 1. MANDATORY CLEAN-SLATE VIN INVARIANT: Purge any legacy pre-VIN inventory records in SQLite on startup
+    // 1. MANDATORY CLEAN-SLATE VIN INVARIANT (PROTECTED): NEVER clear or overwrite verified VIN-intake active SKUs on restart/redeploy.
+    // Only purge unverified legacy/non-VIN items if any exist.
+    const verifiedVinCount = Number(db.prepare(`
+      SELECT COUNT(*) c FROM inventory_items
+      WHERE status = 'active'
+        AND COALESCE(verified_vin, '') != ''
+        AND COALESCE(intake_session_id, '') != ''
+        AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
+    `).get()?.c || 0);
+
     const legacyPreVinCount = Number(db.prepare(`
       SELECT COUNT(*) c FROM inventory_items
       WHERE COALESCE(verified_vin, '') = ''
@@ -3509,16 +3623,22 @@ async function autoSyncKeepItemsOnStartup() {
          OR COALESCE(intake_source, '') != 'vin_intake_pipeline'
     `).get()?.c || 0);
 
-    if (!cfg.clean_slate_vin_purge_v1 || legacyPreVinCount > 0) {
-      const purgeRes = purgeLegacyPreVinCatalog({ actor: 'startup_clean_slate_v1' });
+    if (legacyPreVinCount > 0) {
+      const purgeRes = purgeLegacyPreVinCatalog({ actor: 'startup_legacy_only_purge' });
       console.log(
-        `[Startup Clean-Slate VIN Purge] Purged legacy_items=${purgeRes.purged_inventory_items} | legacy_donors=${purgeRes.purged_legacy_donors} | remaining_vin_verified=${purgeRes.remaining_verified_vin_items} | Mandatory VIN Intake=ON`
+        `[Startup Legacy-Only Purge] Purged legacy_items=${purgeRes.purged_inventory_items} | preserved_vin_verified=${purgeRes.remaining_verified_vin_items} | Mandatory VIN Intake=ON`
       );
     } else {
+      if (!cfg.clean_slate_vin_purge_v1) {
+        updateSettings({
+          clean_slate_mode: true,
+          mandatory_vin_intake_only: true,
+          clean_slate_vin_purge_v1: new Date().toISOString()
+        });
+      }
       const dedupeRes = deduplicateCatalog();
-      const verifiedCount = Number(db.prepare("SELECT COUNT(*) c FROM inventory_items WHERE status = 'active' AND verified_vin != ''").get()?.c || 0);
       console.log(
-        `[Startup Clean-Slate Ready] Verified VIN-Intake Active SKUs=${verifiedCount} | Duplicate Archived=${dedupeRes.total_duplicate_archived || 0} | Labor=$${Number(cfg.labor_rate_hourly || 174.99).toFixed(2)}/hr`
+        `[Startup Verified VIN Inventory Preserved] Active Verified SKUs=${verifiedVinCount} | Legacy Purged=0 | Duplicate Archived=${dedupeRes.total_duplicate_archived || 0} | Labor=$${Number(cfg.labor_rate_hourly || 174.99).toFixed(2)}/hr`
       );
     }
 

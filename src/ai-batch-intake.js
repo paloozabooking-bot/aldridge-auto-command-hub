@@ -521,7 +521,7 @@ async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fe
   return { ok: false, error: `Could not download binary image/video/ZIP for Google Drive ID ${fileId} (set sharing to "Anyone with the link can view" or download as .zip).` };
 }
 
-async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 75, fetchImpl = fetch, metadataOnly = false } = {}) {
+async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchImpl = fetch, metadataOnly = false } = {}) {
   const target = parseGoogleDriveTarget(driveUrl);
   if (!target) {
     return { folder_title: '', discovered_filenames: [], images: [], skipped: [{ filename: driveUrl, reason: 'Unrecognized Google Drive or file URL.' }] };
@@ -687,7 +687,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 75, fetchImp
   }
 
   const batchList = discoveredFiles.slice(0, maxFiles);
-  const CONCURRENCY = 6;
+  const CONCURRENCY = 8;
   for (let start = 0; start < batchList.length; start += CONCURRENCY) {
     const chunk = batchList.slice(start, start + CONCURRENCY);
     const results = await Promise.all(
@@ -1448,7 +1448,8 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       throw err;
     }
     inputSources.google_drive_links += 1;
-    const driveRes = await fetchImagesFromGoogleDriveUrl(driveUrl, { fetchImpl });
+    const reqMaxFiles = Math.min(500, Math.max(1, Number(payload.max_files || 400)));
+    const driveRes = await fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles: reqMaxFiles, fetchImpl });
     if (driveRes.folder_title) driveFolderTitle = driveRes.folder_title;
     collectedImages.push(...driveRes.images);
     skippedItems.push(...driveRes.skipped);
@@ -1492,35 +1493,45 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     preGroups.get(key).images.push(img);
   }
 
-  // --- G. Run AI Vision + MPN OCR + Sold-Order & SRS/Seatbelt Compliance Filter ---
+  // --- G. Run AI Vision + MPN OCR + Sold-Order & SRS/Seatbelt Compliance Filter (4x parallel workers) ---
   const settings = getSettings();
   const laborRate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
   const identifiedGroups = [];
+  const groupList = Array.from(preGroups.values());
+  const AI_CONCURRENCY = 4;
 
-  for (const grp of preGroups.values()) {
-    const ident = await identifyPartGroupWithAi(grp, session, settings, { batchHint, fetchImpl });
-    const fileLabel = grp.images.map((i) => i.filename).join(', ');
-    if (!ident.ok) {
-      skippedItems.push({ filename: fileLabel, reason: ident.reason });
-      continue;
+  for (let start = 0; start < groupList.length; start += AI_CONCURRENCY) {
+    const chunk = groupList.slice(start, start + AI_CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async (grp) => {
+        const ident = await identifyPartGroupWithAi(grp, session, settings, { batchHint, fetchImpl });
+        return { grp, ident };
+      })
+    );
+    for (const { grp, ident } of results) {
+      const fileLabel = grp.images.map((i) => i.filename).join(', ');
+      if (!ident.ok) {
+        skippedItems.push({ filename: fileLabel, reason: ident.reason });
+        continue;
+      }
+
+      const postBlock = checkSoldOrderAndSrsBlocklist({
+        filename: fileLabel,
+        title: ident.part_name,
+        description: ident.condition_notes
+      });
+
+      if (ident.is_prohibited_safety_item || postBlock.blocked) {
+        const reason = ident.compliance_reason || postBlock.reason || 'Blocked prohibited SRS/airbag/seatbelt/catalytic or sold item.';
+        const rec = { filename: fileLabel, reason, category: ident.block_category || postBlock.category || 'blocked' };
+        if (rec.category === 'sold_order_filter') blockedSoldItems.push(rec);
+        else blockedSrsItems.push(rec);
+        skippedItems.push(rec);
+        continue;
+      }
+
+      identifiedGroups.push({ group: grp, ident });
     }
-
-    const postBlock = checkSoldOrderAndSrsBlocklist({
-      filename: fileLabel,
-      title: ident.part_name,
-      description: ident.condition_notes
-    });
-
-    if (ident.is_prohibited_safety_item || postBlock.blocked) {
-      const reason = ident.compliance_reason || postBlock.reason || 'Blocked prohibited SRS/airbag/seatbelt/catalytic or sold item.';
-      const rec = { filename: fileLabel, reason, category: ident.block_category || postBlock.category || 'blocked' };
-      if (rec.category === 'sold_order_filter') blockedSoldItems.push(rec);
-      else blockedSrsItems.push(rec);
-      skippedItems.push(rec);
-      continue;
-    }
-
-    identifiedGroups.push({ group: grp, ident });
   }
 
   // --- H. Merge duplicate angles that resolved to the exact same OEM part within this batch ---
@@ -1778,7 +1789,425 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
   };
 }
 
+/* ==================== 7. MASTER PARENT GOOGLE DRIVE FOLDER MULTI-VEHICLE BATCH RUNNER (v29) ==================== */
+const DEFAULT_MASTER_DRIVE_URL = 'https://drive.google.com/drive/u/0/folders/1upmnO9StviS4Wasuhy_GFcg8h1el9T4y';
+const masterBatchJobs = new Map();
+let latestMasterBatchJobId = '';
+
+function decodeHtmlEntities(str = '') {
+  return String(str || '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .trim();
+}
+
+async function enumerateGoogleDriveSubfolders(driveUrl, { fetchImpl = fetch } = {}) {
+  const vCheck = validateFullDriveUrl(driveUrl);
+  if (!vCheck.valid || vCheck.target?.type !== 'folder') {
+    const err = new Error(vCheck.error || 'Provide a full parent Google Drive folder URL (https://drive.google.com/drive/folders/<ID>).');
+    err.statusCode = 400;
+    throw err;
+  }
+  const parentId = vCheck.target.id;
+  const parentTitle = await fetchGoogleDriveFolderTitle(parentId, { fetchImpl });
+  const subfolders = [];
+  const seenIds = new Set();
+
+  const apiKey = String(process.env.GOOGLE_DRIVE_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const bearer = String(process.env.GOOGLE_DRIVE_ACCESS_TOKEN || '').trim();
+
+  // 1) Official Drive API v3 folder listing when configured
+  if (apiKey || bearer) {
+    try {
+      const q = encodeURIComponent(`'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
+      const apiUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType)&pageSize=200&orderBy=name${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}`;
+      const r = await fetchImpl(apiUrl, {
+        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+        signal: AbortSignal.timeout(15000)
+      });
+      if (r.ok) {
+        const j = await r.json();
+        for (const f of j.files || []) {
+          if (!f?.id || seenIds.has(f.id)) continue;
+          seenIds.add(f.id);
+          subfolders.push({
+            id: f.id,
+            title: String(f.name || '').trim(),
+            drive_url: `https://drive.google.com/drive/folders/${f.id}`
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2) Public Drive embeddedfolderview HTML listing
+  if (!subfolders.length) {
+    const embedUrl = `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(parentId)}#list`;
+    const resp = await fetchImpl(embedUrl, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AldridgeAutoCommandHub/v29)' },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      const re = /https:\/\/drive\.google\.com\/drive\/folders\/([A-Za-z0-9_-]{15,})[^>]*>[\s\S]*?<div class="flip-entry-title">([^<]+)<\/div>/gi;
+      let m;
+      while ((m = re.exec(html)) !== null) {
+        const id = m[1];
+        if (!id || id === parentId || seenIds.has(id)) continue;
+        seenIds.add(id);
+        subfolders.push({
+          id,
+          title: decodeHtmlEntities(m[2]),
+          drive_url: `https://drive.google.com/drive/folders/${id}`
+        });
+      }
+    }
+  }
+
+  // 3) Authenticated host gdrive CLI fallback
+  if (!subfolders.length) {
+    const cliList = tryGdriveCliJson(['readonly', 'ls', parentId, '--max', '200']);
+    if (Array.isArray(cliList)) {
+      for (const f of cliList) {
+        if (!f?.id || seenIds.has(f.id)) continue;
+        if (String(f.mimeType || '').includes('folder')) {
+          seenIds.add(f.id);
+          subfolders.push({
+            id: f.id,
+            title: String(f.name || '').trim(),
+            drive_url: `https://drive.google.com/drive/folders/${f.id}`
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    parent_folder_id: parentId,
+    parent_folder_title: parentTitle || 'Master Vehicle Photo Library',
+    parent_drive_url: `https://drive.google.com/drive/folders/${parentId}`,
+    subfolders
+  };
+}
+
+async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl = fetch } = {}) {
+  const verifiedFolders = [];
+  const needsVinFolders = [];
+
+  const results = await Promise.all(
+    subfolders.map(async (sf) => {
+      const rawMatches = String(sf.title || '').toUpperCase().match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
+      const candidateVin = rawMatches[0] || '';
+
+      if (!candidateVin) {
+        return {
+          status: 'needs_vin',
+          folder: {
+            id: sf.id,
+            title: sf.title,
+            drive_url: sf.drive_url,
+            detected_vin: '',
+            reason: 'Missing 17-character VIN in folder title — requires 17-char VIN or State + License Plate lookup before publishing.'
+          }
+        };
+      }
+
+      const strict = validateVinStrict(candidateVin);
+      if (!strict.valid && !strict.blocklist_only) {
+        return {
+          status: 'needs_vin',
+          folder: {
+            id: sf.id,
+            title: sf.title,
+            drive_url: sf.drive_url,
+            detected_vin: candidateVin,
+            reason: `Invalid 17-char VIN (${candidateVin}): ${strict.reason} — verify stamped door-jamb VIN before publishing.`
+          }
+        };
+      }
+
+      try {
+        const decoded = await decodeVinLiveNhtsa(candidateVin);
+        if (!decoded?.make || !decoded?.year) {
+          return {
+            status: 'needs_vin',
+            folder: {
+              id: sf.id,
+              title: sf.title,
+              drive_url: sf.drive_url,
+              detected_vin: candidateVin,
+              reason: `NHTSA vPIC could not decode factory Year/Make/Model for ${candidateVin} — verify stamped VIN.`
+            }
+          };
+        }
+        const conflict = detectFolderVinConflict(sf.title, decoded);
+        return {
+          status: 'verified',
+          folder: {
+            id: sf.id,
+            title: sf.title,
+            drive_url: sf.drive_url,
+            vin: decoded.vin,
+            year: decoded.year,
+            make: decoded.make,
+            model: decoded.model,
+            trim: decoded.trim || '',
+            engine: decoded.engine || '',
+            drivetrain: decoded.drivetrain || '',
+            auto_bin_prefix: buildAutoBinPrefix(decoded),
+            vin_label_conflict: conflict.has_conflict ? conflict.warning : ''
+          }
+        };
+      } catch (err) {
+        return {
+          status: 'needs_vin',
+          folder: {
+            id: sf.id,
+            title: sf.title,
+            drive_url: sf.drive_url,
+            detected_vin: candidateVin,
+            reason: err.message || `VIN ${candidateVin} failed live NHTSA verification.`
+          }
+        };
+      }
+    })
+  );
+
+  for (const r of results) {
+    if (r.status === 'verified') verifiedFolders.push(r.folder);
+    else needsVinFolders.push(r.folder);
+  }
+
+  return { verifiedFolders, needsVinFolders };
+}
+
+function persistMasterJobSnapshot(job) {
+  try {
+    const snap = {
+      job_id: job.job_id,
+      status: job.status,
+      started_at: job.started_at,
+      finished_at: job.finished_at,
+      parent_folder_id: job.parent_folder_id,
+      parent_folder_title: job.parent_folder_title,
+      parent_drive_url: job.parent_drive_url,
+      total_subfolders: job.total_subfolders,
+      verified_17vin_count: job.verified_17vin_count,
+      needs_vin_count: job.needs_vin_count,
+      completed_folders: job.completed_folders,
+      current_folder: job.current_folder,
+      total_photos_received: job.total_photos_received,
+      total_created_skus: job.total_created_skus,
+      total_angles_merged: job.total_angles_merged,
+      total_sold_blocked: job.total_sold_blocked,
+      total_srs_blocked: job.total_srs_blocked,
+      per_folder_results: job.per_folder_results,
+      needs_vin_folders: job.needs_vin_folders,
+      shopify_sync_result: job.shopify_sync_result,
+      error: job.error || ''
+    };
+    db.prepare(`
+      INSERT INTO business_settings (key, value_json, updated_at)
+      VALUES ('master_batch_last_job', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `).run(JSON.stringify(snap), new Date().toISOString());
+  } catch (_) {}
+}
+
+function getMasterBatchJob(jobId) {
+  if (jobId && masterBatchJobs.has(jobId)) {
+    return masterBatchJobs.get(jobId);
+  }
+  try {
+    const row = db.prepare("SELECT value_json FROM business_settings WHERE key = 'master_batch_last_job'").get();
+    if (row?.value_json) {
+      const parsed = JSON.parse(row.value_json);
+      if (!jobId || parsed.job_id === jobId) return parsed;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function getLatestMasterBatchJob() {
+  if (latestMasterBatchJobId && masterBatchJobs.has(latestMasterBatchJobId)) {
+    return masterBatchJobs.get(latestMasterBatchJobId);
+  }
+  return getMasterBatchJob('');
+}
+
+async function startMasterParentFolderBatchJob(
+  payload = {},
+  staffUser = 'Shop Staff',
+  { uploadsDir, baseUrl, fetchImpl = fetch, pushToShopifyFn = pushSingleItemToShopify, syncAllToShopifyFn = null } = {}
+) {
+  const driveUrl = String(payload.drive_url || payload.google_drive_url || DEFAULT_MASTER_DRIVE_URL).trim();
+  const runAsync = !(payload.async === false || payload.async === 'false' || payload.sync === true || payload.sync === 'true');
+  const pushShopify = !(payload.push_shopify === false || payload.push_shopify === 'false');
+  const maxFilesPerFolder = Math.min(500, Math.max(1, Number(payload.max_files_per_folder || payload.max_files || 400)));
+  const filterIds = Array.isArray(payload.folder_ids) && payload.folder_ids.length
+    ? new Set(payload.folder_ids.map((x) => String(x).trim()))
+    : null;
+
+  const enumRes = await enumerateGoogleDriveSubfolders(driveUrl, { fetchImpl });
+  if (!enumRes.subfolders.length) {
+    const err = new Error(
+      'No subfolders found inside this Google Drive folder. Verify you pasted the parent fleet folder URL and set sharing to "Anyone with the link (Viewer)".'
+    );
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const { verifiedFolders, needsVinFolders } = await classifyParentSubfoldersForVinBatch(enumRes.subfolders, { fetchImpl });
+  const targetFolders = filterIds
+    ? verifiedFolders.filter((f) => filterIds.has(f.id))
+    : verifiedFolders;
+
+  const jobId = `MSTR-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const job = {
+    ok: true,
+    job_id: jobId,
+    status: 'running',
+    started_at: new Date().toISOString(),
+    finished_at: '',
+    staff_user: staffUser,
+    parent_folder_id: enumRes.parent_folder_id,
+    parent_folder_title: enumRes.parent_folder_title,
+    parent_drive_url: enumRes.parent_drive_url,
+    total_subfolders: enumRes.subfolders.length,
+    verified_17vin_count: targetFolders.length,
+    needs_vin_count: needsVinFolders.length,
+    completed_folders: 0,
+    current_folder: targetFolders[0]?.title || '',
+    total_photos_received: 0,
+    total_created_skus: 0,
+    total_angles_merged: 0,
+    total_sold_blocked: 0,
+    total_srs_blocked: 0,
+    verified_17vin_folders: targetFolders,
+    needs_vin_folders: needsVinFolders,
+    per_folder_results: [],
+    shopify_sync_result: null,
+    poll_url: `/api/employee/intake/batch-ai-master/${jobId}`,
+    error: ''
+  };
+
+  masterBatchJobs.set(jobId, job);
+  latestMasterBatchJobId = jobId;
+  persistMasterJobSnapshot(job);
+
+  const executeJob = async () => {
+    try {
+      for (const folder of targetFolders) {
+        job.current_folder = `${folder.title} (${folder.year} ${folder.make} ${folder.model})`;
+        persistMasterJobSnapshot(job);
+        const fStart = Date.now();
+        try {
+          const res = await runAiMultiInputBatchIntake(
+            {
+              vin: folder.vin,
+              drive_url: folder.drive_url,
+              bin_location: folder.auto_bin_prefix,
+              grouping_mode: 'auto',
+              confirm_vin_decode: true,
+              max_files: maxFilesPerFolder,
+              push_shopify: false // Batch sync once after deduplication so Shopify rate limits stay clean!
+            },
+            staffUser,
+            { uploadsDir, baseUrl, fetchImpl, pushToShopifyFn }
+          );
+          const fSummary = {
+            folder_id: folder.id,
+            folder_title: folder.title,
+            vin: folder.vin,
+            vehicle: `${res.session?.year || folder.year} ${res.session?.make || folder.make} ${res.session?.model || folder.model}`.trim(),
+            bin_location: res.auto_bin_prefix || folder.auto_bin_prefix,
+            status: 'completed',
+            elapsed_sec: Number(((Date.now() - fStart) / 1000).toFixed(1)),
+            photos_received: Number(res.total_photos_received || 0),
+            created_count: Number(res.created_count || 0),
+            angles_merged: Number(res.duplicate_angles_merged || 0),
+            sold_blocked: Number(res.blocked_sold_count || 0),
+            srs_blocked: Number(res.blocked_srs_count || 0),
+            skipped_count: Number(res.skipped_count || 0),
+            vin_label_conflict: folder.vin_label_conflict || ''
+          };
+          job.per_folder_results.push(fSummary);
+          job.total_photos_received += fSummary.photos_received;
+          job.total_created_skus += fSummary.created_count;
+          job.total_angles_merged += fSummary.angles_merged;
+          job.total_sold_blocked += fSummary.sold_blocked;
+          job.total_srs_blocked += fSummary.srs_blocked;
+        } catch (folderErr) {
+          job.per_folder_results.push({
+            folder_id: folder.id,
+            folder_title: folder.title,
+            vin: folder.vin,
+            vehicle: `${folder.year} ${folder.make} ${folder.model}`,
+            bin_location: folder.auto_bin_prefix,
+            status: 'error',
+            elapsed_sec: Number(((Date.now() - fStart) / 1000).toFixed(1)),
+            photos_received: 0,
+            created_count: 0,
+            error: folderErr.message || String(folderErr)
+          });
+        }
+        job.completed_folders += 1;
+        persistMasterJobSnapshot(job);
+      }
+
+      // Final catalog-wide deduplication pass
+      job.current_folder = 'Final Catalog Deduplication & Feed Refresh';
+      persistMasterJobSnapshot(job);
+      deduplicateCatalog();
+
+      // Optional automatic Shopify Co-Master Sync
+      if (pushShopify && typeof syncAllToShopifyFn === 'function') {
+        job.current_folder = 'Syncing All Verified SKUs to Shopify Co-Master';
+        persistMasterJobSnapshot(job);
+        try {
+          job.shopify_sync_result = await syncAllToShopifyFn({ updateExisting: false });
+        } catch (shErr) {
+          job.shopify_sync_result = { ok: false, error: shErr.message || String(shErr) };
+        }
+      }
+
+      job.current_folder = '';
+      job.status = 'completed';
+      job.finished_at = new Date().toISOString();
+      persistMasterJobSnapshot(job);
+      logSync(
+        'internal',
+        'master_drive_batch',
+        'batch_ai_master_complete',
+        jobId,
+        'success',
+        `${staffUser} completed Master Drive Batch ${jobId}: ${job.completed_folders}/${job.verified_17vin_count} 17-VIN folders, ${job.total_created_skus} SKUs created, ${job.total_photos_received} photos processed, ${job.needs_vin_count} folders queued for VIN lookup.`
+      );
+    } catch (fatalErr) {
+      job.status = 'failed';
+      job.error = fatalErr.message || String(fatalErr);
+      job.finished_at = new Date().toISOString();
+      persistMasterJobSnapshot(job);
+    }
+  };
+
+  if (runAsync) {
+    setImmediate(() => {
+      executeJob().catch(() => {});
+    });
+    return { accepted: true, job };
+  }
+
+  await executeJob();
+  return { accepted: false, job };
+}
+
 module.exports = {
+  DEFAULT_MASTER_DRIVE_URL,
   detectBinaryFormat,
   extractVideoKeyFrames,
   parseMultipartFormData,
@@ -1786,6 +2215,11 @@ module.exports = {
   parseGoogleDriveTarget,
   fetchGoogleDriveFolderTitle,
   fetchImagesFromGoogleDriveUrl,
+  enumerateGoogleDriveSubfolders,
+  classifyParentSubfoldersForVinBatch,
+  startMasterParentFolderBatchJob,
+  getMasterBatchJob,
+  getLatestMasterBatchJob,
   ocrVinFromMediaFrames,
   resolveUniversalVinFromInput,
   runAiMultiInputBatchIntake
