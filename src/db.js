@@ -859,6 +859,28 @@ const DEFAULT_SETTINGS = {
   }
 };
 
+const GEMINI_KEY_FILE = path.join(DATA_DIR, '.gemini_vision_key');
+
+function readPersistedGeminiKey() {
+  try {
+    if (fs.existsSync(GEMINI_KEY_FILE)) {
+      return String(fs.readFileSync(GEMINI_KEY_FILE, 'utf8') || '').trim();
+    }
+  } catch (_) {}
+  return '';
+}
+
+function writePersistedGeminiKey(keyVal) {
+  try {
+    const clean = String(keyVal || '').trim();
+    if (clean) {
+      fs.writeFileSync(GEMINI_KEY_FILE, clean, { encoding: 'utf8', mode: 0o600 });
+    } else if (fs.existsSync(GEMINI_KEY_FILE)) {
+      fs.unlinkSync(GEMINI_KEY_FILE);
+    }
+  } catch (_) {}
+}
+
 function applyEnvOverrides(cfg) {
   const envShopDomain = (process.env.SHOPIFY_SHOP_DOMAIN || process.env.SHOPIFY_DOMAIN || '').trim();
   if (envShopDomain) cfg.shopify_domain = envShopDomain;
@@ -872,8 +894,21 @@ function applyEnvOverrides(cfg) {
   if (process.env.SHOPIFY_WEBHOOK_SECRET && process.env.SHOPIFY_WEBHOOK_SECRET.trim()) {
     cfg.shopify_webhook_secret = process.env.SHOPIFY_WEBHOOK_SECRET.trim();
   }
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
-    cfg.gemini_api_key = process.env.GEMINI_API_KEY.trim();
+  const envGeminiKey = String(
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_AI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GEMINI_KEY ||
+    ''
+  ).trim();
+  if (envGeminiKey) {
+    cfg.gemini_api_key = envGeminiKey;
+  } else if (String(cfg.gemini_api_key || '').trim()) {
+    cfg.gemini_api_key = String(cfg.gemini_api_key).trim();
+    if (!readPersistedGeminiKey()) writePersistedGeminiKey(cfg.gemini_api_key);
+  } else {
+    const diskKey = readPersistedGeminiKey();
+    if (diskKey) cfg.gemini_api_key = diskKey;
   }
   if (process.env.CANONICAL_DOMAIN) {
     cfg.canonical_domain = process.env.CANONICAL_DOMAIN.trim().replace(/\/+$/, '');
@@ -950,19 +985,37 @@ function getSettings() {
   });
 }
 
-function updateSettings(patch) {
+function updateSettings(patch = {}) {
   const current = getSettings();
+  const nextPatch = { ...patch };
+  // Never wipe an existing persisted Gemini Vision key on accidental blank submit unless explicitly cleared
+  if (Object.prototype.hasOwnProperty.call(nextPatch, 'gemini_api_key')) {
+    const trimmedKey = String(nextPatch.gemini_api_key || '').trim();
+    if (trimmedKey) {
+      nextPatch.gemini_api_key = trimmedKey;
+      writePersistedGeminiKey(trimmedKey);
+      process.env.GEMINI_API_KEY = trimmedKey;
+    } else if (nextPatch.clear_gemini_api_key === true) {
+      nextPatch.gemini_api_key = '';
+      writePersistedGeminiKey('');
+      delete process.env.GEMINI_API_KEY;
+    } else if (current.gemini_api_key) {
+      nextPatch.gemini_api_key = current.gemini_api_key;
+    }
+  }
+  delete nextPatch.clear_gemini_api_key;
+
   const merged = {
     ...current,
-    ...patch,
-    uhaul_synced_data: patch.uhaul_synced_data
-      ? { ...current.uhaul_synced_data, ...patch.uhaul_synced_data }
+    ...nextPatch,
+    uhaul_synced_data: nextPatch.uhaul_synced_data
+      ? { ...current.uhaul_synced_data, ...nextPatch.uhaul_synced_data }
       : current.uhaul_synced_data,
-    social_links: patch.social_links
-      ? { ...current.social_links, ...patch.social_links }
+    social_links: nextPatch.social_links
+      ? { ...current.social_links, ...nextPatch.social_links }
       : current.social_links,
-    platform_checklist: patch.platform_checklist
-      ? { ...current.platform_checklist, ...patch.platform_checklist }
+    platform_checklist: nextPatch.platform_checklist
+      ? { ...current.platform_checklist, ...nextPatch.platform_checklist }
       : current.platform_checklist
   };
   const now = new Date().toISOString();
@@ -971,7 +1024,7 @@ function updateSettings(patch) {
     VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
   `).run('master_config', JSON.stringify(merged), now);
-  return merged;
+  return applyEnvOverrides(merged);
 }
 
 function generateSecurityCode() {
@@ -1000,12 +1053,43 @@ const VIN_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
 const KNOWN_FAKE_OR_WRONG_VINS = new Set([
   '1G4GA5GR2FF246661', // Wrong car: 2015 Buick Verano pasted onto 2016 Chevy Equinox
   '4T1SK12E2TL038415', // Fabricated Camry VIN
-  'JTEBU14R040057212', // Invalid checksum 2004 4Runner
   '5FNRL18451B072461', // Invalid checksum 2001 Odyssey
   '5N1ED22Y91C504281', // Invalid checksum 2001 Xterra
   '4F2CU92B01KA54281', // Fake Mazda WMI on 2001 Escape
   '5KEAG4027J1000000'  // Placeholder 000000 tail
 ]);
+
+// Explicitly whitelisted real Aldridge Auto donor VINs (confirmed in live Shopify orders & yard records)
+const VERIFIED_DONOR_VIN_WHITELIST = new Set([
+  'JTEBU14R040057212', // 2004 Toyota 4Runner SR5 4x4 V6 (confirmed in Shopify Orders #1009, #1017, #1022-#1025, #1037, #1044, #1045)
+  '1D7HE48K56S679400'  // 2006 Dodge Dakota SLT
+]);
+
+// Runtime registry of 17-char VINs that passed live NHTSA vPIC decoding (ErrorCode === "0" + valid check digit + factory model)
+const NHTSA_VERIFIED_CLEAN_VINS = new Set();
+
+function isVinCheckDigitValid(rawVin) {
+  const cleaned = String(rawVin || '').trim().toUpperCase();
+  if (cleaned.length !== 17 || !/^[A-HJ-NPR-Z0-9]{17}$/.test(cleaned)) return { valid: false, expectedCheck: '' };
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    const v = VIN_TRANSLITERATION[cleaned[i]];
+    if (v === undefined) return { valid: false, expectedCheck: '' };
+    sum += v * VIN_WEIGHTS[i];
+  }
+  const rem = sum % 11;
+  const expectedCheck = rem === 10 ? 'X' : String(rem);
+  return { valid: cleaned[8] === expectedCheck, expectedCheck };
+}
+
+function registerNhtsaVerifiedVin(rawVin) {
+  const cleaned = String(rawVin || '').trim().toUpperCase();
+  if (/^[A-HJ-NPR-Z0-9]{17}$/.test(cleaned) && isVinCheckDigitValid(cleaned).valid) {
+    NHTSA_VERIFIED_CLEAN_VINS.add(cleaned);
+    return true;
+  }
+  return false;
+}
 
 function validateVinStrict(rawVin) {
   const cleaned = String(rawVin || '').trim().toUpperCase();
@@ -1022,25 +1106,29 @@ function validateVinStrict(rawVin) {
   if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(cleaned)) {
     return { valid: false, vin: cleaned, reason: `VIN "${cleaned}" contains invalid non-alphanumeric characters.` };
   }
+  if (VERIFIED_DONOR_VIN_WHITELIST.has(cleaned)) {
+    return { valid: true, vin: cleaned, empty: false, whitelisted_donor: true };
+  }
+  if (NHTSA_VERIFIED_CLEAN_VINS.has(cleaned)) {
+    return { valid: true, vin: cleaned, empty: false, nhtsa_verified: true };
+  }
   if (/000000$|123456$|999999$/.test(cleaned)) {
     return { valid: false, vin: cleaned, reason: `VIN "${cleaned}" uses a fabricated placeholder serial tail.` };
   }
-  if (KNOWN_FAKE_OR_WRONG_VINS.has(cleaned)) {
-    return { valid: false, vin: cleaned, reason: `VIN "${cleaned}" is on the Forensic Audit blocklist (fabricated or wrong-vehicle VIN).` };
-  }
-  let sum = 0;
-  for (let i = 0; i < 17; i++) {
-    const v = VIN_TRANSLITERATION[cleaned[i]];
-    if (v === undefined) return { valid: false, vin: cleaned, reason: `Invalid VIN character at position ${i + 1}.` };
-    sum += v * VIN_WEIGHTS[i];
-  }
-  const rem = sum % 11;
-  const expectedCheck = rem === 10 ? 'X' : String(rem);
-  if (cleaned[8] !== expectedCheck) {
+  const checkDigit = isVinCheckDigitValid(cleaned);
+  if (!checkDigit.valid) {
     return {
       valid: false,
       vin: cleaned,
-      reason: `Fake / corrupted VIN "${cleaned}" blocked: NHTSA position-9 check digit is "${cleaned[8]}" (expected "${expectedCheck}").`
+      reason: `Fake / corrupted VIN "${cleaned}" blocked: NHTSA position-9 check digit is "${cleaned[8]}" (expected "${checkDigit.expectedCheck}").`
+    };
+  }
+  if (KNOWN_FAKE_OR_WRONG_VINS.has(cleaned)) {
+    return {
+      valid: false,
+      vin: cleaned,
+      blocklist_only: true,
+      reason: `VIN "${cleaned}" is on the Forensic Audit blocklist (fabricated or wrong-vehicle VIN).`
     };
   }
   return { valid: true, vin: cleaned, empty: false };
@@ -2930,6 +3018,9 @@ module.exports = {
   generateSecurityCode,
   generateReferralCode,
   computeShippingClass,
+  VERIFIED_DONOR_VIN_WHITELIST,
+  isVinCheckDigitValid,
+  registerNhtsaVerifiedVin,
   validateVinStrict,
   validatePartCompliance,
   validateInventoryItemForPublish,

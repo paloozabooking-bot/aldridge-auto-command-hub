@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=27" />
+  <link rel="stylesheet" href="/styles.css?v=28" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -1716,6 +1716,26 @@
     </section>
   </main>
 
+  <!-- 100% Public Customer Product Detail Modal (NO login required) -->
+  <div class="modal-backdrop pdm-backdrop" id="public-product-detail-modal" role="dialog" aria-modal="true" aria-labelledby="pdm-title" onclick="if(event.target===this)window.closePublicProductModal&&window.closePublicProductModal()">
+    <div class="modal-dialog pdm-dialog">
+      <div class="pdm-topbar">
+        <div id="pdm-eyebrow" class="pdm-eyebrow">VERIFIED OEM PART • UNIVERSITY PLACE, WA 98467</div>
+        <button type="button" class="btn btn-sm btn-outline" onclick="window.closePublicProductModal && window.closePublicProductModal()" aria-label="Close part details">Close ✕</button>
+      </div>
+      <div id="pdm-content-body" class="pdm-body"></div>
+    </div>
+  </div>
+
+  <!-- Full-Size Photo Lightbox inside Public Product Detail Modal -->
+  <div class="modal-backdrop pdm-lightbox-backdrop" id="pdm-photo-lightbox" onclick="this.classList.remove('open')">
+    <div class="pdm-lightbox-inner" onclick="event.stopPropagation()">
+      <button type="button" class="btn btn-dark btn-sm pdm-lightbox-close" onclick="document.getElementById('pdm-photo-lightbox').classList.remove('open')">Close Full-Size ✕</button>
+      <img id="pdm-lightbox-img" src="" alt="Full-size OEM part photo" />
+      <div id="pdm-lightbox-caption" class="pdm-lightbox-caption"></div>
+    </div>
+  </div>
+
   <!-- Checkout & Single-Variant Order Modal -->
   <div class="modal-backdrop" id="cart-modal">
     <div class="modal-dialog">
@@ -1890,11 +1910,11 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=27"></script>
-  <script src="/storefront-menu.js?v=27"></script>
-  <script src="/sourcing-storefront.js?v=27"></script>
-  <script src="/vin-aggregator-ui.js?v=27"></script>
-  <script src="/dvi-portal.js?v=27"></script>
-  <script src="/wave1-studio.js?v=27"></script>
+  <script src="/app.js?v=28"></script>
+  <script src="/storefront-menu.js?v=28"></script>
+  <script src="/sourcing-storefront.js?v=28"></script>
+  <script src="/vin-aggregator-ui.js?v=28"></script>
+  <script src="/dvi-portal.js?v=28"></script>
+  <script src="/wave1-studio.js?v=28"></script>
 </body>
 </html>

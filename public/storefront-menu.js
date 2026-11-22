@@ -136,14 +136,14 @@
 
       return `
         <article class="chef-special-card">
-          <div class="chef-special-media">
+          <div class="chef-special-media" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to view full OEM specs &amp; multi-angle photos">
             <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
             <span class="chef-ribbon">Chef's Special • Tested &amp; Ready for Bay Install</span>
             <span class="chef-stock-pill">Only 1 on Shelf</span>
           </div>
           <div class="chef-special-body">
             <div class="chef-special-sku mono">${esc(item.sku)} • ${esc(item.fitment_years || '')} ${esc(item.fitment_make || '')} ${esc(item.fitment_model || '')}</div>
-            <h4>${esc(item.title)}</h4>
+            <h4 class="pdm-clickable-title" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">${esc(item.title)}</h4>
             <div class="chef-dual-row">
               <div class="chef-opt">
                 <span class="chef-opt-lbl">Option A • Carry-Out</span>
@@ -159,12 +159,15 @@
               <span class="member-blur-nums">VIP $${vip.toFixed(2)} • Shop Pro $${b2b.toFixed(2)} (-${b2bPct}%)</span>
               ${isUnlocked ? '' : '<span class="member-unlock-cta">Unlock →</span>'}
             </div>
-            <div class="chef-cta-row">
+            <div class="chef-cta-row" style="flex-wrap:wrap;">
+              <button type="button" class="btn-specs-clean" style="flex:1 1 100%;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
+                🔍 View Full Specs &amp; Photos
+              </button>
               <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="selectPartAndBuy(${item.id}, true)">
-                Reserve Bay &amp; Hold Part
+                Book Installed at Shop
               </button>
               <button type="button" class="btn btn-outline btn-sm" onclick="selectPartAndBuy(${item.id}, false)">
-                Carry-Out
+                Add to Cart
               </button>
             </div>
           </div>
@@ -266,7 +269,7 @@
 
       return `
         <article class="part-card menu-part-card">
-          <div class="part-thumb">
+          <div class="part-thumb" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to view full OEM specs &amp; multi-angle photos">
             <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
             <div class="part-badges">
               <span class="badge badge-dark">1 on Shelf • ${photoCount} Real Shop Photo${photoCount === 1 ? '' : 's'}</span>
@@ -280,7 +283,7 @@
               <span>SKU: ${esc(item.sku)}</span>
               <span>${item.oem_part_number ? `OEM #${esc(item.oem_part_number)}` : 'Verified Tested OEM'}</span>
             </div>
-            <h3 class="part-title">${esc(item.title)}</h3>
+            <h3 class="part-title pdm-clickable-title" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">${esc(item.title)}</h3>
             <div class="part-fitment">
               <strong>Fits:</strong> ${esc(item.fitment_years)} ${esc(item.fitment_make)} ${esc(item.fitment_model)} •
               <span class="mono" style="font-size:0.73rem;color:var(--text-muted);">${Number(item.weight_lbs || 8)} lb (${Math.ceil(Number(item.length_in || 14))}×${Math.ceil(Number(item.width_in || 10))}×${Math.ceil(Number(item.height_in || 8))} in)</span>
@@ -318,15 +321,15 @@
               ${isPaidUnlocked ? '' : '<span class="member-unlock-cta">Unlock 10s</span>'}
             </div>
 
-            <div class="menu-card-actions">
+            <div class="menu-card-actions" style="flex-wrap:wrap;">
+              <button type="button" class="btn-specs-clean" style="flex:1 1 100%;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
+                🔍 View Full Specs &amp; Photos
+              </button>
               <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="selectPartAndBuy(${item.id}, true)">
-                Reserve Bay &amp; Hold Part
+                Book Installed at Shop
               </button>
               <button type="button" class="btn btn-outline btn-sm" onclick="selectPartAndBuy(${item.id}, false)">
-                Carry-Out ($${activePriceInfo.unlocked && activePriceInfo.pct > 0 ? activePriceInfo.price.toFixed(2) : partPrice.toFixed(2)})
-              </button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="askAboutSku('${esc(item.sku)}')" title="Verify 17-digit VIN Fitment">
-                VIN
+                Add to Cart ($${activePriceInfo.unlocked && activePriceInfo.pct > 0 ? activePriceInfo.price.toFixed(2) : partPrice.toFixed(2)})
               </button>
             </div>
           </div>

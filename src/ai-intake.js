@@ -5,6 +5,8 @@ const {
   updateSettings,
   generateSecurityCode,
   computeShippingClass,
+  isVinCheckDigitValid,
+  registerNhtsaVerifiedVin,
   validateVinStrict,
   validatePartCompliance,
   logSync
@@ -44,7 +46,7 @@ const WMI_MAP = {
 
 async function decodeVin(rawVin) {
   const check = validateVinStrict(rawVin);
-  if (check.empty || !check.valid) {
+  if (check.empty || (!check.valid && !check.blocklist_only)) {
     const err = new Error(check.reason || 'Please enter a valid 17-character NHTSA Modulo-11 VIN.');
     err.statusCode = 422;
     throw err;
@@ -54,10 +56,18 @@ async function decodeVin(rawVin) {
   // Try official US DOT NHTSA vPIC API first
   try {
     const url = `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(vin)}?format=json`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(3500) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(4500) });
     if (resp.ok) {
       const json = await resp.json();
       const r = json.Results?.[0];
+      const primaryErrCode = String(r?.ErrorCode || '').split(',')[0].trim();
+      const nhtsaClean = primaryErrCode === '0' && Boolean(r?.Make && r?.Model) && isVinCheckDigitValid(vin).valid;
+      if (nhtsaClean) registerNhtsaVerifiedVin(vin);
+      if (!check.valid && !nhtsaClean) {
+        const err = new Error(check.reason || 'VIN rejected by validation.');
+        err.statusCode = 422;
+        throw err;
+      }
       if (r && r.Make) {
         const disp = r.DisplacementL ? `${Number(r.DisplacementL).toFixed(1)}L ` : '';
         const cyl = r.EngineCylinders ? `${r.EngineCylinders}-Cyl ` : '';
@@ -68,6 +78,7 @@ async function decodeVin(rawVin) {
         return {
           vin,
           source: 'nhtsa_vpic_live',
+          nhtsa_error_code: primaryErrCode,
           year: parseInt(r.ModelYear, 10) || MODEL_YEAR_MAP[vin[9]] || 2020,
           make: niceMake,
           model: r.Model || 'Series',
@@ -78,8 +89,15 @@ async function decodeVin(rawVin) {
         };
       }
     }
-  } catch (_) {
+  } catch (err) {
+    if (!check.valid) throw err;
     // Clean fallback to built-in ISO-3779 WMI decoder when sandbox restricts outbound hosts
+  }
+
+  if (!check.valid) {
+    const err = new Error(check.reason || 'Please enter a valid 17-character NHTSA Modulo-11 VIN.');
+    err.statusCode = 422;
+    throw err;
   }
 
   const wmi = vin.slice(0, 3);

@@ -350,7 +350,6 @@ const COUNTERFEIT_MPN_REGEX = /^(GM80\d+|FT50\d+|SU\d+(?:AA)?|OEM-\d+|5101\d+(?:
 // Fake / Wrong-Car VINs to scrub from HTML bodies
 const INVALID_VINS = [
   '1G4GA5GR2FF246661', // Wrong car: 2015 Buick Verano on 2016 Equinox
-  'JTEBU14R040057212', // Invalid checksum on 2004 4Runner
   '5FNRL18451B072461', // Invalid checksum on 2001 Odyssey
   '5N1ED22Y91C504281', // Invalid checksum on 2001 Xterra
   '4F2CU92B01KA54281'  // Fake Mazda WMI on 2001 Ford Escape

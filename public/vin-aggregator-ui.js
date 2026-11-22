@@ -342,21 +342,31 @@
     const visionBadgeHtml = aggState.geminiVisionConfigured === null
       ? '<span class="sku-badge-store">⏳ Checking Gemini Vision AI...</span>'
       : (visionReady
-        ? '<span class="sku-badge-live">🟢 Gemini 2.5 Flash Vision Pixel AI: ACTIVE</span>'
-        : '<span class="sku-badge-queue">🟡 Filename / Metadata Mode (Add GEMINI_API_KEY in Render for Raw Pixel &amp; Sticker OCR)</span>');
+        ? '<span class="sku-badge-live">🟢 Gemini 2.5 Flash Vision Pixel AI: ACTIVE (Persisted)</span>'
+        : '<span class="sku-badge-queue">🟡 Filename / Metadata Mode (Save Gemini Key Below for Pixel AI &amp; Sticker OCR)</span>');
 
     host.innerHTML = `
       <div class="emp-vin-gate-shell">
         <div class="emp-vin-gate-header">
           <div>
-            <div class="eyebrow-label" style="margin-bottom:0.15rem;">UNIFIED VIN-FIRST ENGINE (v26) • FOLDER/FILE + PHOTO/VIDEO OCR + MANUAL VIN</div>
+            <div class="eyebrow-label" style="margin-bottom:0.15rem;">UNIFIED VIN-FIRST ENGINE (v28) • FOLDER/FILE + PHOTO/VIDEO OCR + MANUAL VIN</div>
             <h3 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.3rem;">Unified Mandatory VIN / Plate &amp; Hands-Free AI Media Intake</h3>
             <p style="margin:0.25rem 0 0;font-size:0.86rem;color:#5c4b39;">Auto-extracts 17-char ISO-3779 VINs from Drive folder titles, .zip/file names, or VIN sticker photos/videos — with instant manual VIN &amp; License Plate override.</p>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;">
             ${visionBadgeHtml}
+            <button type="button" class="btn btn-outline btn-sm" id="btn-toggle-gemini-key-box" title="Save and persist your Google AI Studio Gemini Vision API key across restarts">🔑 ${visionReady ? 'Update' : 'Save'} Gemini Vision Key</button>
             <button type="button" class="btn btn-outline btn-sm" id="btn-clean-slate-purge-trigger" title="Archive all pre-VIN legacy Shopify products & verify 0 pre-VIN records in SQLite">🧹 Clean-Slate Purge</button>
           </div>
+        </div>
+
+        <div id="emp-gemini-key-box" style="display:none;margin-bottom:0.8rem;padding:0.75rem;background:#fffbeb;border:1.5px solid #f59e0b;border-radius:10px;">
+          <div style="font-size:0.76rem;font-weight:800;color:#92400e;margin-bottom:0.35rem;">🔑 PERSIST GEMINI 2.5 FLASH VISION API KEY (SAVED TO SQLITE + PERSISTENT DISK)</div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <input type="password" id="emp-inline-gemini-key-input" class="input mono" style="flex:1;min-width:240px;" placeholder="Paste AIzaSy... Google AI Studio API Key" />
+            <button type="button" class="btn btn-primary btn-sm" id="btn-save-inline-gemini-key">Save &amp; Persist Key</button>
+          </div>
+          <div id="emp-inline-gemini-key-msg" style="margin-top:0.35rem;font-size:0.78rem;"></div>
         </div>
 
         <div id="emp-purge-status-out" style="margin-bottom:0.8rem;"></div>
@@ -695,6 +705,36 @@
       aggState.lastBatchResult = null;
       renderEmployeeVinIntakeGate();
     }
+
+    // Inline Save & Persist Gemini Vision Key
+    host.querySelector('#btn-toggle-gemini-key-box')?.addEventListener('click', () => {
+      const box = document.getElementById('emp-gemini-key-box');
+      if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    });
+    host.querySelector('#btn-save-inline-gemini-key')?.addEventListener('click', async () => {
+      const inp = document.getElementById('emp-inline-gemini-key-input');
+      const msg = document.getElementById('emp-inline-gemini-key-msg');
+      const keyVal = String(inp?.value || '').trim();
+      if (!keyVal || keyVal.length < 20) {
+        if (msg) msg.innerHTML = '<span style="color:#b91c1c;font-weight:700;">Paste a valid Google AI Studio key (starts with AIza...).</span>';
+        return;
+      }
+      if (msg) msg.innerHTML = '<span style="color:#9a3412;font-weight:700;">Saving &amp; persisting Gemini Vision key...</span>';
+      try {
+        const r = await fetch('/api/employee/settings/gemini-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({ gemini_api_key: keyVal })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Sign in to Employee Backend first.');
+        aggState.geminiVisionConfigured = true;
+        renderEmployeeVinIntakeGate();
+      } catch (err) {
+        if (msg) msg.innerHTML = `<span style="color:#b91c1c;font-weight:700;">${esc(err.message)}</span>`;
+      }
+    });
 
     // Live-sync Step 1 Google Drive URL straight into Step 2's Drive URL input (exact full URL preserved!)
     const step1DriveInput = host.querySelector('#emp-step1-drive-extract-input');

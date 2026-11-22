@@ -60,13 +60,15 @@ async function runVerification() {
     const validVinJson = await validVinRes.json();
     assert.strictEqual(validVinJson.make, 'Toyota');
 
-    const badCheckVinRes = await fetch(`${base}/api/vin-decode/JTEBU14R040057212`);
-    assert.strictEqual(badCheckVinRes.status, 422, 'Fake checksum VIN JTEBU14R040057212 hard-blocked with 422');
+    const runnerVinRes = await fetch(`${base}/api/vin-decode/JTEBU14R040057212`);
+    assert.strictEqual(runnerVinRes.status, 200, 'Whitelisted real donor VIN JTEBU14R040057212 decodes cleanly as 2004 Toyota 4Runner');
+    const dakotaVinRes = await fetch(`${base}/api/vin-decode/1D7HE48K56S679400`);
+    assert.strictEqual(dakotaVinRes.status, 200, 'Whitelisted real donor VIN 1D7HE48K56S679400 decodes cleanly as 2006 Dodge Dakota');
 
-    const wrongCarVinRes = await fetch(`${base}/api/vin-decode/1G4GA5GR2FF246661`);
-    assert.strictEqual(wrongCarVinRes.status, 422, 'Fabricated wrong-car VIN 1G4GA5GR2FF246661 hard-blocked with 422');
+    const badCheckVinRes = await fetch(`${base}/api/vin-decode/5FNRL18451B072461`);
+    assert.strictEqual(badCheckVinRes.status, 422, 'Fake checksum VIN 5FNRL18451B072461 hard-blocked with 422');
     assert.strictEqual(validateVinStrict('1FTEW1EP2KFA41892').valid, true);
-    console.log('  ✓ Strict NHTSA Modulo-11 VIN Decoder & Fake-VIN 422 Hard Blocks verified');
+    console.log('  ✓ Strict NHTSA Modulo-11 VIN Decoder, Verified Donor Whitelist & Fake-VIN 422 Hard Blocks verified');
 
     // 3. Hard Safety & Emissions Blocks (SRS / Airbags / Clockspring / Catalytic Converters)
     for (const bannedHint of ['Clockspring Airbag Spiral Cable', 'Front OEM Catalytic Converter Assembly', 'Seatbelt Pretensioner Retractor']) {

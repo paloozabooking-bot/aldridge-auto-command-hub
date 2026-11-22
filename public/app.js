@@ -453,7 +453,7 @@ function renderPartsCards(items, containerId) {
 
     return `
       <article class="part-card">
-        <div class="part-thumb">
+        <div class="part-thumb" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${item.id})" title="Click to view full OEM specs &amp; multi-angle photos">
           <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
           <div class="part-badges">
             ${pullBadge}
@@ -465,7 +465,7 @@ function renderPartsCards(items, containerId) {
             <span>SKU: ${esc(item.sku)}</span>
             <span>${item.oem_part_number ? `OEM #: ${esc(item.oem_part_number)}` : 'Verified Used OEM'}</span>
           </div>
-          <h3 class="part-title">${esc(item.title)}</h3>
+          <h3 class="part-title" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${item.id})">${esc(item.title)}</h3>
           <div class="part-fitment">
             <strong>Fits:</strong> ${esc(item.fitment_years)} ${esc(item.fitment_make)} ${esc(item.fitment_model)} •
             <span>${esc(item.condition || 'Used')} (${item.quantity} in stock)</span> •
@@ -482,15 +482,15 @@ function renderPartsCards(items, containerId) {
             </div>
           </div>
 
-          <div style="display:flex;gap:0.5rem;">
+          <div style="display:flex;gap:0.45rem;flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" style="flex:1 1 100%;" onclick="window.openPublicProductModal && window.openPublicProductModal(${item.id})">
+              🔍 View Full Specs &amp; Photos
+            </button>
             <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="selectPartAndBuy(${item.id}, false)">
-              Buy Part ($${partPrice.toFixed(2)})
+              Add to Cart ($${partPrice.toFixed(2)})
             </button>
             <button type="button" class="btn btn-outline btn-sm" onclick="selectPartAndBuy(${item.id}, true)" title="Buy single-variant part &amp; request a shop installation bay slot">
-              + Install Slot
-            </button>
-            <button type="button" class="btn btn-outline btn-sm" onclick="askAboutSku('${esc(item.sku)}')">
-              VIN
+              Book Installed
             </button>
           </div>
         </div>
@@ -510,8 +510,323 @@ function renderPartsCards(items, containerId) {
   container.innerHTML = cardsHtml + moreBanner;
 }
 
+/* ==================== PUBLIC PRODUCT DETAIL MODAL (v28 — 100% PUBLIC, NO LOGIN REQUIRED) ==================== */
+const pdmState = {
+  item: null,
+  photos: [],
+  activeIdx: 0
+};
+
+function sanitizePublicSpecText(str) {
+  return String(str || '')
+    .replace(/https?:\/\/drive\.google\.com[^\s<>"')]+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getPublicProductPhotos(item) {
+  let list = [];
+  if (Array.isArray(item?.photos) && item.photos.length) {
+    list = item.photos;
+  } else if (item?.photos_json) {
+    try { list = JSON.parse(item.photos_json); } catch (_) {}
+  }
+  const clean = list
+    .map((u) => String(u || '').trim())
+    .filter((u) => u && !/drive\.google\.com/i.test(u) && !/\.qr\.png$/i.test(u));
+  return clean.length ? clean : ['/assets/oem-parts.jpg'];
+}
+
+function renderPublicProductModalContent(item) {
+  const bodyEl = document.getElementById('pdm-content-body');
+  const eyebrowEl = document.getElementById('pdm-eyebrow');
+  if (!bodyEl || !item) return;
+
+  const photos = getPublicProductPhotos(item);
+  pdmState.item = item;
+  pdmState.photos = photos;
+  if (pdmState.activeIdx >= photos.length) pdmState.activeIdx = 0;
+
+  const settings = state.data?.settings || {};
+  const laborRate = Number(settings.labor_rate_hourly || 174.99);
+  const handlingFee = Number(settings.handling_fee_default ?? 10);
+  const partPrice = Number(item.price_we_pull || 0);
+  const vipPrice = Number((partPrice * 0.85).toFixed(2));
+  const shopProPrice = Number((partPrice * 0.75).toFixed(2));
+  const laborHours = Number(item.install_labor_hours || 1.2);
+  const installCombo = Number(item.price_pull_install || 0) > partPrice
+    ? Number(item.price_pull_install)
+    : Number((partPrice + laborHours * laborRate).toFixed(2));
+
+  const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
+  const donor = item.donor || null;
+  const verifiedVin = String(item.verified_vin || donor?.vin || '').trim().toUpperCase();
+  const isTitleCheckVin = verifiedVin === 'VIN-TITLE-CHECK';
+  const hasReal17Vin = /^[A-HJ-NPR-Z0-9]{17}$/.test(verifiedVin);
+
+  const donorYear = item.fitment_years || donor?.year || '';
+  const donorMake = item.fitment_make || donor?.make || '';
+  const donorModel = item.fitment_model || donor?.model || '';
+  const donorEngine = item.fitment_engine || donor?.engine || '';
+  const donorTrim = donor?.trim || '';
+  const donorSummary = [donorYear, donorMake, donorModel, donorTrim, donorEngine].filter(Boolean).join(' ') || 'Verified OEM Donor Vehicle';
+
+  const mpn = String(item.oem_part_number || '').trim();
+  const interchange = String(item.interchange_number || '').trim();
+  const conditionGrade = String(item.condition || 'Tested Used OEM').trim();
+  const binLoc = String(item.bin_location || 'Bldg B • University Place 98467').trim();
+  const secCode = String(item.security_mark_code || '').trim();
+  const weightLbs = Number(item.weight_lbs || 8);
+  const dimL = Math.ceil(Number(item.length_in || 14));
+  const dimW = Math.ceil(Number(item.width_in || 10));
+  const dimH = Math.ceil(Number(item.height_in || 8));
+  const cleanDefect = sanitizePublicSpecText(item.defect_disclosure || 'Inspected on our bench in University Place, WA; see actual high-resolution shop photos.');
+  const cleanNotes = sanitizePublicSpecText(item.fitment_notes || '');
+
+  if (eyebrowEl) {
+    eyebrowEl.textContent = `SKU ${item.sku} • ${donorYear} ${donorMake} ${donorModel} • UNIVERSITY PLACE, WA 98467`.replace(/\s+/g, ' ').trim();
+  }
+
+  const vinBadgeHtml = hasReal17Vin
+    ? `<span class="pdm-vin-badge verified">✓ 17-Char VIN Fitment Verified: <code class="mono">${esc(verifiedVin)}</code></span>`
+    : (isTitleCheckVin
+      ? `<span class="pdm-vin-badge pending">✓ Donor Year/Model Verified (VIN Title-Check On File)</span>`
+      : `<span class="pdm-vin-badge verified">✓ Bench-Inspected Genuine OEM Assembly</span>`);
+
+  const activePhoto = photos[pdmState.activeIdx] || photos[0];
+  const thumbsHtml = photos.map((src, idx) => `
+    <button type="button" class="pdm-thumb-btn ${idx === pdmState.activeIdx ? 'active' : ''}" onclick="window.setPublicProductModalPhoto(${idx})" aria-label="View photo ${idx + 1} of ${photos.length}">
+      <img src="${esc(src)}" alt="${esc(item.title)} angle ${idx + 1}" loading="lazy" />
+    </button>
+  `).join('');
+
+  bodyEl.innerHTML = `
+    <div class="pdm-grid">
+      <!-- Left: Multi-Angle Photo Gallery + Full-Size Viewer -->
+      <div class="pdm-gallery-col">
+        <div class="pdm-hero-wrap">
+          <img id="pdm-hero-img" src="${esc(activePhoto)}" alt="${esc(item.title)}" onclick="window.openPdmFullSizePhoto()" title="Click to inspect full-size photo" />
+          ${photos.length > 1 ? `
+            <button type="button" class="pdm-nav-arrow pdm-prev" onclick="window.stepPublicProductModalPhoto(-1)" aria-label="Previous photo">‹</button>
+            <button type="button" class="pdm-nav-arrow pdm-next" onclick="window.stepPublicProductModalPhoto(1)" aria-label="Next photo">›</button>
+          ` : ''}
+          <span class="pdm-photo-counter" id="pdm-photo-counter">${pdmState.activeIdx + 1} / ${photos.length} Real Shop Photo${photos.length === 1 ? '' : 's'}</span>
+          <button type="button" class="pdm-zoom-btn" onclick="window.openPdmFullSizePhoto()">🔍 Full-Size View</button>
+        </div>
+        <div class="pdm-thumbs-strip" id="pdm-thumbs-strip">${thumbsHtml}</div>
+        <div class="pdm-guarantee-strip">
+          <span>★ 5.0 Google Rated Shop (87 Reviews)</span>
+          <span>•</span>
+          <span>5115 66th St W, Bldg B, University Place 98467</span>
+          <span>•</span>
+          <span>(253) 245-4206</span>
+        </div>
+      </div>
+
+      <!-- Right: Full OEM Specs, Transparent Member Pricing & Instant Actions -->
+      <div class="pdm-info-col">
+        <div class="pdm-badges-row">
+          ${vinBadgeHtml}
+          <span class="pdm-stock-badge">✓ ${Number(item.quantity || 1)} Verified Unit on Shelf</span>
+        </div>
+
+        <h2 id="pdm-title" class="pdm-title">${esc(item.title)}</h2>
+
+        <!-- Transparent Pricing & Member Savings Breakdown -->
+        <div class="pdm-pricing-card">
+          <div class="pdm-pricing-header">TRANSPARENT PRICING &amp; MEMBER SAVINGS</div>
+          <div class="pdm-price-grid">
+            <div class="pdm-price-tile public">
+              <span class="pdm-price-lbl">Public Carry-Out</span>
+              <strong class="pdm-price-val">$${partPrice.toFixed(2)}</strong>
+              <small>${isLocalPickupOnly ? 'Free 98467 Counter Pickup' : `Ships Parcel (+$${handlingFee.toFixed(2)} hdl) or Free 98467 Pickup`}</small>
+            </div>
+            <div class="pdm-price-tile combo">
+              <span class="pdm-price-lbl">Buy Part + Certified $${laborRate.toFixed(2)}/hr Bay Install</span>
+              <strong class="pdm-price-val">$${installCombo.toFixed(2)}</strong>
+              <small>Est. ~${laborHours.toFixed(1)} hrs certified bay labor + 5.0★ warranty</small>
+            </div>
+            <div class="pdm-price-tile member" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')" role="button" tabindex="0" title="Unlock VIP Driver -15% Pricing">
+              <span class="pdm-price-lbl">VIP Driver (-15%)</span>
+              <strong class="pdm-price-val">$${vipPrice.toFixed(2)}</strong>
+              <small>Save $${(partPrice - vipPrice).toFixed(2)} • Unlock in 10s</small>
+            </div>
+            <div class="pdm-price-tile member" onclick="window.openMembershipModal && window.openMembershipModal('b2b_dealer_pro')" role="button" tabindex="0" title="Unlock Shop Pro -25% Wholesale Pricing">
+              <span class="pdm-price-lbl">Shop Pro (-25%)</span>
+              <strong class="pdm-price-val">$${shopProPrice.toFixed(2)}</strong>
+              <small>Save $${(partPrice - shopProPrice).toFixed(2)} • B2B / Wholesale</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Direct High-Converting Action Buttons -->
+        <div class="pdm-cta-stack">
+          <button type="button" class="btn-buy-clean pdm-cta-btn" onclick="window.closePublicProductModal(); selectPartAndBuy(${Number(item.id)}, false);">
+            <span>Add to Cart — Carry-Out ($${partPrice.toFixed(2)})</span>
+            <small>${isLocalPickupOnly ? 'Free Counter Pickup • University Place 98467' : 'Ships Nationwide or Free 98467 Counter Pickup'}</small>
+          </button>
+          <button type="button" class="btn-install-clean pdm-cta-btn" onclick="window.closePublicProductModal(); selectPartAndBuy(${Number(item.id)}, true);">
+            <span>Book Installed at Shop — $${installCombo.toFixed(2)}</span>
+            <small>Part Held + Certified $${laborRate.toFixed(2)}/hr Bay Installation</small>
+          </button>
+        </div>
+
+        <!-- Complete OEM Fitment & Technical Specs Table -->
+        <div class="pdm-specs-wrap">
+          <div class="pdm-specs-head">COMPLETE OEM FITMENT &amp; TECHNICAL SPECIFICATIONS</div>
+          <table class="pdm-specs-table">
+            <tbody>
+              <tr>
+                <th>Verified Donor Vehicle</th>
+                <td><strong>${esc(donorSummary)}</strong></td>
+              </tr>
+              <tr>
+                <th>17-Char VIN Fitment</th>
+                <td>${hasReal17Vin ? `<code class="mono">${esc(verifiedVin)}</code> <span style="color:#15803d;font-weight:700;">(NHTSA Verified)</span>` : (isTitleCheckVin ? 'Staff Donor Year/Model Verified (VIN Title-Check Pending)' : 'Verified OEM Donor Fitment')}</td>
+              </tr>
+              <tr>
+                <th>OEM Manufacturer Part # (MPN)</th>
+                <td>${mpn ? `<code class="mono">${esc(mpn)}</code>` : 'Genuine Factory OEM — Match Photos &amp; Fitment'}</td>
+              </tr>
+              <tr>
+                <th>Interchange Numbers</th>
+                <td>${interchange ? `<code class="mono">${esc(interchange)}</code>` : 'Direct Factory OEM Replacement'}</td>
+              </tr>
+              <tr>
+                <th>Condition Grade</th>
+                <td>${esc(conditionGrade)} — Bench-Inspected</td>
+              </tr>
+              <tr>
+                <th>Shelf / Bin Location</th>
+                <td><code class="mono">${esc(binLoc)}</code></td>
+              </tr>
+              <tr>
+                <th>Security QR Tag ID</th>
+                <td>${secCode ? `<code class="mono">${esc(secCode)}</code> (Tamper-Evident Mark)` : 'Marked Before Dispatch'}</td>
+              </tr>
+              <tr>
+                <th>Packed Weight &amp; Box Dims</th>
+                <td class="mono">${weightLbs} lbs • ${dimL}" × ${dimW}" × ${dimH}"</td>
+              </tr>
+              <tr>
+                <th>Shipping vs. Counter Pickup</th>
+                <td>${isLocalPickupOnly
+                  ? '<strong>Free University Place 98467 Counter Pickup Only</strong> (Heavy / Oversized Assembly — 70+ lbs or Freight Class)'
+                  : `<strong>Calculated Parcel Shipping</strong> (+$${handlingFee.toFixed(2)} protective handling) OR <strong>Free University Place 98467 Counter Pickup</strong>`}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        ${(cleanDefect || cleanNotes) ? `
+          <div class="pdm-notes-box">
+            <strong>Inspection &amp; Fitment Notes:</strong>
+            <p style="margin:0.25rem 0 0;">${esc(cleanDefect)}${cleanNotes && cleanNotes !== cleanDefect ? ` • ${esc(cleanNotes)}` : ''}</p>
+          </div>
+        ` : ''}
+
+        <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="window.closePublicProductModal(); askAboutSku('${esc(item.sku)}');">
+            Have a Question or Want a 17-Char VIN Check? Ask Our Techs →
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+window.setPublicProductModalPhoto = function (idx) {
+  if (!pdmState.photos.length) return;
+  const next = Math.max(0, Math.min(pdmState.photos.length - 1, Number(idx) || 0));
+  pdmState.activeIdx = next;
+  const hero = document.getElementById('pdm-hero-img');
+  const counter = document.getElementById('pdm-photo-counter');
+  if (hero) hero.src = pdmState.photos[next];
+  if (counter) counter.textContent = `${next + 1} / ${pdmState.photos.length} Real Shop Photo${pdmState.photos.length === 1 ? '' : 's'}`;
+  document.querySelectorAll('#pdm-thumbs-strip .pdm-thumb-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', i === next);
+  });
+};
+
+window.stepPublicProductModalPhoto = function (delta) {
+  if (!pdmState.photos.length) return;
+  const len = pdmState.photos.length;
+  const next = (pdmState.activeIdx + delta + len) % len;
+  window.setPublicProductModalPhoto(next);
+};
+
+window.openPdmFullSizePhoto = function () {
+  const src = pdmState.photos[pdmState.activeIdx] || pdmState.photos[0];
+  if (!src) return;
+  const lb = document.getElementById('pdm-photo-lightbox');
+  const img = document.getElementById('pdm-lightbox-img');
+  const cap = document.getElementById('pdm-lightbox-caption');
+  if (!lb || !img) {
+    window.open(src, '_blank', 'noopener');
+    return;
+  }
+  img.src = src;
+  if (cap) {
+    cap.textContent = `${pdmState.item?.title || 'OEM Part'} — Photo ${pdmState.activeIdx + 1} of ${pdmState.photos.length}`;
+  }
+  lb.classList.add('open');
+};
+
+window.openPublicProductModal = async function (idOrSku) {
+  const modal = document.getElementById('public-product-detail-modal');
+  const bodyEl = document.getElementById('pdm-content-body');
+  if (!modal || !bodyEl) return;
+
+  const inv = state.data?.inventory || [];
+  let item = inv.find((i) => String(i.id) === String(idOrSku) || String(i.sku || '').toUpperCase() === String(idOrSku || '').toUpperCase());
+
+  pdmState.activeIdx = 0;
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  if (!item) {
+    bodyEl.innerHTML = '<div style="padding:2rem;text-align:center;color:#5c4b39;font-weight:700;">Loading verified OEM specifications &amp; photos...</div>';
+    try {
+      const r = await fetch(`/api/inventory/item/${encodeURIComponent(String(idOrSku))}`);
+      const d = await r.json();
+      if (r.ok && d.ok && d.item) {
+        item = d.item;
+      }
+    } catch (_) {}
+  }
+
+  if (!item) {
+    bodyEl.innerHTML = '<div style="padding:2rem;text-align:center;color:#b91c1c;font-weight:700;">This part is no longer on the shelf. Call (253) 245-4206 or use Instant Part Finder to source a replacement.</div>';
+    return;
+  }
+
+  renderPublicProductModalContent(item);
+};
+
+window.closePublicProductModal = function () {
+  const modal = document.getElementById('public-product-detail-modal');
+  const lb = document.getElementById('pdm-photo-lightbox');
+  if (lb) lb.classList.remove('open');
+  if (modal) modal.classList.remove('open');
+  document.body.style.overflow = '';
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const lb = document.getElementById('pdm-photo-lightbox');
+    if (lb && lb.classList.contains('open')) {
+      lb.classList.remove('open');
+      return;
+    }
+    const modal = document.getElementById('public-product-detail-modal');
+    if (modal && modal.classList.contains('open')) {
+      window.closePublicProductModal();
+    }
+  }
+});
+
 function selectPartAndBuy(itemId, requestInstallSlot = false) {
-  const item = state.data.inventory.find((i) => i.id === itemId);
+  const item = state.data.inventory.find((i) => i.id === itemId) || (pdmState.item && pdmState.item.id === itemId ? pdmState.item : null);
   if (!item) return;
   const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
   const chosenMode = requestInstallSlot
@@ -2529,6 +2844,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     await loadBootstrap();
+    const deepSku = params.get('sku') || params.get('part') || '';
+    if (deepSku && typeof window.openPublicProductModal === 'function') {
+      window.openPublicProductModal(deepSku);
+    }
   } catch (err) {
     console.error('[Bootstrap Load Error]', err);
     showToast('Syncing with server — if the page just woke up, refresh in a moment.');

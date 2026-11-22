@@ -716,7 +716,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v27',
+        sw_version: 'v28',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -725,6 +725,9 @@ const server = http.createServer(async (req, res) => {
         parts_aggregator_endpoint: '/api/parts-aggregator/search',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
+        gemini_vision_persisted: Boolean(cfg.gemini_api_key),
+        public_product_detail_modal: true,
+        vin_whitelist_fixed: true,
         hands_free_multi_input_batch_intake: true,
         unified_vin_extraction: true,
         folder_vin_conflict_override: true,
@@ -1005,6 +1008,25 @@ const server = http.createServer(async (req, res) => {
       try { opts = raw ? JSON.parse(raw) : {}; } catch (_) {}
       const result = deduplicateCatalog({ dryRun: Boolean(opts.dry_run || opts.dryRun) });
       sendJson(res, 200, result);
+      return;
+    }
+
+    // 100% Public Single-Item Product Detail Endpoint (NO login required)
+    if (method === 'GET' && pathname.startsWith('/api/inventory/item/')) {
+      const idOrSku = decodeURIComponent(pathname.replace('/api/inventory/item/', '')).trim();
+      const donorMap = buildDonorMap();
+      let row = null;
+      if (/^\d+$/.test(idOrSku)) {
+        row = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND status NOT IN ('compliance_blocked', 'duplicate_archived')").get(Number(idOrSku));
+      }
+      if (!row && idOrSku) {
+        row = db.prepare("SELECT * FROM inventory_items WHERE UPPER(sku) = ? AND status NOT IN ('compliance_blocked', 'duplicate_archived')").get(idOrSku.toUpperCase());
+      }
+      if (!row) {
+        sendJson(res, 404, { ok: false, error: 'Part not found or no longer active.' });
+        return;
+      }
+      sendJson(res, 200, { ok: true, item: hydrateInventoryItem(row, donorMap) });
       return;
     }
 
@@ -1915,6 +1937,29 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'GET' && pathname === '/api/employee/intake/sessions') {
         sendJson(res, 200, { ...listVinIntakeSessions(), staff_user: empSession.staff_name });
+        return;
+      }
+
+      // Persist Gemini Vision API Key (SQLite + DATA_DIR/.gemini_vision_key + runtime process.env)
+      if (method === 'POST' && pathname === '/api/employee/settings/gemini-key') {
+        try {
+          const b = JSON.parse((await readRawBody(req)) || '{}');
+          const key = String(b.gemini_api_key || '').trim();
+          if (!key || key.length < 20) {
+            sendJson(res, 400, { ok: false, error: 'Enter a valid Google AI Studio Gemini API key (starts with AIza...).' });
+            return;
+          }
+          const updated = updateSettings({ gemini_api_key: key });
+          logSync('system', 'settings_vault', 'persist_gemini_vision_key', '', 'success', `${empSession.staff_name} persisted Gemini Vision API key (SQLite + persistent DATA_DIR).`);
+          sendJson(res, 200, {
+            ok: true,
+            gemini_vision_configured: Boolean(updated.gemini_api_key),
+            gemini_vision_persisted: Boolean(updated.gemini_api_key),
+            masked_key: `${key.slice(0, 6)}••••${key.slice(-4)}`
+          });
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err.message || 'Could not persist Gemini API key.' });
+        }
         return;
       }
 

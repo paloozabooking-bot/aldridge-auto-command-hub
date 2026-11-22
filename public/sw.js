@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aldridge-autos-hub-v27';
+const CACHE_NAME = 'aldridge-autos-hub-v28';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

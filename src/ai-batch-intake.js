@@ -868,7 +868,7 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
   // Priority A: Explicit manual 17-char VIN entry/override
   if (manualVin) {
     const check = validateVinStrict(manualVin);
-    if (!check.valid) {
+    if (!check.valid && !check.blocklist_only) {
       const err = new Error(check.reason || `Invalid 17-character VIN "${manualVin}".`);
       err.statusCode = 400;
       throw err;

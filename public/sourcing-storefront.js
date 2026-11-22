@@ -123,16 +123,20 @@
 
     return `
       <article class="clean-part-card" data-sku="${esc(item.sku)}">
-        <div class="clean-part-media" onclick="window.selectPartAndBuy ? window.selectPartAndBuy(${Number(item.id)}, false) : (window.askAboutSku && window.askAboutSku('${esc(item.sku)}'))">
+        <div class="clean-part-media" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to inspect full OEM specs &amp; multi-angle photos">
           <img src="${esc(photos[0])}" alt="${esc(item.title)}" loading="lazy" />
           <span class="clean-part-badge ${isHeavy ? 'pickup-badge' : ''}">${isHeavy ? '📍 Ready at 98467 Shop' : '✓ In Stock • Ready Today'}</span>
+          ${photos.length > 1 ? `<span class="clean-part-photo-pill">📷 ${photos.length} Photos</span>` : ''}
         </div>
         <div class="clean-part-body">
           <div class="clean-part-fitment">Fits ${esc(fitmentLine)}</div>
-          <h3 class="clean-part-title" onclick="window.selectPartAndBuy && window.selectPartAndBuy(${Number(item.id)}, false)">${esc(item.title)}</h3>
+          <h3 class="clean-part-title pdm-clickable-title" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">${esc(item.title)}</h3>
           ${mpn ? `<span class="clean-part-mpn">OEM # ${esc(mpn)}</span>` : ''}
           ${memberRibbon}
           <div class="clean-part-actions">
+            <button type="button" class="btn-specs-clean" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
+              🔍 View Full Specs &amp; Photos
+            </button>
             <button type="button" class="btn-buy-clean" onclick="window.selectPartAndBuy && window.selectPartAndBuy(${Number(item.id)}, false)">
               <span>Add to Cart — ${money(displayBuyPrice)}</span>
               <small>${buySubtext}</small>

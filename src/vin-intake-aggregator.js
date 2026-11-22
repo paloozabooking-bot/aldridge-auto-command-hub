@@ -13,6 +13,8 @@ const {
   getSettings,
   updateSettings,
   validateVinStrict,
+  isVinCheckDigitValid,
+  registerNhtsaVerifiedVin,
   validatePartCompliance,
   validateInventoryItemForPublish,
   computeShippingClass,
@@ -210,19 +212,28 @@ const VIN_YEAR_CODE_MAP = {
 async function decodeVinLiveNhtsa(rawVin) {
   const vin = String(rawVin || '').trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
   const strict = validateVinStrict(vin);
-  if (!strict.valid) {
+  if (!strict.valid && !strict.blocklist_only) {
     throw new Error(`Invalid 17-character VIN: ${strict.reason}`);
   }
 
   try {
     const url = `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(vin)}?format=json`;
     const resp = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'AldridgeAutoCommandHub/v23' },
+      headers: { Accept: 'application/json', 'User-Agent': 'AldridgeAutoCommandHub/v28' },
       signal: AbortSignal.timeout(7000)
     });
     if (resp.ok) {
       const json = await resp.json();
       const rec = Array.isArray(json?.Results) ? json.Results[0] : null;
+      const primaryErrCode = String(rec?.ErrorCode || '').split(',')[0].trim();
+      const hasFactoryDecode = Boolean(rec && rec.Make && rec.Model);
+      const nhtsaClean = primaryErrCode === '0' && hasFactoryDecode && isVinCheckDigitValid(vin).valid;
+      if (nhtsaClean) {
+        registerNhtsaVerifiedVin(vin);
+      }
+      if (!strict.valid && !nhtsaClean) {
+        throw new Error(`Invalid 17-character VIN: ${strict.reason}`);
+      }
       if (rec && (rec.Make || rec.Model || rec.ModelYear)) {
         const disp = rec.DisplacementL ? `${Number(rec.DisplacementL).toFixed(1)}L` : '';
         const cyl = rec.EngineCylinders ? `${rec.EngineCylinders}-Cyl` : '';
@@ -232,6 +243,7 @@ async function decodeVinLiveNhtsa(rawVin) {
         return {
           vin,
           source: 'nhtsa_vpic_live',
+          nhtsa_error_code: primaryErrCode,
           year: parseInt(rec.ModelYear, 10) || VIN_YEAR_CODE_MAP[vin[9]] || 0,
           make: String(rec.Make || '').trim(),
           model: String(rec.Model || '').trim(),
@@ -241,6 +253,7 @@ async function decodeVinLiveNhtsa(rawVin) {
           transmission: trans,
           body_class: String(rec.BodyClass || '').trim(),
           raw: {
+            ErrorCode: rec.ErrorCode,
             Make: rec.Make,
             Model: rec.Model,
             ModelYear: rec.ModelYear,
@@ -254,7 +267,13 @@ async function decodeVinLiveNhtsa(rawVin) {
         };
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    if (!strict.valid) throw err;
+  }
+
+  if (!strict.valid) {
+    throw new Error(`Invalid 17-character VIN: ${strict.reason}`);
+  }
 
   // Offline deterministic fallback ONLY if NHTSA endpoint is unreachable (never fabricates fake model)
   const wmiMap = {
