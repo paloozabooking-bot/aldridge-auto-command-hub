@@ -993,6 +993,57 @@
     window.addEventListener('online', () => { updateOfflineBadge(); window.flushOfflineDviQueue(); });
     window.addEventListener('offline', () => { updateOfflineBadge(); });
 
+    // Unified v26 VIN Decode & Sticker Photo/Video OCR inside Bay DVI & Quoting
+    async function runUnifiedDviVinResolve(formDataOrJson, isFormData = false) {
+      const statusEl = document.getElementById('dvi-vin-decode-status');
+      if (statusEl) statusEl.textContent = 'Decoding VIN via NHTSA vPIC...';
+      try {
+        const hdrs = isFormData ? {} : { 'Content-Type': 'application/json' };
+        const tok = sessionStorage.getItem('aldridge_emp_token') || localStorage.getItem('aldridge_emp_token') || '';
+        if (tok) hdrs.Authorization = `Bearer ${tok}`;
+        const r = await fetch('/api/employee/intake/decode-vin-media', {
+          method: 'POST',
+          headers: hdrs,
+          credentials: 'same-origin',
+          body: isFormData ? formDataOrJson : JSON.stringify(formDataOrJson)
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Could not decode VIN.');
+        const v = d.vehicle || d.session || {};
+        if (v.vin && document.getElementById('dvi-new-vin')) document.getElementById('dvi-new-vin').value = v.vin;
+        if (v.year && document.getElementById('dvi-new-year')) document.getElementById('dvi-new-year').value = v.year;
+        if (v.make && document.getElementById('dvi-new-make')) document.getElementById('dvi-new-make').value = v.make;
+        if (v.model && document.getElementById('dvi-new-model')) document.getElementById('dvi-new-model').value = v.model;
+        if (statusEl) {
+          statusEl.style.color = '#15803d';
+          statusEl.textContent = `✓ Verified ${v.year || ''} ${v.make || ''} ${v.model || ''} (${v.vin || ''})`;
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.style.color = '#b91c1c';
+          statusEl.textContent = err.message;
+        }
+      }
+    }
+
+    document.getElementById('dvi-new-vin')?.addEventListener('change', (e) => {
+      const val = String(e.target.value || '').trim().toUpperCase();
+      if (val.length === 17) runUnifiedDviVinResolve({ vin: val, auto_lock: false }, false);
+    });
+    document.getElementById('btn-dvi-decode-vin')?.addEventListener('click', () => {
+      const val = String(document.getElementById('dvi-new-vin')?.value || '').trim().toUpperCase();
+      if (val.length === 17) runUnifiedDviVinResolve({ vin: val, auto_lock: false }, false);
+    });
+    document.getElementById('dvi-vin-media-input')?.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('files', file, file.name);
+      fd.append('auto_lock', 'false');
+      runUnifiedDviVinResolve(fd, true);
+    });
+
     // New DVI RO Form
     const newRoForm = document.getElementById('dvi-new-ro-form');
     if (newRoForm) {

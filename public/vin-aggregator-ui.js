@@ -15,6 +15,11 @@
     activeChannel: 'all',
     lastResponse: null,
     activeVinSession: null,
+    autoBinPrefix: 'BAY-B-SHELF',
+    vinLabelConflict: null,
+    vinSource: '',
+    pendingDriveUrl: '',
+    geminiVisionConfigured: null,
     queuedFiles: [],
     lastBatchResult: null
   };
@@ -312,36 +317,78 @@
   }
 
   /* ==================== 2. EMPLOYEE BACKEND MANDATORY VIN / LICENSE PLATE INTAKE GATE ==================== */
+  function computeClientAutoBin(sess) {
+    if (!sess) return 'BAY-B-SHELF';
+    const yr = String(sess.year || '').trim();
+    const yr2 = yr.length >= 4 ? yr.slice(-2) : '';
+    const mk = String(sess.make || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const md = String(sess.model || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    let tok = md;
+    if (mk === 'FIAT' && md.startsWith('500')) tok = 'FIAT500';
+    else if (mk === 'CHEVROLET' && md.startsWith('S10')) tok = 'S10';
+    else if (!tok || tok.length < 2) tok = mk || 'OEM';
+    tok = tok.slice(0, 10);
+    return yr2 ? `${tok}-${yr2}-BAYB` : `${tok}-BAYB`;
+  }
+
   function renderEmployeeVinIntakeGate() {
     const host = document.getElementById('employee-vin-intake-gate');
     if (!host) return;
     const locked = aggState.activeVinSession;
+    const autoBin = aggState.autoBinPrefix || computeClientAutoBin(locked);
+    const conflict = aggState.vinLabelConflict;
+    const visionReady = aggState.geminiVisionConfigured === true;
+    const visionBadgeHtml = aggState.geminiVisionConfigured === null
+      ? '<span class="sku-badge-store">⏳ Checking Gemini Vision AI...</span>'
+      : (visionReady
+        ? '<span class="sku-badge-live">🟢 Gemini 2.5 Flash Vision Pixel AI: ACTIVE</span>'
+        : '<span class="sku-badge-queue">🟡 Filename / Metadata Mode (Add GEMINI_API_KEY in Render for Raw Pixel &amp; Sticker OCR)</span>');
 
     host.innerHTML = `
       <div class="emp-vin-gate-shell">
         <div class="emp-vin-gate-header">
           <div>
-            <div class="eyebrow-label" style="margin-bottom:0.15rem;">STRICT SYSTEM INVARIANT • ZERO PRE-VIN LISTINGS ALLOWED</div>
-            <h3 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.3rem;">Mandatory VIN / License Plate Vehicle Intake Pipeline</h3>
-            <p style="margin:0.25rem 0 0;font-size:0.86rem;color:#5c4b39;">Step 1 is strictly required before ANY part photos can be uploaded or published to the storefront, Shopify, eBay, Google Merchant, or Crosslist.</p>
+            <div class="eyebrow-label" style="margin-bottom:0.15rem;">UNIFIED VIN-FIRST ENGINE (v26) • FOLDER/FILE + PHOTO/VIDEO OCR + MANUAL VIN</div>
+            <h3 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.3rem;">Unified Mandatory VIN / Plate &amp; Hands-Free AI Media Intake</h3>
+            <p style="margin:0.25rem 0 0;font-size:0.86rem;color:#5c4b39;">Auto-extracts 17-char ISO-3779 VINs from Drive folder titles, .zip/file names, or VIN sticker photos/videos — with instant manual VIN &amp; License Plate override.</p>
           </div>
-          <button type="button" class="btn btn-outline btn-sm" id="btn-clean-slate-purge-trigger" title="Archive all pre-VIN legacy Shopify products & verify 0 pre-VIN records in SQLite">🧹 Run Clean-Slate Shopify Purge</button>
+          <div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;">
+            ${visionBadgeHtml}
+            <button type="button" class="btn btn-outline btn-sm" id="btn-clean-slate-purge-trigger" title="Archive all pre-VIN legacy Shopify products & verify 0 pre-VIN records in SQLite">🧹 Clean-Slate Purge</button>
+          </div>
         </div>
 
         <div id="emp-purge-status-out" style="margin-bottom:0.8rem;"></div>
 
         <div class="grid-2" style="gap:1rem;align-items:start;">
-          <!-- STEP 1: LOCKED VEHICLE VIN / PLATE DECODER -->
+          <!-- STEP 1: UNIFIED VIN RESOLUTION (DRIVE FOLDER / PHOTO-VIDEO STICKER OCR / MANUAL VIN / PLATE) -->
           <div class="surface-card" style="border:2px solid ${locked ? '#16a34a' : '#c2410c'};background:#fffdf9;">
-            <div style="font-size:0.75rem;font-weight:800;color:${locked ? '#15803d' : '#9a3412'};text-transform:uppercase;margin-bottom:0.35rem;">
-              ${locked ? `✓ STEP 1 LOCKED — SESSION ${esc(locked.session_code)}` : '🔒 STEP 1 (REQUIRED FIRST) — DECODE & LOCK DONOR VEHICLE'}
+            <div style="font-size:0.75rem;font-weight:800;color:${locked ? '#15803d' : '#9a3412'};text-transform:uppercase;margin-bottom:0.4rem;">
+              ${locked ? `✓ STEP 1 LOCKED — SESSION ${esc(locked.session_code)}` : '🔒 STEP 1 (REQUIRED FIRST) — AUTO-EXTRACT OR ENTER VIN'}
             </div>
+
+            <!-- 1A. Quick Auto-Extract VIN from Sticker Photo/Video OR Drive Link -->
+            <div style="background:#fef7ed;border:1px solid #fed7aa;border-radius:10px;padding:0.65rem;margin-bottom:0.75rem;">
+              <div style="font-size:0.73rem;font-weight:800;color:#9a3412;margin-bottom:0.4rem;">⚡ FAST AUTO-EXTRACT VIN (STICKER PHOTO/VIDEO OR DRIVE FOLDER)</div>
+              <div style="display:flex;flex-wrap:wrap;gap:0.45rem;margin-bottom:0.45rem;">
+                <label class="btn btn-dark btn-sm" style="cursor:pointer;margin:0;">
+                  📸 Scan VIN Sticker Photo / Video
+                  <input type="file" id="emp-step1-vin-media-input" accept="image/*,video/*,.zip" capture="environment" style="display:none;" />
+                </label>
+              </div>
+              <div style="display:flex;gap:0.4rem;">
+                <input id="emp-step1-drive-extract-input" class="input" type="url" placeholder="Paste Google Drive folder link to auto-read VIN..." value="${esc(aggState.pendingDriveUrl || '')}" style="font-size:0.8rem;" />
+                <button type="button" id="btn-step1-extract-drive-vin" class="btn btn-outline btn-sm" style="white-space:nowrap;">☁️ Extract VIN</button>
+              </div>
+            </div>
+
+            <!-- 1B. Manual 17-Char VIN or License Plate Fallback / Override -->
             <form id="emp-step1-vin-form">
               <div class="form-group">
-                <label>17-Character VIN (NHTSA vPIC Live Decode)</label>
+                <label>17-Character VIN (Manual Entry or Override — NHTSA vPIC Live Decode)</label>
                 <input name="vin" class="input mono" maxlength="17" placeholder="Enter 17-char VIN (e.g. JTEBU5JR2C5091234)" value="${esc(locked?.vin || '')}" style="text-transform:uppercase;" />
               </div>
-              <div style="text-align:center;font-size:0.76rem;font-weight:800;color:#78716c;margin:0.35rem 0;">— OR LOOK UP BY LICENSE PLATE —</div>
+              <div style="text-align:center;font-size:0.74rem;font-weight:800;color:#78716c;margin:0.3rem 0;">— OR LOOK UP BY LICENSE PLATE —</div>
               <div style="display:grid;grid-template-columns:90px 1fr;gap:0.5rem;">
                 <div class="form-group">
                   <label>State</label>
@@ -358,50 +405,58 @@
               <button type="submit" class="btn btn-primary" style="width:100%;">Decode &amp; Lock Vehicle via NHTSA vPIC</button>
             </form>
 
+            ${conflict && conflict.has_conflict ? `
+              <div style="margin-top:0.75rem;padding:0.7rem;background:#fef3c7;border:1.5px solid #d97706;border-radius:10px;font-size:0.82rem;color:#78350f;">
+                <strong>⚠️ Folder Label vs. NHTSA VIN Conflict Flagged:</strong><br/>
+                ${esc(conflict.warning)}<br/>
+                <span style="font-size:0.76rem;">Using authoritative NHTSA vPIC decode. Enter a different 17-char VIN above if needed.</span>
+              </div>
+            ` : ''}
+
             ${locked ? `
-              <div style="margin-top:0.85rem;padding:0.75rem;background:#ecfdf5;border:1.5px solid #22c55e;border-radius:12px;font-size:0.84rem;">
-                <strong>Locked Donor Vehicle:</strong><br/>
+              <div style="margin-top:0.75rem;padding:0.75rem;background:#ecfdf5;border:1.5px solid #22c55e;border-radius:12px;font-size:0.84rem;">
+                <strong>Locked Donor Vehicle${aggState.vinSource ? ` (${esc(aggState.vinSource)})` : ''}:</strong><br/>
                 <span style="font-size:1rem;font-weight:800;color:#14532d;">${esc(locked.year)} ${esc(locked.make)} ${esc(locked.model)} ${esc(locked.trim || '')}</span><br/>
-                <span class="mono" style="font-size:0.78rem;">VIN: ${esc(locked.vin)} • Session: ${esc(locked.session_code)}</span><br/>
+                <span class="mono" style="font-size:0.78rem;">VIN: ${esc(locked.vin)} • Session: ${esc(locked.session_code)} • Auto-Bin: ${esc(autoBin)}</span><br/>
                 <span>Engine: ${esc(locked.engine || 'Verified')} • Drive: ${esc(locked.drivetrain || 'Verified')} • Trans: ${esc(locked.transmission || 'Verified')}</span>
               </div>
             ` : ''}
           </div>
 
-          <!-- STEP 2: 100% HANDS-FREE AI MULTI-INPUT BATCH INTAKE (DISABLED UNTIL STEP 1 LOCKED!) -->
-          <div class="surface-card" style="position:relative;border:2px solid ${locked ? '#1f1711' : '#d6d3d1'};opacity:${locked ? '1' : '0.62'};">
+          <!-- STEP 2: 100% HANDS-FREE AI MULTI-INPUT BATCH INTAKE (PHOTOS + VIDEOS + .ZIP + DRIVE) -->
+          <div class="surface-card" style="position:relative;border:2px solid ${locked ? '#1f1711' : '#d6d3d1'};opacity:${locked ? '1' : '0.68'};">
             <div style="font-size:0.75rem;font-weight:800;color:${locked ? '#1f1711' : '#78716c'};text-transform:uppercase;margin-bottom:0.35rem;">
-              ${locked ? '🔓 STEP 2 UNLOCKED — 100% HANDS-FREE AI MULTI-INPUT BATCH INTAKE (ZERO TYPING)' : '🔒 STEP 2 LOCKED — COMPLETE STEP 1 VIN DECODE FIRST'}
+              ${locked ? '🔓 STEP 2 UNLOCKED — HANDS-FREE AI PHOTO / VIDEO / .ZIP / DRIVE BATCH INTAKE' : '🔒 STEP 2 LOCKED — COMPLETE STEP 1 VIN DECODE FIRST (OR PASTE DRIVE LINK WITH VIN IN FOLDER NAME)'}
             </div>
             <p style="margin:0 0 0.7rem;font-size:0.82rem;color:#5c4b39;">
-              Drop <strong>shop photos</strong>, capture directly from your <strong>phone/tablet camera</strong>, drop a <strong>.zip archive</strong>, or paste a <strong>Google Drive folder/file link</strong>. AI Vision automatically identifies every OEM part, reads stamped MPNs, prices, sets <code>vp-1-4-*</code> taxonomy &amp; box weight/dims, merges duplicate angles, attaches QR tags, and publishes live (Qty: 1).
+              Upload <strong>photos</strong>, <strong>walkaround/part videos</strong> (auto keyframe extraction), <strong>.zip archives</strong>, or a <strong>Google Drive folder link</strong>. Smart grouping merges <code>ALD-XXXXXX</code> / <code>ALD-OH-XXX</code> / <code>.1..8</code> angles into <strong>1 listing (Qty: 1)</strong> and automatically filters sold Shopify orders (<code>#1006–#1038</code>) &amp; SRS/seatbelt items.
             </p>
             <form id="emp-step2-batch-form">
               <fieldset ${locked ? '' : 'disabled'} style="border:none;padding:0;margin:0;">
                 <div id="emp-ai-dropzone" class="ai-batch-dropzone">
                   <div class="ai-dropzone-actions">
                     <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">
-                      📸 Snap Camera Photo(s)
-                      <input type="file" id="emp-step2-camera-input" accept="image/*" capture="environment" multiple style="display:none;" />
+                      📸 Snap Photo / Record Video
+                      <input type="file" id="emp-step2-camera-input" accept="image/*,video/*" capture="environment" multiple style="display:none;" />
                     </label>
                     <label class="btn btn-dark btn-sm" style="cursor:pointer;margin:0;">
-                      🖼 Upload Photos or .ZIP Archive
-                      <input type="file" id="emp-step2-files-input" accept="image/*,.zip,application/zip,application/x-zip-compressed" multiple style="display:none;" />
+                      🖼 Upload Photos, Videos or .ZIP
+                      <input type="file" id="emp-step2-files-input" accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed" multiple style="display:none;" />
                     </label>
                   </div>
-                  <div class="ai-dropzone-hint">Drag &amp; drop multiple part photos or a <code>.zip</code> archive here — zero manual part typing required</div>
+                  <div class="ai-dropzone-hint">Drag &amp; drop part photos, short MP4/MOV clips, or a <code>.zip</code> archive — zero manual part typing required</div>
                   <div id="emp-step2-file-queue" class="ai-file-queue"></div>
                 </div>
 
                 <div class="form-group" style="margin-top:0.7rem;">
-                  <label for="emp-step2-drive-url">☁️ Or Paste Google Drive Folder / File Link (Optional — Auto-Fetched &amp; Unpacked Server-Side)</label>
-                  <input id="emp-step2-drive-url" name="drive_url" class="input" type="url" placeholder="https://drive.google.com/drive/folders/... or /file/d/..." />
+                  <label for="emp-step2-drive-url">☁️ Or Paste Google Drive Folder / File Link (Auto-Extracts VIN &amp; Unpacks Server-Side)</label>
+                  <input id="emp-step2-drive-url" name="drive_url" class="input" type="url" value="${esc(aggState.pendingDriveUrl || '')}" placeholder="https://drive.google.com/drive/folders/... or /file/d/..." />
                 </div>
 
                 <div class="grid-3-compact" style="margin-top:0.5rem;">
                   <div class="form-group">
-                    <label>Shelf / Bin Prefix</label>
-                    <input name="bin_location" class="input" value="BAY-B-SHELF" placeholder="BAY-B-SHELF" />
+                    <label>Shelf / Bin Prefix (Auto-Filled)</label>
+                    <input name="bin_location" class="input mono" value="${esc(autoBin)}" placeholder="${esc(autoBin)}" />
                   </div>
                   <div class="form-group">
                     <label>Multi-Angle Grouping</label>
@@ -433,7 +488,7 @@
       </div>
     `;
 
-    // Hide legacy pre-VIN camera dropzone underneath so staff ALWAYS uses the VIN-locked pipeline
+    // Hide legacy pre-VIN camera dropzone underneath so staff ALWAYS uses the unified VIN-locked pipeline
     const staffIntake = document.getElementById('staff-intake');
     if (staffIntake) {
       Array.from(staffIntake.children).forEach((el) => {
@@ -450,11 +505,12 @@
       }
       qEl.innerHTML = aggState.queuedFiles.map((f, idx) => {
         const isZip = /\.zip$/i.test(f.name) || /zip/i.test(f.type);
+        const isVid = /\.(mp4|mov|webm|m4v|3gp)$/i.test(f.name) || /^video\//i.test(f.type);
         const kb = Math.max(1, Math.round(f.size / 1024));
         const sizeLabel = kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
         return `
           <div class="ai-queued-chip ${isZip ? 'is-zip' : ''}">
-            <span>${isZip ? '📦' : '📷'} <strong>${esc(f.name)}</strong> <small>(${sizeLabel})</small></span>
+            <span>${isZip ? '📦' : (isVid ? '🎥' : '📷')} <strong>${esc(f.name)}</strong> <small>(${sizeLabel})</small></span>
             <button type="button" data-rm-file="${idx}" aria-label="Remove file">✕</button>
           </div>
         `;
@@ -471,7 +527,7 @@
     function enqueueFiles(fileList) {
       const incoming = Array.from(fileList || []);
       for (const f of incoming) {
-        if (aggState.queuedFiles.length >= 60) break;
+        if (aggState.queuedFiles.length >= 75) break;
         const dup = aggState.queuedFiles.some((x) => x.name === f.name && x.size === f.size);
         if (!dup) aggState.queuedFiles.push(f);
       }
@@ -483,21 +539,31 @@
       if (!box || !d) return;
       const items = d.created_items || [];
       const skipped = d.skipped_items || [];
+      const soldCnt = Number(d.blocked_sold_count || 0);
+      const srsCnt = Number(d.blocked_srs_count || 0);
       box.innerHTML = `
         <div class="ai-batch-summary-card">
           <div class="ai-batch-summary-top">
             <div>
-              <div class="eyebrow-label" style="color:#15803d;margin-bottom:0.15rem;">✓ HANDS-FREE AI BATCH INTAKE COMPLETE • VIN ${esc(d.session?.vin || '')}</div>
+              <div class="eyebrow-label" style="color:#15803d;margin-bottom:0.15rem;">✓ UNIFIED AI BATCH INTAKE COMPLETE • VIN ${esc(d.session?.vin || '')} • BIN ${esc(d.auto_bin_prefix || '')}</div>
               <h4 style="margin:0;font-family:'Fraunces',Georgia,serif;font-size:1.15rem;color:#14532d;">
                 ${items.length} Single-Variant OEM SKU${items.length === 1 ? '' : 's'} Auto-Created &amp; Published Live
               </h4>
             </div>
             <div class="ai-batch-kpis">
-              <span>📷 ${d.total_photos_received || 0} Photos In</span>
-              <span>🔗 ${d.duplicate_angles_merged || 0} Duplicate Angles Merged</span>
-              ${skipped.length ? `<span style="background:#fef3c7;color:#92400e;">⚠ ${skipped.length} Skipped / Flagged</span>` : ''}
+              <span>📷 ${d.total_photos_received || 0} Frames/Photos In</span>
+              <span>🔗 ${d.duplicate_angles_merged || 0} Angles Merged</span>
+              ${soldCnt ? `<span style="background:#fee2e2;color:#991b1b;">🛑 ${soldCnt} Sold Order Blocked</span>` : ''}
+              ${srsCnt ? `<span style="background:#fef3c7;color:#92400e;">🛡 ${srsCnt} SRS/Seatbelt Blocked</span>` : ''}
+              ${skipped.length ? `<span style="background:#fef3c7;color:#92400e;">⚠ ${skipped.length} Total Flagged</span>` : ''}
             </div>
           </div>
+
+          ${d.vin_label_conflict?.has_conflict ? `
+            <div style="margin-bottom:0.75rem;padding:0.65rem;background:#fef3c7;border:1.5px solid #d97706;border-radius:10px;font-size:0.82rem;color:#78350f;">
+              <strong>⚠️ Folder Label vs. VIN Conflict:</strong> ${esc(d.vin_label_conflict.warning)}
+            </div>
+          ` : ''}
 
           ${items.length ? `
             <div class="ai-sku-cards-grid">
@@ -512,7 +578,7 @@
                   <article class="ai-sku-card">
                     <div class="ai-sku-card-media">
                       ${it.thumbnail ? `<img src="${esc(it.thumbnail)}" alt="${esc(it.title)}" />` : '<div class="ai-sku-noimg">OEM</div>'}
-                      <span class="ai-sku-photo-cnt">${it.photo_count} photo${it.photo_count === 1 ? '' : 's'} + QR</span>
+                      <span class="ai-sku-photo-cnt">${it.photo_count} photo${it.photo_count === 1 ? '' : 's'}</span>
                     </div>
                     <div class="ai-sku-card-body">
                       <div class="ai-sku-meta-row">
@@ -539,9 +605,9 @@
 
           ${skipped.length ? `
             <div class="ai-skipped-box">
-              <strong>Flagged / Skipped Items (${skipped.length}):</strong>
+              <strong>Filtered / Flagged Items (${skipped.length}):</strong>
               <ul>
-                ${skipped.map((s) => `<li><strong>${esc(s.filename)}</strong>: ${esc(s.reason)}</li>`).join('')}
+                ${skipped.slice(0, 25).map((s) => `<li><strong>${esc(s.filename)}</strong>: ${esc(s.reason)}</li>`).join('')}
               </ul>
             </div>
           ` : ''}
@@ -567,13 +633,76 @@
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'Purge requires Employee PIN sign-in.');
         out.innerHTML = `<div style="background:#ecfdf5;border:1px solid #22c55e;border-radius:10px;padding:0.65rem;font-size:0.84rem;">
-          ✓ Clean-Slate Purge Complete: SQLite purged <strong>${d.sqlite_purge.purged_inventory_items}</strong> legacy items (remaining VIN-verified: <strong>${d.sqlite_purge.remaining_verified_vin_items}</strong>) • Shopify mode: <strong>${esc(d.shopify_purge.mode)}</strong> (archived: ${d.shopify_purge.archived_count || 0})
+          ✓ Clean-Slate Purge Complete: SQLite purged <strong>${d.sqlite_purge.purged_inventory_items}</strong> legacy items &amp; <strong>${d.sqlite_purge.purged_photo_review_items || 0}</strong> photo triage rows • Shopify mode: <strong>${esc(d.shopify_purge.mode)}</strong> (archived: ${d.shopify_purge.archived_count || 0})
         </div>`;
       } catch (err) {
         out.innerHTML = `<div style="color:#b91c1c;font-weight:700;">${esc(err.message)}</div>`;
       }
     });
 
+    // Step 1A: Scan VIN Sticker Photo/Video or .ZIP via unified /api/employee/intake/decode-vin-media
+    host.querySelector('#emp-step1-vin-media-input')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      const out = document.getElementById('emp-step1-msg');
+      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">🔍 Extracting 17-char VIN from media/filename &amp; decoding via NHTSA vPIC...</p>';
+      try {
+        const fd = new FormData();
+        fd.append('files', file, file.name);
+        fd.append('auto_lock', 'true');
+        const r = await fetch('/api/employee/intake/decode-vin-media', {
+          method: 'POST',
+          headers: { ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: fd
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Could not extract VIN from media.');
+        aggState.activeVinSession = d.session;
+        aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
+        aggState.vinLabelConflict = d.vin_label_conflict || null;
+        aggState.vinSource = d.vin_source || 'media_ocr';
+        if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
+        aggState.lastBatchResult = null;
+        renderEmployeeVinIntakeGate();
+      } catch (err) {
+        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
+      }
+    });
+
+    // Step 1A: Extract VIN from Google Drive folder link via unified /api/employee/intake/decode-vin-media
+    host.querySelector('#btn-step1-extract-drive-vin')?.addEventListener('click', async () => {
+      const driveUrl = String(document.getElementById('emp-step1-drive-extract-input')?.value || '').trim();
+      const out = document.getElementById('emp-step1-msg');
+      if (!driveUrl) {
+        out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Paste a Google Drive folder or file link first.</div>';
+        return;
+      }
+      aggState.pendingDriveUrl = driveUrl;
+      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">☁️ Reading Drive folder title &amp; decoding VIN via NHTSA vPIC...</p>';
+      try {
+        const r = await fetch('/api/employee/intake/decode-vin-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getEmployeeTokenHeader() },
+          credentials: 'same-origin',
+          body: JSON.stringify({ drive_url: driveUrl, auto_lock: true })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Could not extract VIN from Google Drive folder.');
+        aggState.activeVinSession = d.session;
+        aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
+        aggState.vinLabelConflict = d.vin_label_conflict || null;
+        aggState.vinSource = d.vin_source || 'folder_name_auto_extract';
+        if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
+        aggState.lastBatchResult = null;
+        renderEmployeeVinIntakeGate();
+      } catch (err) {
+        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">${esc(err.message)}</div>`;
+      }
+    });
+
+    // Step 1B: Manual 17-Char VIN or License Plate Lock
     host.querySelector('#emp-step1-vin-form')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -590,6 +719,10 @@
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || 'VIN decode failed (sign in to Employee Backend first).');
         aggState.activeVinSession = d.session;
+        aggState.autoBinPrefix = d.auto_bin_prefix || computeClientAutoBin(d.session);
+        aggState.vinLabelConflict = null;
+        aggState.vinSource = body.vin ? 'manual_vin_entry' : 'license_plate_lookup';
+        if (typeof d.gemini_vision_configured === 'boolean') aggState.geminiVisionConfigured = d.gemini_vision_configured;
         aggState.queuedFiles = [];
         aggState.lastBatchResult = null;
         renderEmployeeVinIntakeGate();
@@ -629,13 +762,13 @@
       const driveUrl = String(formEl.querySelector('[name="drive_url"]')?.value || '').trim();
       const out = document.getElementById('emp-step2-msg');
       if (!aggState.queuedFiles.length && !driveUrl) {
-        out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Attach at least 1 photo, drop a .zip archive, or paste a Google Drive link first.</div>';
+        out.innerHTML = '<div style="color:#b91c1c;font-weight:700;font-size:0.84rem;">Attach at least 1 photo/video, drop a .zip archive, or paste a Google Drive link first.</div>';
         return;
       }
 
       const fd = new FormData();
       fd.append('session_code', aggState.activeVinSession.session_code);
-      fd.append('bin_location', String(formEl.querySelector('[name="bin_location"]')?.value || 'BAY-B-SHELF').trim());
+      fd.append('bin_location', String(formEl.querySelector('[name="bin_location"]')?.value || autoBin).trim());
       fd.append('grouping_mode', String(formEl.querySelector('[name="grouping_mode"]')?.value || 'auto'));
       fd.append('push_shopify', String(formEl.querySelector('[name="push_shopify"]')?.value || 'true'));
       if (driveUrl) fd.append('drive_url', driveUrl);
@@ -645,7 +778,7 @@
 
       const btn = document.getElementById('emp-step2-submit-btn');
       if (btn) btn.disabled = true;
-      out.innerHTML = '<div class="agg-loading">⚡ Running Hands-Free AI Vision + Stamped MPN OCR, unpacking ZIP/Drive assets, assigning vp-1-4-* taxonomy &amp; box dimensions, merging duplicate angles, attaching QR security tags &amp; pushing live...</div>';
+      out.innerHTML = '<div class="agg-loading">⚡ Extracting video keyframes, unpacking ZIP/Drive assets, merging ALD-XXXXXX &amp; multi-angle galleries, filtering Sold Orders (#1006–#1038) &amp; SRS/seatbelt items, running AI Vision + taxonomy &amp; pushing live...</div>';
       try {
         const r = await fetch('/api/employee/intake/batch-ai', {
           method: 'POST',
@@ -657,10 +790,11 @@
         if (!r.ok || !d.ok) throw new Error(d.error || 'AI Batch Intake failed.');
         aggState.lastBatchResult = d;
         aggState.queuedFiles = [];
+        aggState.pendingDriveUrl = '';
         renderQueuedFiles();
         formEl.querySelector('[name="drive_url"]').value = '';
         out.innerHTML = `<div style="background:#ecfdf5;border:1.5px solid #22c55e;border-radius:10px;padding:0.65rem;font-size:0.84rem;color:#14532d;font-weight:700;">
-          ✓ Created ${d.created_count} verified OEM SKU${d.created_count === 1 ? '' : 's'} from ${d.total_photos_received} photo${d.total_photos_received === 1 ? '' : 's'} (${d.duplicate_angles_merged} duplicate angle${d.duplicate_angles_merged === 1 ? '' : 's'} merged). See summary cards below!
+          ✓ Created ${d.created_count} verified OEM SKU${d.created_count === 1 ? '' : 's'} from ${d.total_photos_received} photo/frame${d.total_photos_received === 1 ? '' : 's'} (${d.duplicate_angles_merged} angles merged • ${d.blocked_sold_count || 0} sold blocked • ${d.blocked_srs_count || 0} SRS blocked).
         </div>`;
         renderBatchSummary(d);
       } catch (err) {
@@ -671,14 +805,26 @@
     });
   }
 
-  function initV24() {
+  async function refreshGeminiVisionHealth() {
+    try {
+      const r = await fetch('/api/health');
+      if (r.ok) {
+        const h = await r.json();
+        aggState.geminiVisionConfigured = Boolean(h.gemini_vision_configured);
+        renderEmployeeVinIntakeGate();
+      }
+    } catch (_) {}
+  }
+
+  function initV26() {
     renderHeroVinAggregator();
     renderEmployeeVinIntakeGate();
+    refreshGeminiVisionHealth();
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initV24);
+    document.addEventListener('DOMContentLoaded', initV26);
   } else {
-    initV24();
+    initV26();
   }
 })();

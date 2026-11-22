@@ -104,8 +104,10 @@ const {
 } = require('./vin-intake-aggregator');
 const {
   parseMultipartFormData,
+  resolveUniversalVinFromInput,
   runAiMultiInputBatchIntake
 } = require('./ai-batch-intake');
+const { buildAutoBinPrefix } = require('./dedupe');
 const {
   decodeVin,
   analyzePartIntake,
@@ -714,15 +716,19 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v25',
+        sw_version: 'v26',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
+        decode_vin_media_endpoint: '/api/employee/intake/decode-vin-media',
         vin_vehicle_intake_endpoint: '/api/employee/intake/vehicle',
         parts_aggregator_endpoint: '/api/parts-aggregator/search',
         shopify_token_configured: Boolean(cfg.shopify_admin_token),
         gemini_vision_configured: Boolean(cfg.gemini_api_key),
         hands_free_multi_input_batch_intake: true,
+        unified_vin_extraction: true,
+        video_keyframe_intake: true,
+        sold_order_and_srs_filter: true,
         requires_google_drive: false
       });
       return;
@@ -1858,12 +1864,43 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // Unified Universal VIN Resolution (Folder/File Name + Photo/Video Sticker OCR + Manual VIN / Plate)
+      if (method === 'POST' && (pathname === '/api/employee/intake/decode-vin-media' || pathname === '/api/employee/intake/resolve-vin-source')) {
+        try {
+          const ct = String(req.headers['content-type'] || '');
+          let payload = {};
+          if (/multipart\/form-data/i.test(ct)) {
+            const rawBuf = await readRawBuffer(req, 64 * 1024 * 1024);
+            const parsed = parseMultipartFormData(rawBuf, ct);
+            payload = { ...parsed.fields, uploaded_files: parsed.files };
+          } else {
+            const rawStr = (await readRawBuffer(req, 64 * 1024 * 1024)).toString('utf8');
+            payload = JSON.parse(rawStr || '{}');
+          }
+          const autoLock = payload.auto_lock === false || payload.auto_lock === 'false' ? false : true;
+          const result = await resolveUniversalVinFromInput(payload, empSession.staff_name, { autoLock });
+          sendJson(res, autoLock ? 201 : 200, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 400, {
+            ok: false,
+            error: err.message || 'Could not extract or decode VIN from media/source.',
+            details: err.details
+          });
+        }
+        return;
+      }
+
       // Mandatory Step 1 Employee VIN / License Plate Vehicle Intake Gate
       if (method === 'POST' && pathname === '/api/employee/intake/vehicle') {
         try {
           const b = JSON.parse((await readRawBody(req)) || '{}');
           const result = await createVinIntakeVehicleSession(b, empSession.staff_name);
-          sendJson(res, 201, result);
+          const cfg = getSettings();
+          sendJson(res, 201, {
+            ...result,
+            auto_bin_prefix: buildAutoBinPrefix(result.session || {}),
+            gemini_vision_configured: Boolean(String(cfg.gemini_api_key || process.env.GEMINI_API_KEY || '').trim())
+          });
         } catch (err) {
           sendJson(res, err.statusCode || 400, { ok: false, error: err.message || 'Could not decode/lock VIN session.', details: err.details });
         }

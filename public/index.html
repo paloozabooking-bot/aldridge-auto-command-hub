@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=25" />
+  <link rel="stylesheet" href="/styles.css?v=26" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -1326,10 +1326,21 @@
               <div class="form-group"><label>Email</label><input type="email" id="dvi-new-cust-email" class="input" placeholder="jane@example.com" /></div>
             </div>
             <div class="grid-4">
-              <div class="form-group"><label>17-Digit VIN (Auto-Decodes)</label><input type="text" id="dvi-new-vin" class="input mono" maxlength="17" placeholder="JTEBU14R..." /></div>
-              <div class="form-group"><label>Year</label><input type="number" id="dvi-new-year" class="input" placeholder="2004" /></div>
+              <div class="form-group">
+                <label>17-Digit VIN (Unified Auto-Decode / Sticker OCR)</label>
+                <div style="display:flex;gap:0.35rem;">
+                  <input type="text" id="dvi-new-vin" class="input mono" maxlength="17" placeholder="JTEBU5JR2C5091234" style="text-transform:uppercase;" />
+                  <button type="button" id="btn-dvi-decode-vin" class="btn btn-outline btn-sm" title="Decode 17-char VIN via NHTSA vPIC">🔍</button>
+                  <label class="btn btn-dark btn-sm" style="cursor:pointer;margin:0;" title="Scan Door-Jamb VIN Sticker Photo/Video">
+                    📸
+                    <input type="file" id="dvi-vin-media-input" accept="image/*,video/*" capture="environment" style="display:none;" />
+                  </label>
+                </div>
+                <div id="dvi-vin-decode-status" style="font-size:0.72rem;font-weight:700;margin-top:3px;"></div>
+              </div>
+              <div class="form-group"><label>Year</label><input type="number" id="dvi-new-year" class="input" placeholder="2005" /></div>
               <div class="form-group"><label>Make *</label><input type="text" id="dvi-new-make" class="input" required placeholder="Toyota" /></div>
-              <div class="form-group"><label>Model *</label><input type="text" id="dvi-new-model" class="input" required placeholder="4Runner" /></div>
+              <div class="form-group"><label>Model *</label><input type="text" id="dvi-new-model" class="input" required placeholder="Camry" /></div>
             </div>
             <div class="grid-3">
               <div class="form-group"><label>Mileage In</label><input type="number" id="dvi-new-mileage" class="input" placeholder="148500" /></div>
@@ -1879,11 +1890,11 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=25"></script>
-  <script src="/storefront-menu.js?v=25"></script>
-  <script src="/sourcing-storefront.js?v=25"></script>
-  <script src="/vin-aggregator-ui.js?v=25"></script>
-  <script src="/dvi-portal.js?v=25"></script>
-  <script src="/wave1-studio.js?v=25"></script>
+  <script src="/app.js?v=26"></script>
+  <script src="/storefront-menu.js?v=26"></script>
+  <script src="/sourcing-storefront.js?v=26"></script>
+  <script src="/vin-aggregator-ui.js?v=26"></script>
+  <script src="/dvi-portal.js?v=26"></script>
+  <script src="/wave1-studio.js?v=26"></script>
 </body>
 </html>
