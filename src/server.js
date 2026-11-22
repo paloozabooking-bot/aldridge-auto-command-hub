@@ -33,6 +33,7 @@ const {
   deleteBetaProspect,
   getWave1ProofMetrics,
   renderWave1ProofOnePagerHtml,
+  purgeLegacyPhotoReviewTriage,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
   getPhotoReviewSummary,
@@ -46,6 +47,7 @@ const {
   generateMasterImportTemplateCsv,
   generateShopifyCsv,
   generateEbayMotorsCsv,
+  generateEbayFreightCsv,
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
@@ -691,7 +693,9 @@ const server = http.createServer(async (req, res) => {
         mandatory_vin_intake_only: true,
         clean_slate_purged: Boolean(cfg.clean_slate_vin_purge_v1),
         shopify_clean_slate_purged: Boolean(cfg.shopify_clean_slate_purge_v1),
+        photo_triage_clean_slate_purged: revSummary.total === 0,
         zero_duplicate_gate: true,
+        photo_review_total: revSummary.total,
         review_gallery_total: revSummary.total,
         review_gallery_pending: revSummary.pending,
         review_gallery_keep: revSummary.keep,
@@ -710,7 +714,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v24',
+        sw_version: 'v25',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -1471,14 +1475,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Live Multi-Platform Feeds & Bulk Exporters
-    if (method === 'GET' && pathname === '/api/feeds/google-merchant.xml') {
+    if (method === 'GET' && (pathname === '/api/feeds/google-merchant.xml' || pathname === '/api/exports/google-merchant.xml')) {
       const items = db.prepare('SELECT * FROM inventory_items').all();
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
       res.end(generateGoogleMerchantXml(items, getSettings(), baseUrl));
       return;
     }
 
-    if (method === 'GET' && pathname === '/api/feeds/meta-catalog.csv') {
+    if (method === 'GET' && (pathname === '/api/feeds/meta-catalog.csv' || pathname === '/api/exports/meta.csv' || pathname === '/api/exports/meta-commerce.csv')) {
       const items = db.prepare('SELECT * FROM inventory_items').all();
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
@@ -1490,6 +1494,9 @@ const server = http.createServer(async (req, res) => {
 
     const exportMap = {
       '/api/exports/shopify.csv': { fn: (i, s, u) => generateShopifyCsv(i, s, u), file: 'shopify-co-master-products.csv' },
+      '/api/exports/ebay.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
+      '/api/exports/ebay-freight.csv': { fn: (i, s, u) => generateEbayFreightCsv(i, s, u), file: 'ebay-us-freight-pickup-aabcas.csv' },
+      '/api/exports/ebay-file-exchange.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/ebay_us.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/ebay_motors.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/vendoo.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'vendoo'), file: 'vendoo-bulk-import.csv' },

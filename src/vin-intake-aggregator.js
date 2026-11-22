@@ -18,6 +18,7 @@ const {
   computeShippingClass,
   generateSecurityCode,
   upsertCustomer,
+  purgeLegacyPhotoReviewTriage,
   logSync
 } = require('./db');
 const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn } = require('./taxonomy');
@@ -42,6 +43,7 @@ function purgeLegacyPreVinCatalog({ actor = 'system' } = {}) {
   let purgedInventory = 0;
   let purgedDonors = 0;
   let purgedAbandonedCarts = 0;
+  let purgedPhotoReview = 0;
 
   db.exec('BEGIN IMMEDIATE;');
   try {
@@ -65,6 +67,10 @@ function purgeLegacyPreVinCatalog({ actor = 'system' } = {}) {
     const cartDel = db.prepare('DELETE FROM abandoned_carts').run();
     purgedAbandonedCarts = Number(cartDel.changes || 0);
 
+    // Purge ALL legacy pre-intake photo triage rows (0. Photo Review)
+    const revDel = db.prepare('DELETE FROM photo_review_items').run();
+    purgedPhotoReview = Number(revDel.changes || 0);
+
     // If legacy optional tables sku_registry or quarantine_queue exist, purge them too
     const existingTables = new Set(
       db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name)
@@ -77,6 +83,8 @@ function purgeLegacyPreVinCatalog({ actor = 'system' } = {}) {
     try { db.exec('ROLLBACK;'); } catch (_) {}
     throw err;
   }
+
+  purgeLegacyPhotoReviewTriage();
 
   updateSettings({
     clean_slate_mode: true,
@@ -91,16 +99,18 @@ function purgeLegacyPreVinCatalog({ actor = 'system' } = {}) {
     'purge_legacy_pre_vin_catalog',
     'ALL',
     'success',
-    `Actor=${actor} purged ${purgedInventory} legacy pre-VIN inventory item(s), ${purgedDonors} legacy donor(s), and ${purgedAbandonedCarts} abandoned cart(s). Remaining verified VIN-intake SKUs: ${remainingItems} (before=${preCount}, pre_verified=${preVinVerifiedCount}).`
+    `Actor=${actor} purged ${purgedInventory} legacy pre-VIN inventory item(s), ${purgedPhotoReview} photo triage row(s), ${purgedDonors} legacy donor(s), and ${purgedAbandonedCarts} abandoned cart(s). Remaining verified VIN-intake SKUs: ${remainingItems} (before=${preCount}, pre_verified=${preVinVerifiedCount}).`
   );
 
   return {
     ok: true,
     purged_at: now,
     purged_inventory_items: purgedInventory,
+    purged_photo_review_items: purgedPhotoReview,
     purged_legacy_donors: purgedDonors,
     purged_abandoned_carts: purgedAbandonedCarts,
     remaining_verified_vin_items: remainingItems,
+    remaining_photo_review_items: 0,
     mandatory_vin_intake_only: true
   };
 }

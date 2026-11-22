@@ -705,7 +705,7 @@ function generateShopifyCsv(items, settings, baseUrl) {
 
     const tax = resolvePartTaxonomyAndMetafields(item, settings);
     const handle = item.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const photos = getShopifyGalleryPhotos(item, settings);
+    const photos = getValidPhotos(item);
     const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
     const condOut = normalizeExportCondition(item.condition);
@@ -775,7 +775,7 @@ function generateShopifyCsv(items, settings, baseUrl) {
 }
 
 // STRICT STANDARD EBAY US (ebay.com, SiteID=US) ONLY — NEVER eBay Motors!
-function generateEbayMotorsCsv(items, settings, baseUrl) {
+function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false } = {}) {
   items = ensureDeduplicatedItems(items);
   const headers = [
     '*Action(SiteID=US|Country=US|Currency=USD|Version=1193)',
@@ -812,12 +812,13 @@ function generateEbayMotorsCsv(items, settings, baseUrl) {
   const rows = [headers.join(',')];
   for (const item of items) {
     if (!isMarketplaceSafeItem(item)) continue;
+    const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+    if (freightOnly && !heavyPickupOnly) continue;
     const tax = resolvePartTaxonomyAndMetafields(item, settings);
     const photos = getValidPhotos(item);
     const picUrl = photos.map((p) => resolveExportPhotoUrl(p, baseUrl, settings)).join('|');
     const ebayTitle = cleanListingTitle(item.title).slice(0, 80);
     const condOut = normalizeExportCondition(item.condition);
-    const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
 
     rows.push([
       'Add',
@@ -839,7 +840,7 @@ function generateEbayMotorsCsv(items, settings, baseUrl) {
       1,
       'University Place, WA 98467',
       settings.handling_days_default || 3,
-      heavyPickupOnly ? 'Flat' : 'Calculated',
+      heavyPickupOnly ? (freightOnly ? 'FreightFlat' : 'Flat') : 'Calculated',
       heavyPickupOnly ? 'US_Pickup' : 'UPSGround',
       heavyPickupOnly ? '0.00' : Number(settings.handling_fee_default || 10).toFixed(2),
       'US_Pickup',
@@ -852,6 +853,10 @@ function generateEbayMotorsCsv(items, settings, baseUrl) {
     ].map(csvEscape).join(','));
   }
   return rows.join('\n') + '\n';
+}
+
+function generateEbayFreightCsv(items, settings, baseUrl) {
+  return generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly: true });
 }
 
 function generateGoogleMerchantXml(items, settings, baseUrl) {
@@ -2827,6 +2832,7 @@ module.exports = {
   generateMasterImportTemplateCsv,
   generateShopifyCsv,
   generateEbayMotorsCsv,
+  generateEbayFreightCsv,
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,

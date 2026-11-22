@@ -1889,7 +1889,20 @@ function getReviewCatalogMeta() {
   }
 }
 
+function purgeLegacyPhotoReviewTriage() {
+  const before = db.prepare('SELECT COUNT(*) AS c FROM photo_review_items').get().c;
+  if (before > 0) {
+    db.prepare('DELETE FROM photo_review_items').run();
+  }
+  _reviewCatalogMetaCache = null;
+  return { purged_photo_review_items: before, remaining_photo_review_items: 0 };
+}
+
 function seedPhotoReviewCatalogIfNeeded(force = false) {
+  const cfg = getSettings();
+  if (cfg.mandatory_vin_intake_only !== false) {
+    return { seeded: 0, total: 0, disabled: 'mandatory_vin_intake_only' };
+  }
   const existingCount = db.prepare('SELECT COUNT(*) AS c FROM photo_review_items').get().c;
   if (existingCount > 0 && !force) {
     return { seeded: 0, total: existingCount };
@@ -2892,8 +2905,12 @@ if (getSettings().clean_slate_mode) {
   seedAuditGroundTruthCatalog(false);
 }
 seedDefaultOrganizationIfNeeded();
-seedPhotoReviewCatalogIfNeeded(false);
-ensureNonDescriptivePendingFilteredOnce();
+if (getSettings().mandatory_vin_intake_only !== false) {
+  purgeLegacyPhotoReviewTriage();
+} else {
+  seedPhotoReviewCatalogIfNeeded(false);
+  ensureNonDescriptivePendingFilteredOnce();
+}
 
 module.exports = {
   db,
@@ -2926,6 +2943,7 @@ module.exports = {
   deleteBetaProspect,
   getWave1ProofMetrics,
   renderWave1ProofOnePagerHtml,
+  purgeLegacyPhotoReviewTriage,
   seedPhotoReviewCatalogIfNeeded,
   getReviewCatalogMeta,
   getPhotoReviewSummary,

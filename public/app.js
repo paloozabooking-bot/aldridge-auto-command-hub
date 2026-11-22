@@ -2536,7 +2536,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 /* ==================== VISUAL PHOTO REVIEW GALLERY CONTROLLER ==================== */
-const REVIEW_LS_KEY = 'aldridge_photo_review_decisions_v1';
+const REVIEW_LS_KEY = 'aldridge_photo_review_decisions_v25_vin_only';
+try {
+  localStorage.removeItem('aldridge_photo_review_decisions_v1');
+} catch (_) {}
 
 const reviewState = {
   loaded: false,
@@ -2746,9 +2749,7 @@ function renderReviewChrome() {
     undoBtn.disabled = reviewState.undoStack.length === 0;
     undoBtn.textContent = reviewState.undoStack.length ? `↶ Undo (${reviewState.undoStack.length})` : '↶ Undo';
   }
-  const keepBtnLabel = keep > 0
-    ? `🚀 Run AI Intake & Publish All ${keep.toLocaleString()} KEEP Items`
-    : '🚀 Run AI Intake & Publish All KEEP Items';
+  const keepBtnLabel = '🔒 Go to Step 1 VIN / Plate AI Intake';
   ['btn-review-run-keep-intake', 'btn-inv-run-keep-intake'].forEach((id) => {
     const b = document.getElementById(id);
     if (b && !b.disabled) b.textContent = keepBtnLabel;
@@ -3328,102 +3329,14 @@ function readZoomModalMetaPatch() {
 }
 
 async function runKeepBatchIntakeAndPublishUi() {
-  const keepCount = Number(reviewState.summary?.keep ?? state.data?.reviewSummary?.keep ?? 0);
-  if (keepCount <= 0) {
-    showToast('No KEEP photos found yet — mark items KEEP in 0. Photo Review first.');
-    return;
+  showToast('Pre-VIN KEEP bulk publishing is permanently disabled. Lock a 17-char VIN or License Plate in Step 1, then drop photos, a .zip archive, or a Google Drive link in Step 2.');
+  if (typeof switchStaffTab === 'function') {
+    switchStaffTab('staff-intake');
   }
-  const ok = window.confirm(
-    `Run 1-Click AI Intake & Multi-Channel Publish for all ${keepCount.toLocaleString()} KEEP photos?\n\n` +
-    `• Merges multi-angle photos into single-variant (1 in stock, zero duplicates) OEM SKUs\n` +
-    `• Adds OEM fitment/description + We-Pull & We-Install bay pricing (5115 66th St W, Bldg B, University Place, WA 98467)\n` +
-    `• Hard-blocks prohibited SRS/airbag/clock spring items automatically\n` +
-    `• Pushes live to Shopify via your configured Admin token (auto-feeding Google Merchant XML & Meta Catalog)\n` +
-    `• Refreshes ready-to-import CSVs for Crosslist (eBay aabcas + OfferUp + FB Marketplace) & Craigslist`
-  );
-  if (!ok) return;
-
-  const btns = ['btn-review-run-keep-intake', 'btn-inv-run-keep-intake']
-    .map((id) => document.getElementById(id))
-    .filter(Boolean);
-  const boxes = ['review-keep-intake-result', 'inv-keep-intake-result']
-    .map((id) => document.getElementById(id))
-    .filter(Boolean);
-
-  btns.forEach((b) => {
-    b.disabled = true;
-    b.textContent = '⏳ Running AI Intake & Publishing KEEP Items...';
-  });
-  boxes.forEach((box) => {
-    box.style.display = 'block';
-    box.classList.remove('is-warn');
-    box.innerHTML = '<strong>⏳ Processing all KEEP photos...</strong> Grouping multi-angle photos, generating OEM SKUs, QR Info Cards, We-Pull + We-Install bay pricing, and syncing live to Shopify + Feeds.';
-  });
-
-  try {
-    const res = await api('/api/review-photos/intake-keep-batch', {
-      method: 'POST',
-      body: JSON.stringify({ push_shopify: true })
-    });
-
-    const shopify = res.shopify_sync || {};
-    const shopifyLine = shopify.mode === 'live_api'
-      ? `<strong>✓ Shopify Live Push:</strong> ${Number(shopify.synced_count || 0)} new product(s) created live on Shopify (${Number(shopify.skipped_protected || 0)} already live &amp; protected${shopify.errors?.length ? `, ${shopify.errors.length} error(s)` : ''}) — auto-feeding Google Merchant XML &amp; Meta Commerce Catalog!`
-      : shopify.mode === 'staged_ready'
-        ? `<strong>⚡ Shopify Staged Ready:</strong> ${Number(shopify.synced_count || 0)} single-variant photo SKUs ready. Paste your Shopify Admin API token (<code>shpat_...</code>) in <strong>5. Settings Vault</strong> (or Render env <code>SHOPIFY_ADMIN_TOKEN</code>) to push live, or download the Shopify CSV below.`
-        : `<strong>⚠ Shopify Sync Notice:</strong> ${esc(shopify.message || shopify.error || 'Check Settings Vault token.')}`;
-
-    const blockedHtml = Array.isArray(res.compliance_blocked) && res.compliance_blocked.length > 0
-      ? `<div style="margin-top:0.4rem;color:#92400e;"><strong>🛡 Compliance Guard Skipped (${res.compliance_blocked.length} prohibited SRS/airbag/clock spring item${res.compliance_blocked.length === 1 ? '' : 's'}):</strong> ${res.compliance_blocked.map((b) => `${esc(b.original_name)} (${esc(b.matched_term)})`).join('; ')}</div>`
-      : '';
-
-    const ex = res.feeds_and_exports || {};
-    const html = `
-      <div>
-        <strong>🚀 AI Intake &amp; Multi-Channel Batch Complete!</strong>
-        Converted <strong>${Number(res.keep_photos_total || 0).toLocaleString()} KEEP photos</strong>
-        (${Number(res.multi_angle_photos_merged || 0)} extra angle photo(s) merged — zero duplicates)
-        → <strong>${Number(res.skus_created || 0)} created</strong> &amp; <strong>${Number(res.skus_updated || 0)} updated</strong> single-variant OEM SKUs
-        (<strong>${Number(res.total_active_inventory_skus || 0)} active SKUs</strong> • We-Pull Retail: <strong>$${Number(res.total_we_pull_value || 0).toLocaleString()}</strong> • ${Number(res.parcel_calculated_count || 0)} Parcel / ${Number(res.local_pickup_only_98467_count || 0)} Local Pickup 98467).
-      </div>
-      <div style="margin-top:0.35rem;">${shopifyLine}</div>
-      ${blockedHtml}
-      <div class="keep-intake-exports-row">
-        <button type="button" class="btn btn-dark btn-sm" onclick="switchStaffTab('staff-inventory')">📦 View ${Number(res.total_active_inventory_skus || 0)} Active SKUs in 2. Inventory</button>
-        <a href="${esc(ex.crosslist_csv || '/api/exports/crosslist.csv')}" download="aldridge_crosslist_ebay_offerup_fb_sync.csv" class="btn btn-primary btn-sm">⬇ Crosslist CSV (eBay aabcas + OfferUp + FB)</a>
-        <a href="${esc(ex.craigslist_csv || '/api/exports/craigslist.csv')}" download="aldridge_craigslist_tacoma_98467_pts.csv" class="btn btn-outline btn-sm">⬇ Craigslist CSV (Tacoma pts 98467)</a>
-        <a href="${esc(ex.shopify_csv || '/api/exports/shopify.csv')}" download="aldridge_clean_single_variant_shopify_with_qr.csv" class="btn btn-outline btn-sm">⬇ Shopify CSV</a>
-        <a href="${esc(ex.ebay_us_csv || '/api/exports/ebay_us.csv')}" download="aldridge_standard_ebay_us_aabcas.csv" class="btn btn-outline btn-sm">⬇ Standard eBay US CSV</a>
-        <a href="${esc(ex.google_merchant_xml || '/api/feeds/google-merchant.xml')}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">🔗 Google Merchant XML ↗</a>
-        <a href="${esc(ex.meta_catalog_csv || '/api/feeds/meta-catalog.csv')}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">🔗 Meta Commerce Catalog ↗</a>
-      </div>
-    `;
-
-    boxes.forEach((box) => {
-      box.style.display = 'block';
-      box.classList.toggle('is-warn', shopify.mode === 'error' || shopify.mode === 'staged_ready');
-      box.innerHTML = html;
-    });
-
-    showToast(`Published ${res.total_active_inventory_skus} single-variant OEM SKUs (${res.skus_created} new, ${res.skus_updated} updated)!`);
-    await loadBootstrap();
-    if (reviewState.loaded) await loadReviewGallery(false);
-  } catch (err) {
-    boxes.forEach((box) => {
-      box.style.display = 'block';
-      box.classList.add('is-warn');
-      box.innerHTML = `<strong>⚠ Batch Intake Error:</strong> ${esc(err.message)}`;
-    });
-    showToast('KEEP batch intake failed: ' + err.message);
-  } finally {
-    const finalKeep = Number(reviewState.summary?.keep ?? state.data?.reviewSummary?.keep ?? keepCount);
-    const label = finalKeep > 0
-      ? `🚀 Run AI Intake & Publish All ${finalKeep.toLocaleString()} KEEP Items`
-      : '🚀 Run AI Intake & Publish All KEEP Items';
-    btns.forEach((b) => {
-      b.disabled = false;
-      b.textContent = label;
-    });
+  const vinInput = document.querySelector('#emp-step1-vin-form input[name="vin"]');
+  if (vinInput) {
+    vinInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    vinInput.focus();
   }
 }
 
