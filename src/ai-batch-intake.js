@@ -1225,7 +1225,7 @@ Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeplo
 
     const modelAttempts = [
       { model: 'gemini-2.5-flash', genCfg: { responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } } },
-      { model: 'gemini-2.0-flash', genCfg: { responseMimeType: 'application/json' } }
+      { model: 'gemini-2.5-flash-lite', genCfg: { responseMimeType: 'application/json' } }
     ];
 
     for (const attempt of modelAttempts) {

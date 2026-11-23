@@ -720,7 +720,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v29.1',
+        sw_version: 'v29.2',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -1979,7 +1979,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const checks = [];
-        for (const model of ['gemini-2.5-flash', 'gemini-2.0-flash']) {
+        for (const model of ['gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
           try {
             const r = await fetch(
               `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,

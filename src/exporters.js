@@ -1537,7 +1537,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   ]);
   const duplicateArchivedSkusSet = new Set(
     allDbItems
-      .filter((r) => r.status === 'duplicate_archived')
+      .filter((r) => r.status === 'duplicate_archived' || r.status === 'sold' || r.status === 'archived')
       .map((r) => String(r.sku || '').trim().toUpperCase())
       .filter((s) => s && !blockedSkusSet.has(s))
   );

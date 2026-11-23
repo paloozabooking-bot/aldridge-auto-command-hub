@@ -296,16 +296,26 @@ function getLiveSoldSkuSet() {
   return sold;
 }
 
+const SOLD_SUBARU_TRANSMISSION_SKUS = new Set([
+  'ALD-09SUB-TRANSMISSION-A-94D1',
+  'ALD-98SUB-TRANSMISSION-A-69CF',
+  'ALD-98SUB-TRANSMISSION-A-5388'
+]);
+const SOLD_SUBARU_TRANSMISSION_FILE_REGEX = /\b(?:P0126__|P1942__|P0082__)|1998[\s_-]+subaru[\s_-]+(?:outback|forester)[\s_-]+(?:automatic[\s_-]+)?transmission|2003[\s_-]+subaru[\s_-]+outback[\s_-]+manual[\s_-]+transmission/i;
+
 function checkSoldOrderAndSrsBlocklist({ filename = '', legacySku = '', title = '', description = '' } = {}) {
   const legacyInfo = legacySku ? { code: String(legacySku).toUpperCase() } : extractLegacySkuPrefix(filename);
   const skuCode = legacyInfo?.code || '';
   const soldSet = getLiveSoldSkuSet();
 
-  if (skuCode && soldSet.has(skuCode)) {
+  if (
+    (skuCode && (soldSet.has(skuCode) || SOLD_SUBARU_TRANSMISSION_SKUS.has(skuCode))) ||
+    SOLD_SUBARU_TRANSMISSION_FILE_REGEX.test(String(filename || ''))
+  ) {
     return {
       blocked: true,
       category: 'sold_order_filter',
-      reason: `Blocked already-sold Shopify order / retired SKU (${skuCode} — Orders #1006–#1038 sold blocklist).`
+      reason: `Blocked already-sold / duplicate SKU (${skuCode || filename} — sold order / retired transmission blocklist).`
     };
   }
   if (skuCode && PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuCode)) {

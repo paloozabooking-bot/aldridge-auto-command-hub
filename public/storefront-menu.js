@@ -138,7 +138,7 @@
         <article class="chef-special-card">
           <div class="chef-special-media" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to view full OEM specs &amp; multi-angle photos">
             <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
-            <span class="chef-ribbon">Chef's Special • Tested &amp; Ready for Bay Install</span>
+            <span class="chef-ribbon">Featured Tested Assembly • Ready for Bay Install</span>
             <span class="chef-stock-pill">Only 1 on Shelf</span>
           </div>
           <div class="chef-special-body">
