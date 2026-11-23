@@ -720,7 +720,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v29',
+        sw_version: 'v29.1',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -1968,6 +1968,45 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           sendJson(res, 400, { ok: false, error: err.message || 'Could not persist Gemini API key.' });
         }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/diagnostics/gemini') {
+        const cfg = getSettings();
+        const key = String(cfg.gemini_api_key || process.env.GEMINI_API_KEY || '').trim();
+        if (!key) {
+          sendJson(res, 200, { ok: false, configured: false, error: 'GEMINI_API_KEY is not configured.' });
+          return;
+        }
+        const checks = [];
+        for (const model of ['gemini-2.5-flash', 'gemini-2.0-flash']) {
+          try {
+            const r = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: 'Reply with JSON {"ok":true}' }] }],
+                  generationConfig: model === 'gemini-2.5-flash'
+                    ? { responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } }
+                    : { responseMimeType: 'application/json' }
+                }),
+                signal: AbortSignal.timeout(12000)
+              }
+            );
+            const txt = await r.text();
+            checks.push({ model, http_status: r.status, ok: r.ok, snippet: txt.slice(0, 200) });
+          } catch (e) {
+            checks.push({ model, http_status: 0, ok: false, error: e.message });
+          }
+        }
+        sendJson(res, 200, {
+          ok: checks.some((c) => c.ok),
+          configured: true,
+          masked_key: `${key.slice(0, 6)}••••${key.slice(-4)}`,
+          checks
+        });
         return;
       }
 

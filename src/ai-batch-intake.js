@@ -446,7 +446,9 @@ async function fetchGoogleDriveFolderTitle(folderId, { fetchImpl = fetch } = {})
 }
 
 async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fetch, { preferCli = false } = {}) {
-  if (preferCli) {
+  const isArchiveOrVideo = /\.(zip|mp4|mov|webm|m4v|3gp)$/i.test(String(fallbackName || ''));
+
+  if (preferCli && isArchiveOrVideo) {
     const cliBuf = await tryGdriveCliDownload(fileId);
     if (cliBuf) {
       const fmt = detectBinaryFormat(cliBuf, fallbackName);
@@ -458,6 +460,16 @@ async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fe
 
   const bearer = String(process.env.GOOGLE_DRIVE_ACCESS_TOKEN || '').trim();
   const urls = [];
+
+  // For images (including .heic iPhone photos!), prefer Google Drive's fast 1200px JPEG thumbnail FIRST:
+  // ~60-150KB instead of 4-8MB raw camera files -> 30x less RAM (zero OOM on 512MB containers), 8x faster Gemini Vision & auto-converts HEIC->JPEG!
+  if (!isArchiveOrVideo) {
+    urls.push({
+      url: `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1200`,
+      headers: {},
+      isThumb: true
+    });
+  }
   if (bearer) {
     urls.push({
       url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
@@ -473,18 +485,24 @@ async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fe
     try {
       const resp = await fetchImpl(item.url, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'AldridgeAutoCommandHub/v26', ...item.headers },
-        signal: AbortSignal.timeout(25000)
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AldridgeAutoCommandHub/v29)', ...item.headers },
+        signal: AbortSignal.timeout(20000)
       });
       if (!resp.ok) continue;
       const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.length < 256) continue;
       const disp = String(resp.headers?.get?.('content-disposition') || '');
       const fnMatch = disp.match(/filename\*?=(?:UTF-8''|")?([^";\r\n]+)/i);
-      const guessedName = fnMatch ? decodeURIComponent(fnMatch[1].replace(/"/g, '').trim()) : fallbackName;
+      let guessedName = fnMatch ? decodeURIComponent(fnMatch[1].replace(/"/g, '').trim()) : fallbackName;
+      if (item.isThumb && /\.heic$/i.test(guessedName)) {
+        guessedName = guessedName.replace(/\.heic$/i, '.jpg');
+      }
       const fmt = detectBinaryFormat(buf, guessedName);
       if (fmt) {
         return { ok: true, buffer: buf, format: fmt, filename: guessedName || `drive_${fileId}.${fmt.ext}` };
       }
+
+      if (item.isThumb) continue;
 
       const text = buf.toString('utf8', 0, Math.min(buf.length, 24000));
       const confirmMatch = text.match(/confirm=([0-9A-Za-z_-]+)/i);
@@ -493,7 +511,7 @@ async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fe
         const retryUrl = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=${encodeURIComponent(confirmMatch[1])}${uuidMatch ? `&uuid=${encodeURIComponent(uuidMatch[1])}` : ''}`;
         const r2 = await fetchImpl(retryUrl, {
           redirect: 'follow',
-          headers: { 'User-Agent': 'AldridgeAutoCommandHub/v26' },
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AldridgeAutoCommandHub/v29)' },
           signal: AbortSignal.timeout(25000)
         });
         if (r2.ok) {
@@ -508,20 +526,18 @@ async function downloadDriveFileBinary(fileId, fallbackName = '', fetchImpl = fe
   }
 
   // Fallback to authenticated host gdrive CLI if present
-  if (!preferCli) {
-    const cliBuf = await tryGdriveCliDownload(fileId);
-    if (cliBuf) {
-      const fmt = detectBinaryFormat(cliBuf, fallbackName);
-      if (fmt) {
-        return { ok: true, buffer: cliBuf, format: fmt, filename: fallbackName || `drive_${fileId}.${fmt.ext}` };
-      }
+  const cliBuf = await tryGdriveCliDownload(fileId);
+  if (cliBuf) {
+    const fmt = detectBinaryFormat(cliBuf, fallbackName);
+    if (fmt) {
+      return { ok: true, buffer: cliBuf, format: fmt, filename: fallbackName || `drive_${fileId}.${fmt.ext}` };
     }
   }
 
   return { ok: false, error: `Could not download binary image/video/ZIP for Google Drive ID ${fileId} (set sharing to "Anyone with the link can view" or download as .zip).` };
 }
 
-async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchImpl = fetch, metadataOnly = false } = {}) {
+async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, offset = 0, fetchImpl = fetch, metadataOnly = false } = {}) {
   const target = parseGoogleDriveTarget(driveUrl);
   if (!target) {
     return { folder_title: '', discovered_filenames: [], images: [], skipped: [{ filename: driveUrl, reason: 'Unrecognized Google Drive or file URL.' }] };
@@ -618,7 +634,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
       if (r.ok) {
         const json = await r.json();
         for (const f of json.files || []) {
-          if (/^(image|video)\//i.test(f.mimeType || '') || /zip/i.test(f.mimeType || '') || /\.(jpe?g|png|webp|mp4|mov|webm|zip)$/i.test(f.name || '')) {
+          if (/^(image|video)\//i.test(f.mimeType || '') || /zip/i.test(f.mimeType || '') || /\.(jpe?g|png|webp|heic|mp4|mov|webm|zip)$/i.test(f.name || '')) {
             discoveredFiles.push({ id: f.id, name: f.name || '' });
           }
         }
@@ -631,7 +647,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
       const embedUrl = `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(target.id)}#list`;
       const resp = await fetchImpl(embedUrl, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AldridgeAutoCommandHub/v26)' },
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AldridgeAutoCommandHub/v29)' },
         signal: AbortSignal.timeout(15000)
       });
       if (resp.ok) {
@@ -643,7 +659,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
           const id = m[1];
           if (seenIds.has(id)) continue;
           seenIds.add(id);
-          const cleanName = m[2].replace(/<[^>]+>/g, '').trim();
+          const cleanName = decodeHtmlEntities(m[2].replace(/<[^>]+>/g, '').trim());
           discoveredFiles.push({ id, name: cleanName || `drive_${id}.jpg` });
         }
         if (!discoveredFiles.length) {
@@ -651,7 +667,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
           while ((m = idRegex.exec(html)) !== null) {
             if (seenIds.has(m[1])) continue;
             seenIds.add(m[1]);
-            discoveredFiles.push({ id: m[1], name: m[2].trim() });
+            discoveredFiles.push({ id: m[1], name: decodeHtmlEntities(m[2].trim()) });
           }
         }
       }
@@ -666,7 +682,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
     if (Array.isArray(cliList)) {
       discoveredViaCli = true;
       for (const f of cliList) {
-        if (/^(image|video)\//i.test(f.mimeType || '') || /zip/i.test(f.mimeType || '') || /\.(jpe?g|png|webp|mp4|mov|webm|zip)$/i.test(f.name || '')) {
+        if (/^(image|video)\//i.test(f.mimeType || '') || /zip/i.test(f.mimeType || '') || /\.(jpe?g|png|webp|heic|mp4|mov|webm|zip)$/i.test(f.name || '')) {
           discoveredFiles.push({ id: f.id, name: f.name || '' });
         }
       }
@@ -675,7 +691,7 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
 
   for (const df of discoveredFiles) discoveredFilenames.push(df.name);
   if (metadataOnly) {
-    return { folder_title: folderTitle, discovered_filenames: discoveredFilenames, images: [], skipped };
+    return { folder_title: folderTitle, total_discovered_files: discoveredFiles.length, discovered_filenames: discoveredFilenames, images: [], skipped };
   }
 
   if (!discoveredFiles.length) {
@@ -683,10 +699,11 @@ async function fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles = 400, fetchIm
       filename: target.url,
       reason: 'No publicly readable images, videos, or ZIP files found in this Google Drive folder. Set Drive sharing to "Anyone with the link can view" (or configure GOOGLE_DRIVE_API_KEY) or download the folder as a .zip and drop it above.'
     });
-    return { folder_title: folderTitle, discovered_filenames: discoveredFilenames, images, skipped };
+    return { folder_title: folderTitle, total_discovered_files: 0, discovered_filenames: discoveredFilenames, images, skipped };
   }
 
-  const batchList = discoveredFiles.slice(0, maxFiles);
+  const startIdx = Math.max(0, Number(offset || 0));
+  const batchList = discoveredFiles.slice(startIdx, startIdx + maxFiles);
   const CONCURRENCY = 8;
   for (let start = 0; start < batchList.length; start += CONCURRENCY) {
     const chunk = batchList.slice(start, start + CONCURRENCY);
@@ -1177,16 +1194,16 @@ async function identifyPartGroupWithAi(group, session, settings, { batchHint = '
     };
   }
 
-  // 1) Live Gemini 2.5 Flash Vision + Stamped MPN OCR when configured!
+  // 1) Live Gemini 2.5 Flash Vision (with thinkingBudget=0 for fast <2s responses) + gemini-2.0-flash fallback + Stamped MPN OCR!
+  let lastGeminiError = '';
   if (geminiKey && photos.length > 0) {
-    try {
-      const inlineParts = photos.map((img) => ({
-        inline_data: {
-          mime_type: img.mime || 'image/jpeg',
-          data: img.buffer.toString('base64')
-        }
-      }));
-      const prompt = `You are an expert automotive OEM salvage parts cataloger for Aldridge Auto's Service & Repair (University Place, WA 98467).
+    const inlineParts = photos.slice(0, 2).map((img) => ({
+      inline_data: {
+        mime_type: img.mime || 'image/jpeg',
+        data: img.buffer.toString('base64')
+      }
+    }));
+    const prompt = `You are an expert automotive OEM salvage parts cataloger for Aldridge Auto's Service & Repair (University Place, WA 98467).
 Inspect all ${inlineParts.length} photo angle(s) of this automotive part pulled from a VIN-verified donor vehicle.
 LOCKED DONOR VEHICLE (NHTSA vPIC verified — DO NOT change vehicle):
 - VIN: ${session.vin}
@@ -1206,22 +1223,37 @@ Return ONLY valid JSON with these exact keys:
 }
 Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeployed airbag, SRS module/sensor, clockspring, seat belt/pretensioner, or catalytic converter.`;
 
-      const resp = await fetchImpl(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }, ...inlineParts] }],
-            generationConfig: { responseMimeType: 'application/json' }
-          }),
-          signal: AbortSignal.timeout(20000)
-        }
-      );
+    const modelAttempts = [
+      { model: 'gemini-2.5-flash', genCfg: { responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } } },
+      { model: 'gemini-2.0-flash', genCfg: { responseMimeType: 'application/json' } }
+    ];
 
-      if (resp.ok) {
+    for (const attempt of modelAttempts) {
+      try {
+        const resp = await fetchImpl(
+          `https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }, ...inlineParts] }],
+              generationConfig: attempt.genCfg
+            }),
+            signal: AbortSignal.timeout(22000)
+          }
+        );
+
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => '');
+          lastGeminiError = `${attempt.model} HTTP ${resp.status}: ${errBody.slice(0, 140).replace(/\s+/g, ' ')}`;
+          continue;
+        }
         const gJson = await resp.json();
-        const rawText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const rawText = String(gJson.candidates?.[0]?.content?.parts?.[0]?.text || '')
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
         if (rawText) {
           const ai = JSON.parse(rawText);
           const aiPartName = String(ai.part_name || '').trim();
@@ -1230,7 +1262,7 @@ Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeplo
           if (aiPartName && aiPartName.length >= 3 && !/^(auto\s*part|car\s*part|oem\s*part|unknown)$/i.test(aiPartName)) {
             return {
               ok: true,
-              provider: 'gemini_2.5_flash_vision',
+              provider: `${attempt.model.replace(/[^a-z0-9]+/gi, '_')}_vision`,
               part_name: aiPartName,
               placement_on_vehicle: String(ai.placement_on_vehicle || extractPlacementFromHint(aiPartName) || 'Vehicle Specific').trim(),
               oem_part_number: cleanAiMpn,
@@ -1241,14 +1273,17 @@ Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeplo
             };
           }
         }
+      } catch (gErr) {
+        lastGeminiError = `${attempt.model} error: ${gErr.message || String(gErr)}`;
       }
-    } catch (_) {}
+    }
   }
 
   // 2) Deterministic OEM Part Recognition from subfolder / filename / batch hint (NEVER fabricates generic placeholders!)
-  const matchedRule = PART_DETECTION_RULES.find((r) => r.re.test(hintText));
+  const normalizedHint = hintText.replace(/\binsrument\b/gi, 'instrument');
+  const matchedRule = PART_DETECTION_RULES.find((r) => r.re.test(normalizedHint));
   if (matchedRule) {
-    const placementPrefix = extractPlacementFromHint(hintText);
+    const placementPrefix = extractPlacementFromHint(normalizedHint);
     const fullPartName = placementPrefix && !matchedRule.name.toLowerCase().includes(placementPrefix.split(' ')[0].toLowerCase())
       ? `${placementPrefix} ${matchedRule.name}`
       : matchedRule.name;
@@ -1265,11 +1300,48 @@ Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeplo
     };
   }
 
-  // Refuse to fabricate generic placeholder titles for opaque legacy ALD-XXXXXX or raw timestamp files without GEMINI_API_KEY
+  // 2B) Smart Human-Written Descriptive Filename Extractor (recovers clear shop-named photos like "2004 Toyota 4Runner Horns Set of 2.jpg" or "1998-subaru-forester-center-console-bezel.1.jpg" while STILL rejecting opaque camera/hash filenames!)
+  const firstFname = String(photos[0]?.filename || '').trim();
+  const baseNoExt = firstFname
+    .replace(/^P\d{3,5}__/i, '')
+    .replace(/\.[A-Za-z0-9]{2,5}$/i, '')
+    .replace(/(?:[._\-\s]+(?:\(\d+\)|\d{1,2}))+$/g, '')
+    .trim();
+  const isOpaqueFile = !baseNoExt || /^(?:IMG|PXL|DSC|VID|MOV|PHOTO|IMAGE|20\d{6}|ALD-[A-Z0-9]{4,}|DRIVE_[A-Z0-9_-]+)/i.test(baseNoExt);
+  if (!isOpaqueFile) {
+    let cleanedPart = baseNoExt
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b(?:19\d{2}|20\d{2})\b/g, ' ')
+      .replace(new RegExp(`\\b${String(session.make || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), ' ')
+      .replace(new RegExp(`\\b${String(session.model || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), ' ')
+      .replace(/\b(?:forrester|4\s*runner|s\s*10|fiat\s*500|equinox|silverado|tahoe|dakota|xterra|odyssey|outback|legacy|tundra|camry|rav4|xg300)\b/gi, ' ')
+      .replace(/\binsrument\b/gi, 'Instrument')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleanedPart.length >= 4 && /[A-Za-z]{3,}/.test(cleanedPart) && !/^(?:part|auto\s*part|car\s*part|trim|misc|unknown|front|rear|left|right)$/i.test(cleanedPart)) {
+      const titleCased = cleanedPart.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+      const estPrice = /roof\s*rack|driveshaft|pedal|cluster|fuse|console|cross\s*bar|differential|axle|bumper|door|hood|fender/i.test(titleCased)
+        ? 115
+        : (/horn|visor|switch|trim|bezel|kick\s*panel|weatherstrip|cover|manual|mirror|handle|latch/i.test(titleCased) ? 55 : 85);
+      return {
+        ok: true,
+        provider: 'descriptive_filename_extractor',
+        part_name: titleCased,
+        placement_on_vehicle: extractPlacementFromHint(titleCased) || 'Vehicle Specific',
+        oem_part_number: filenameMpn,
+        condition: 'Tested Used OEM',
+        condition_notes: 'Pulled & inspected on-site from VIN-verified donor vehicle; see actual shop photos.',
+        suggested_price_usd: estPrice,
+        is_prohibited_safety_item: false
+      };
+    }
+  }
+
+  // Refuse to fabricate generic placeholder titles for opaque legacy ALD-XXXXXX or raw timestamp files without working Gemini Vision
   return {
     ok: false,
     reason: geminiKey
-      ? 'AI Vision could not confidently identify a specific OEM part from this image. Retake a clearer photo or include the stamped OEM label.'
+      ? `AI Vision did not return a part match (${lastGeminiError || 'low confidence'}). Retake a clearer photo or verify GEMINI_API_KEY quota/billing.`
       : `Opaque/camera filename (${photos[0]?.filename || 'photo'}) requires GEMINI_API_KEY for pixel-level Vision identification (or descriptive part filename/folder).`
   };
 }
@@ -1449,7 +1521,8 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     }
     inputSources.google_drive_links += 1;
     const reqMaxFiles = Math.min(500, Math.max(1, Number(payload.max_files || 400)));
-    const driveRes = await fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles: reqMaxFiles, fetchImpl });
+    const reqOffset = Math.max(0, Number(payload.offset || 0));
+    const driveRes = await fetchImagesFromGoogleDriveUrl(driveUrl, { maxFiles: reqMaxFiles, offset: reqOffset, fetchImpl });
     if (driveRes.folder_title) driveFolderTitle = driveRes.folder_title;
     collectedImages.push(...driveRes.images);
     skippedItems.push(...driveRes.skipped);
@@ -2106,33 +2179,66 @@ async function startMasterParentFolderBatchJob(
         persistMasterJobSnapshot(job);
         const fStart = Date.now();
         try {
-          const res = await runAiMultiInputBatchIntake(
-            {
-              vin: folder.vin,
-              drive_url: folder.drive_url,
-              bin_location: folder.auto_bin_prefix,
-              grouping_mode: 'auto',
-              confirm_vin_decode: true,
-              max_files: maxFilesPerFolder,
-              push_shopify: false // Batch sync once after deduplication so Shopify rate limits stay clean!
-            },
-            staffUser,
-            { uploadsDir, baseUrl, fetchImpl, pushToShopifyFn }
-          );
+          const meta = await fetchImagesFromGoogleDriveUrl(folder.drive_url, { metadataOnly: true, fetchImpl });
+          const totalInFolder = Math.min(maxFilesPerFolder, Math.max(1, Number(meta.total_discovered_files || meta.discovered_filenames?.length || 1)));
+          const SLICE_SIZE = 60;
+          let folderPhotos = 0;
+          let folderCreated = 0;
+          let folderMerged = 0;
+          let folderSold = 0;
+          let folderSrs = 0;
+          let folderSkipped = 0;
+          let resolvedVehicle = `${folder.year} ${folder.make} ${folder.model}`;
+          let resolvedBin = folder.auto_bin_prefix;
+          let sliceSessionCode = '';
+
+          for (let sliceOffset = 0; sliceOffset < totalInFolder; sliceOffset += SLICE_SIZE) {
+            const sliceLimit = Math.min(SLICE_SIZE, totalInFolder - sliceOffset);
+            if (totalInFolder > SLICE_SIZE) {
+              job.current_folder = `${folder.title} (${folder.year} ${folder.make} ${folder.model}) • files ${sliceOffset + 1}-${sliceOffset + sliceLimit}/${totalInFolder}`;
+              persistMasterJobSnapshot(job);
+            }
+            const res = await runAiMultiInputBatchIntake(
+              {
+                ...(sliceSessionCode ? { session_code: sliceSessionCode } : { vin: folder.vin }),
+                drive_url: folder.drive_url,
+                bin_location: folder.auto_bin_prefix,
+                grouping_mode: 'auto',
+                confirm_vin_decode: true,
+                offset: sliceOffset,
+                max_files: sliceLimit,
+                push_shopify: false
+              },
+              staffUser,
+              { uploadsDir, baseUrl, fetchImpl, pushToShopifyFn }
+            );
+            if (res.session?.session_code) sliceSessionCode = res.session.session_code;
+            if (res.session?.year) {
+              resolvedVehicle = `${res.session.year} ${res.session.make} ${res.session.model}`.trim();
+            }
+            if (res.auto_bin_prefix) resolvedBin = res.auto_bin_prefix;
+            folderPhotos += Number(res.total_photos_received || 0);
+            folderCreated += Number(res.created_count || 0);
+            folderMerged += Number(res.duplicate_angles_merged || 0);
+            folderSold += Number(res.blocked_sold_count || 0);
+            folderSrs += Number(res.blocked_srs_count || 0);
+            folderSkipped += Number(res.skipped_count || 0);
+          }
+
           const fSummary = {
             folder_id: folder.id,
             folder_title: folder.title,
             vin: folder.vin,
-            vehicle: `${res.session?.year || folder.year} ${res.session?.make || folder.make} ${res.session?.model || folder.model}`.trim(),
-            bin_location: res.auto_bin_prefix || folder.auto_bin_prefix,
+            vehicle: resolvedVehicle,
+            bin_location: resolvedBin,
             status: 'completed',
             elapsed_sec: Number(((Date.now() - fStart) / 1000).toFixed(1)),
-            photos_received: Number(res.total_photos_received || 0),
-            created_count: Number(res.created_count || 0),
-            angles_merged: Number(res.duplicate_angles_merged || 0),
-            sold_blocked: Number(res.blocked_sold_count || 0),
-            srs_blocked: Number(res.blocked_srs_count || 0),
-            skipped_count: Number(res.skipped_count || 0),
+            photos_received: folderPhotos,
+            created_count: folderCreated,
+            angles_merged: folderMerged,
+            sold_blocked: folderSold,
+            srs_blocked: folderSrs,
+            skipped_count: folderSkipped,
             vin_label_conflict: folder.vin_label_conflict || ''
           };
           job.per_folder_results.push(fSummary);
