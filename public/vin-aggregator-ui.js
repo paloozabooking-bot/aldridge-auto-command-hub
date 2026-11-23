@@ -46,32 +46,16 @@
     }
   }
 
-  /* ==================== 1. HERO UNIVERSAL VIN-CONFIRMED 4-NETWORK PARTS AGGREGATOR ==================== */
+  /* ==================== 1. EMBEDDED HERO VEHICLE FITMENT SEARCH BAR ==================== */
   function renderHeroVinAggregator() {
     const host = document.getElementById('hero-vin-aggregator');
     if (!host) return;
 
     host.innerHTML = `
-      <section class="vin-agg-hero" aria-label="Universal VIN-Confirmed Parts Aggregator">
-        <div class="vin-agg-top">
-          <div>
-            <div class="vin-agg-eyebrow">ONE-STOP VIN-CONFIRMED PARTS AGGREGATOR • RETAIL &amp; B2B WHOLESALE • UNIVERSITY PLACE 98467</div>
-            <h2>If We Don't Have It, We Can Get It — Search All 4 Parts Networks by VIN</h2>
-            <p class="vin-agg-sub">
-              Enter your <strong>17-Character VIN</strong>, <strong>License Plate</strong>, or <strong>Vehicle</strong> to search our <strong>In-House Tested OEM Shelf</strong>, <strong>Car-Part Pro</strong>, <strong>Commercial Wholesale</strong> (PartsTech / Nexpart / Worldpac / O'Reilly / AutoZonePro / NAPA / LKQ), and <strong>eBay Motors / PartsGeek / Amazon</strong> — all in one place with instant checkout or <strong>$174.99/hr 5.0★ Bay Install</strong>.
-            </p>
-          </div>
-          <div class="vin-agg-network-pills">
-            <span class="net-pill net-live">✓ In-House OEM Shelf</span>
-            <span class="net-pill">Car-Part Pro</span>
-            <span class="net-pill">Wholesale Network</span>
-            <span class="net-pill">eBay • PartsGeek • Amazon</span>
-          </div>
-        </div>
-
+      <div class="fitment-search-panel" aria-label="Vehicle Fitment Search Bar">
         <div class="vin-agg-mode-tabs" role="tablist">
-          <button type="button" class="agg-mode-btn ${aggState.mode === 'vin' ? 'active' : ''}" data-agg-mode="vin">17-Character VIN (Recommended)</button>
-          <button type="button" class="agg-mode-btn ${aggState.mode === 'plate' ? 'active' : ''}" data-agg-mode="plate">License Plate + State</button>
+          <button type="button" class="agg-mode-btn ${aggState.mode === 'vin' ? 'active' : ''}" data-agg-mode="vin">17-Char VIN</button>
+          <button type="button" class="agg-mode-btn ${aggState.mode === 'plate' ? 'active' : ''}" data-agg-mode="plate">License Plate</button>
           <button type="button" class="agg-mode-btn ${aggState.mode === 'ymm' ? 'active' : ''}" data-agg-mode="ymm">Year / Make / Model</button>
         </div>
 
@@ -79,7 +63,7 @@
           <div class="vin-agg-inputs">
             ${aggState.mode === 'vin' ? `
               <div class="agg-field">
-                <label for="agg-vin-input">17-Character VIN (NHTSA Confirmed)</label>
+                <label for="agg-vin-input">17-Char VIN</label>
                 <input id="agg-vin-input" name="vin" class="input mono" maxlength="17" placeholder="e.g. JTEBU5JR2C5091234" style="text-transform:uppercase;" />
               </div>
             ` : aggState.mode === 'plate' ? `
@@ -105,18 +89,20 @@
               </div>
             `}
             <div class="agg-field">
-              <label for="agg-part-query">Part Name, OEM Part #, or Symptom</label>
-              <input id="agg-part-query" name="part_query" class="input" required placeholder="e.g. Alternator, Front Brake Kit, Radiator, Transmission, ECM..." />
+              <label for="agg-part-query">Part Keyword or OEM #</label>
+              <input id="agg-part-query" name="part_query" class="input" required placeholder="e.g. Alternator, Brake Kit, Radiator, ECM..." />
             </div>
             <div class="agg-field agg-submit-col">
               <label>&nbsp;</label>
-              <button type="submit" class="btn btn-primary vin-agg-submit">Search All 4 Networks</button>
+              <button type="submit" class="btn btn-primary vin-agg-submit">Search</button>
             </div>
           </div>
         </form>
 
-        <div id="hero-vin-agg-results"></div>
-      </section>
+        <div class="fitment-search-hint">
+          <span>Searches In-House OEM Shelf + Car-Part Pro + Commercial Wholesale + National Marketplaces</span>
+        </div>
+      </div>
     `;
 
     host.querySelectorAll('[data-agg-mode]').forEach((btn) => {
@@ -132,7 +118,9 @@
       const fd = new FormData(e.target);
       const body = Object.fromEntries(fd.entries());
       const out = document.getElementById('hero-vin-agg-results');
-      out.innerHTML = '<div class="agg-loading">Decoding VIN via NHTSA vPIC &amp; querying In-House OEM, Car-Part Pro, Commercial Wholesale &amp; National Marketplaces...</div>';
+      if (out) {
+        out.innerHTML = '<div class="agg-loading">Decoding VIN via NHTSA vPIC &amp; searching In-House OEM Shelf, Car-Part Pro, Commercial Wholesale &amp; Marketplaces...</div>';
+      }
       try {
         const resp = await fetch('/api/parts-aggregator/search', {
           method: 'POST',
@@ -145,8 +133,9 @@
         aggState.lastResponse = data;
         aggState.activeChannel = 'all';
         renderAggregatorResults(data);
+        document.getElementById('hero-vin-agg-results')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       } catch (err) {
-        out.innerHTML = `<div class="agg-error">${esc(err.message)}</div>`;
+        if (out) out.innerHTML = `<div class="agg-error">${esc(err.message)}</div>`;
       }
     });
   }
@@ -244,13 +233,13 @@
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const wrap = document.createElement('div');
     wrap.id = 'agg-order-modal';
-    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(20,14,9,0.74);z-index:10000;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.62);z-index:10000;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;';
     wrap.innerHTML = `
-      <div style="background:#fffdf9;border:1.5px solid #e2d2ba;border-radius:18px;max-width:560px;width:100%;padding:1.35rem 1.45rem;position:relative;box-shadow:0 24px 60px rgba(0,0,0,0.34);">
-        <button type="button" onclick="document.getElementById('agg-order-modal')?.remove()" style="position:absolute;top:12px;right:14px;background:#f4ece0;border:1px solid #dfd0b8;border-radius:999px;width:32px;height:32px;font-weight:800;cursor:pointer;">✕</button>
+      <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;max-width:560px;width:100%;padding:1.35rem 1.45rem;position:relative;box-shadow:0 24px 60px rgba(15,23,42,0.28);">
+        <button type="button" onclick="document.getElementById('agg-order-modal')?.remove()" style="position:absolute;top:12px;right:14px;background:#F1F5F9;border:1px solid #CBD5E1;color:#0F172A;border-radius:8px;width:32px;height:32px;font-weight:700;cursor:pointer;">✕</button>
         <div class="eyebrow-label" style="margin-bottom:0.2rem;">${isInstall ? 'TURNKEY PART + 5.0★ BAY INSTALL RESERVATION' : 'INSTANT VIN-CONFIRMED PART ORDER'}</div>
-        <h3 style="margin:0 0 0.25rem;font-family:'Fraunces',Georgia,serif;color:#1f1711;">${esc(opt.title)}</h3>
-        <p style="margin:0 0 0.9rem;font-size:0.88rem;color:#9a3412;font-weight:800;">
+        <h3 style="margin:0 0 0.25rem;color:#0F172A;">${esc(opt.title)}</h3>
+        <p style="margin:0 0 0.9rem;font-size:0.88rem;color:#475569;font-weight:700;">
           ${esc(opt.supplier_name)} • ${isInstall ? `Turnkey Installed: ${money(opt.installed_total_usd)}` : `Part Total: ${money(opt.retail_price_usd)}`}
         </p>
         <form id="agg-order-form">

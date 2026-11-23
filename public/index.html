@@ -11,7 +11,7 @@
   <meta name="geo.placename" content="University Place, Tacoma, Washington" />
   <meta name="geo.position" content="47.2062;-122.5365" />
   <meta name="ICBM" content="47.2062, -122.5365" />
-  <meta name="theme-color" content="#0b1628" />
+  <meta name="theme-color" content="#0F172A" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -39,8 +39,8 @@
   <link rel="apple-touch-icon" href="/assets/app-icon.jpg?v=11" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=29.3" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css?v=30.0" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -164,144 +164,122 @@
   </script>
 </head>
 <body>
-  <!-- Top Utility Bar -->
-  <div class="utility-bar">
-    <div class="utility-inner">
-      <div class="utility-meta">
-        <span class="rating-chip" id="util-rating">★ 5.0 Google Rating (87 Reviews) • #1 in University Place</span>
-        <span id="util-address">5115 66th St W, Bldg B, University Place / Tacoma, WA 98467</span>
-        <span id="util-hours">Mon–Fri: 12:00 PM – 7:00 PM • Sat 12–6 • Sun 1–4</span>
-        <span>Shop &amp; Parts: <strong id="util-phone">(253) 245-4206</strong></span>
-        <span>U-Haul #046117: <strong id="util-uhaul-phone">(253) 948-3487</strong></span>
-      </div>
-      <div class="utility-actions">
-        <button type="button" class="btn btn-sm btn-outline" id="btn-enable-push" style="padding:0.22rem 0.6rem;font-size:0.74rem;">Enable Push Alerts</button>
-        <button type="button" class="btn btn-sm btn-primary" id="btn-install-pwa" style="display:none;padding:0.22rem 0.6rem;font-size:0.74rem;">Install App</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Sticky Header -->
+  <!-- Single-Row Sticky Navigation Bar (Deep Navy #0F172A) -->
   <header class="site-header">
     <div class="header-inner">
       <a href="#home" class="brand-lockup" id="brand-home-link">
         <img src="/assets/aldridge-crest.jpg?v=11" alt="Aldridge Auto's Service &amp; Repair Official Emblem" class="brand-logo" id="header-brand-logo" />
         <div>
           <div class="brand-title" id="header-business-name">Aldridge Auto's</div>
-          <div class="brand-sub" id="header-tagline">5.0★ Auto Repair • Tested OEM &amp; Salvaged Auto Parts • U-Haul Neighborhood Dealer #046117</div>
+          <div class="brand-sub">University Place, WA • 5.0★ • (253) 245-4206</div>
         </div>
       </a>
 
       <nav class="primary-nav" id="customer-nav" aria-label="Customer Navigation">
         <button type="button" class="nav-btn active" data-view="view-home" id="nav-home">Overview</button>
         <button type="button" class="nav-btn" data-view="view-parts" id="nav-parts">OEM Parts Store</button>
-        <button type="button" class="nav-btn" data-view="view-repair" id="nav-repair">Auto Repair &amp; Booking</button>
+        <button type="button" class="nav-btn" data-view="view-repair" id="nav-repair">Auto Repair</button>
         <button type="button" class="nav-btn" data-view="view-uhaul" id="nav-uhaul">U-Haul #046117</button>
-        <button type="button" class="nav-btn" data-view="view-portal" id="nav-portal">My Garage &amp; DVI Portal</button>
-        <button type="button" class="nav-btn" data-view="view-support" id="nav-support">Inquiries, Returns &amp; VIP</button>
+        <button type="button" class="nav-btn" data-view="view-portal" id="nav-portal">My Garage &amp; Support</button>
       </nav>
 
       <div class="mode-switch-group">
-        <button type="button" class="cart-trigger" id="btn-open-cart">
-          <span>Order Bag</span>
+        <button type="button" class="header-member-btn" id="btn-header-member" onclick="window.openMembershipModal && window.openMembershipModal('garage_club_basic', 'lookup')">Member Sign In</button>
+        <button type="button" class="cart-trigger" id="btn-open-cart" aria-label="Open Cart">
+          <span>Cart</span>
           <span class="cart-count" id="cart-count-badge">0</span>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Warm 5.0-Star Neighborhood Guarantee & 3-Tier Member Pricing Unlock Strip -->
-  <div id="member-club-banner" style="padding:0 1.25rem;"></div>
-
   <main class="container">
     <!-- ==================== CUSTOMER VIEW 1: OVERVIEW ==================== -->
     <section class="view-panel active" id="view-home">
-      <!-- HIGHLIGHTED HERO FEATURE: Universal VIN-Confirmed One-Stop 4-Network Parts Aggregator -->
-      <div id="hero-vin-aggregator"></div>
-
-      <div class="hero-split">
-        <div class="hero-copy">
-          <div class="eyebrow-label">UNIVERSITY PLACE &amp; TACOMA, WA • 5.0★ (87 GOOGLE REVIEWS) • FREE ENGINE LIGHT SCAN • $100 INSPECTIONS</div>
-          <h1 id="hero-headline">Your Neighborhood 5.0★ Auto Shop &amp; Tested OEM Parts Counter</h1>
-          <p class="hero-lead">
-            Plain-English mechanics at <strong>5115 66th St W, Bldg B, University Place, WA 98467</strong>. Every OEM part on our menu is photographed right off our own shelf (<strong>1-of-1 Physical Stock • Zero Double-Booking</strong>) — carry it out today or pick our <strong>House Special Combo</strong> for certified <strong>$174.99/hr</strong> bay installation with warranty.
-          </p>
-          <div class="hero-cta-row">
-            <button type="button" class="btn btn-primary" onclick="switchCustomerView('view-parts')">Find Parts for My Car</button>
-            <button type="button" class="btn btn-dark" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure What You Need?</button>
-            <button type="button" class="btn btn-outline" onclick="window.openPartSourcingModal && window.openPartSourcingModal()">If We Don't Have It, We Can Get It</button>
+      <!-- (1) Unified Above-the-Fold Hero + Tabbed Vehicle Fitment Search Bar -->
+      <section class="retail-hero" aria-label="Aldridge Auto's Overview and Vehicle Fitment Search">
+        <div class="retail-hero-grid">
+          <div class="retail-hero-main">
+            <div>
+              <h1 class="retail-hero-headline" id="hero-headline">Tested OEM Auto Parts &amp; 5.0★ Repair in University Place, WA</h1>
+              <p class="retail-hero-sub">
+                <span>5115 66th St W, Bldg B • 87 Google Reviews • 1-of-1 Physical Shelf Stock</span>
+                <span class="stock-pill-emerald" id="hero-stock-count">In Stock</span>
+              </p>
+            </div>
+            <!-- Tabbed Vehicle Fitment Search Bar (17-Char VIN | License Plate | Year/Make/Model + Part Keyword) -->
+            <div id="hero-vin-aggregator"></div>
           </div>
-          <div class="pillar-strip">
-            <div class="pillar-mini">
-              <strong>Carry-Out or Installed at Shop</strong>
-              <span>Every part has 2 simple options: Add to Cart (ship or free 98467 pickup) or Book Installed at 5115 66th St W</span>
+
+          <div class="retail-hero-actions">
+            <div class="hero-action-card">
+              <div>
+                <div class="hero-action-top">
+                  <span class="hero-action-kicker">Direct Counter &amp; Nationwide Parcel</span>
+                  <span class="stock-pill-emerald">In Stock</span>
+                </div>
+                <h3>Shop In-Stock OEM Parts</h3>
+                <p>Real photos straight off our shelf. Carry out in 98467, ship nationwide, or add certified bay installation.</p>
+              </div>
+              <div class="hero-action-foot">
+                <button type="button" class="btn btn-primary btn-sm" onclick="switchCustomerView('view-parts')">Browse Parts</button>
+                <button type="button" class="hero-link-subtle" onclick="window.openPartSourcingModal && window.openPartSourcingModal()">Need a rare part?</button>
+              </div>
             </div>
-            <div class="pillar-mini">
-              <strong>5.0★ Plain-English Mechanics</strong>
-              <span>87 Google Reviews • FREE Check Engine Light Scan • $89.99 Digital Vehicle Inspection (DVI)</span>
-            </div>
-            <div class="pillar-mini">
-              <strong>U-Haul Dealer #046117 &amp; Storage</strong>
-              <span>Neighborhood U-Haul dispatch + Secure 98467 Vehicle, RV &amp; Trailer Storage ($149/mo)</span>
+
+            <div class="hero-action-card">
+              <div>
+                <div class="hero-action-top">
+                  <span class="hero-action-kicker">5.0★ Certified Bays • $174.99/hr</span>
+                  <span class="stock-pill-emerald">FREE CEL Scan</span>
+                </div>
+                <h3>Book 5.0★ Repair Bay / FREE CEL Scan</h3>
+                <p>Plain-English diagnostics, $89.99 photo Digital Vehicle Inspections (DVI), brakes, cooling &amp; turnkey part installs.</p>
+              </div>
+              <div class="hero-action-foot">
+                <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-repair')">Book Bay</button>
+                <button type="button" class="hero-link-subtle" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not sure what you need?</button>
+              </div>
             </div>
           </div>
         </div>
-        <div class="hero-media hero-media-brand">
-          <img src="/assets/aldridge-shop-hero.jpg?v=11" alt="Chris Aldridge at Aldridge Auto's Service &amp; Repair — Full Service Auto Repair &amp; U-Haul Rentals (253) 245-4206" />
-          <div class="hero-media-caption">
-            <span>5115 66th St W Bldg B • Tested OEM Parts &amp; 5.0★ Certified Repair Bays</span>
-            <span class="badge badge-ok" id="hero-stock-count">Live Stock</span>
-          </div>
-        </div>
-      </div>
 
-      <!-- Instant Bookable Shop Services & Bay Menu (FREE CEL Scan, $89.99 DVI, $174.99/hr Bay, $149/mo Storage, Packages) -->
-      <div id="home-shop-services-menu"></div>
+        <!-- Compact Single-Line Trust & Membership Strip -->
+        <div id="member-club-banner"></div>
+      </section>
 
-      <!-- "If We Don't Have It, We Can Get It" + "Not Sure What You Need?" Quick Action Banner -->
-      <div id="home-sourcing-banner"></div>
+      <!-- Live VIN/Plate/YMM Aggregator Search Results Container -->
+      <div id="hero-vin-agg-results"></div>
 
-      <!-- Shop Specials & High-Margin Tested Assemblies Hero Menu Board -->
+      <!-- (2) Featured Tested Assemblies (4-Column Uniform Grid) -->
       <div id="home-chef-specials-menu"></div>
 
-      <!-- Official Cross-Platform Verified Backlinks & Trust Bar -->
-      <div class="verified-channels-bar" aria-label="Verified Aldridge Auto's Official Profiles and Marketplaces">
-        <div class="verified-channels-title">
-          Verified Official Aldridge Auto's Profiles &amp; Marketplaces
-          <small>Canonical Domain: aldridgeautosupply.com • 5115 66th St W, Bldg B, University Place, WA 98467</small>
+      <!-- (3) Fresh Off the Shelf (8-Item 4x2 Uniform Grid — Mixed Donor Vehicles) -->
+      <section class="overview-section" aria-label="Fresh Off the Shelf OEM Parts">
+        <div class="section-head">
+          <div>
+            <h2>Fresh Off the Shelf</h2>
+            <p>Verified 1-of-1 OEM parts across our latest donor vehicles — carry out, ship fast, or book installed in our bay.</p>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="switchCustomerView('view-parts')">View Full Parts Store →</button>
         </div>
-        <div class="verified-channels-pills" id="home-verified-channels">
-          <a class="channel-pill channel-pill-star" href="https://www.google.com/maps/search/?api=1&amp;query=Aldridge+Auto%27s+Service+%26+Repair+5115+66th+St+W+Bldg+B+University+Place+WA+98467" target="_blank" rel="noopener me">★ 5.0 Google Business Profile (87 Reviews) ↗</a>
-          <a class="channel-pill channel-pill-uhaul" href="https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/" target="_blank" rel="noopener me">U-Haul Dealer #046117 ↗</a>
-          <a class="channel-pill" href="https://www.facebook.com/AldridgeAutos" target="_blank" rel="noopener me">Facebook Page (@AldridgeAutos) ↗</a>
-          <a class="channel-pill" href="https://www.facebook.com/ProfessionalFacilitatorOfNeeds" target="_blank" rel="noopener me">Facebook Marketplace Profile ↗</a>
-          <a class="channel-pill" href="https://www.instagram.com/aldridgeautos/" target="_blank" rel="noopener me">Instagram ↗</a>
-          <a class="channel-pill" href="https://www.youtube.com/@AldridgeAutos" target="_blank" rel="noopener me">YouTube ↗</a>
-          <a class="channel-pill" href="https://aldridgesales.myshopify.com/" target="_blank" rel="noopener me">Shopify Store ↗</a>
-          <a class="channel-pill" href="https://www.ebay.com/usr/aabcas" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a>
-          <a class="channel-pill" href="https://offerup.com/search?q=Aldridge+Auto+Tacoma" target="_blank" rel="noopener me">OfferUp Local ↗</a>
-        </div>
-      </div>
+        <div class="parts-grid" id="home-featured-parts"></div>
+      </section>
 
-      <!-- Specials + Share to Friend -->
-      <div class="section-head">
-        <div>
-          <h2>Current Aldridge Auto's Parts &amp; Repair Specials</h2>
-          <p>Redeem online or at Bldg B in University Place — share any offer with a friend in the 253 in one tap.</p>
-        </div>
-        <button type="button" class="btn btn-outline btn-sm" onclick="window.openMembershipModal && window.openMembershipModal('garage_club_basic')">Join Free Garage Club ($0/mo)</button>
-      </div>
-      <div class="grid-3" id="home-specials-grid" style="margin-bottom:2.2rem;"></div>
+      <!-- (4) Popular Repair & Maintenance Menu (Clean 4x2 Uniform Grid) -->
+      <div id="home-shop-services-menu"></div>
 
-      <!-- Featured Synced Parts -->
-      <div class="section-head">
-        <div>
-          <h2>Fresh Off the Shelf — Carry-Out or Installed at Our Shop</h2>
-          <p>Real photos straight off our shelf. Pick Carry-Out or Certified Bay Install in one tap.</p>
+      <!-- (5) Compact 3-Card Specials (DIRECT15, DIAG25, PULLINSTALL15) -->
+      <section class="overview-section" aria-label="Current Shop Specials">
+        <div class="section-head">
+          <div>
+            <h2>Current Parts &amp; Repair Specials</h2>
+            <p>Redeem online or at 5115 66th St W, Bldg B in University Place — share any code in one tap.</p>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="window.openMembershipModal && window.openMembershipModal('garage_club_basic')">Join Free Garage Club ($0/mo)</button>
         </div>
-        <button type="button" class="btn btn-dark btn-sm" onclick="switchCustomerView('view-parts')">Find Parts by Vehicle</button>
-      </div>
-      <div class="parts-grid" id="home-featured-parts"></div>
+        <div class="grid-3" id="home-specials-grid"></div>
+      </section>
     </section>
 
     <!-- ==================== CUSTOMER VIEW 2: OEM PARTS STOREFRONT ==================== -->
@@ -536,6 +514,16 @@
 
     <!-- ==================== CUSTOMER VIEW 5: INQUIRIES, RETURNS & VIP ==================== -->
     <section class="view-panel" id="view-support">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow-label">ALDRIDGE AUTO'S CUSTOMER SUPPORT • UNIVERSITY PLACE / TACOMA</div>
+          <h2>Inquiries, Returns &amp; VIP Club</h2>
+        </div>
+        <div class="portal-subtabs" role="tablist" aria-label="My Garage and Support Sections">
+          <button type="button" class="portal-subtab-btn" onclick="switchCustomerView('view-portal')">My Garage &amp; DVI Portal</button>
+          <button type="button" class="portal-subtab-btn active" onclick="switchCustomerView('view-support')">Inquiries, Returns &amp; VIP</button>
+        </div>
+      </div>
       <div class="grid-2" style="margin-bottom:1.5rem;">
         <!-- Customer Inquiry Form -->
         <div class="surface-card">
@@ -723,12 +711,18 @@
           <div class="eyebrow-label">ALDRIDGE AUTO'S CUSTOMER PORTAL • LIVE DVI PHOTOS, QUOTES &amp; ONLINE PAYMENTS</div>
           <h2>My Garage, Digital Inspections &amp; Repair Tracker</h2>
         </div>
-        <div id="portal-header-actions" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;"></div>
+        <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+          <div class="portal-subtabs" style="margin-bottom:0;" role="tablist" aria-label="My Garage and Support Sections">
+            <button type="button" class="portal-subtab-btn active" onclick="switchCustomerView('view-portal')">My Garage &amp; DVI Portal</button>
+            <button type="button" class="portal-subtab-btn" onclick="switchCustomerView('view-support')">Inquiries, Returns &amp; VIP</button>
+          </div>
+          <div id="portal-header-actions" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;"></div>
+        </div>
       </div>
 
       <!-- Frictionless Customer Login Card (Magic Link or Password) -->
       <div id="portal-auth-card" class="grid-2" style="margin-bottom:1.35rem;">
-        <div class="surface-card" style="border-left:4px solid var(--brand-orange);">
+        <div class="surface-card">
           <div class="eyebrow-label">FRICTIONLESS MAGIC LINK LOGIN</div>
           <h3 style="margin-top:0;">Instant SMS / Email Portal Link</h3>
           <p style="font-size:0.84rem;color:var(--text-secondary);">Enter the email or phone number on your repair order to receive an instant secure login link tied directly to your vehicle profile.</p>
@@ -1859,59 +1853,61 @@
   <!-- Toast Container -->
   <div class="toast-stack" id="toast-stack"></div>
 
-  <!-- Footer -->
+  <!-- Clean 3-Column Deep Navy Footer -->
   <footer class="site-footer">
     <div class="footer-inner">
       <div>
-        <h4 id="footer-name">Aldridge Auto's</h4>
+        <h4 id="footer-name">Aldridge Auto's Service &amp; Repair</h4>
         <p id="footer-addr" style="margin:0 0 0.4rem;">5115 66th St W, Bldg B, University Place / Tacoma, WA 98467</p>
-        <p id="footer-contact" style="margin:0 0 0.4rem;">Shop &amp; Parts: (253) 245-4206 • U-Haul #046117: (253) 948-3487</p>
-        <p style="margin:0;font-size:0.78rem;opacity:0.8;">★ 5.0 Google Rating (87 Reviews) • OEM Auto Parts, Auto Repair &amp; Authorized U-Haul #046117</p>
+        <p id="footer-contact" style="margin:0 0 0.45rem;">Shop &amp; Parts: (253) 245-4206 • U-Haul #046117: (253) 948-3487</p>
+        <p style="margin:0 0 0.75rem;font-size:0.79rem;color:#94A3B8;">Mon–Fri 12–7 PM • Sat 12–6 PM • Sun 1–4 PM • ★ 5.0 Google Rating (87 Reviews)</p>
+        <div style="display:flex;gap:0.55rem;flex-wrap:wrap;align-items:center;">
+          <button type="button" class="footer-staff-link" id="btn-enable-push">Enable Push Alerts</button>
+          <button type="button" class="footer-staff-link" id="btn-install-pwa" style="display:none;">Install App</button>
+          <button type="button" class="footer-staff-link" onclick="shareSiteWithFriend()">Share Shop</button>
+        </div>
       </div>
+
       <div>
-        <h4>Aldridge Auto's Pillars</h4>
+        <h4>Explore &amp; Customer Services</h4>
         <ul class="footer-links">
-          <li><button type="button" onclick="switchCustomerView('view-parts')">Verified OEM Auto Parts</button></li>
-          <li><button type="button" onclick="switchCustomerView('view-repair')">5.0★ Auto Repair &amp; Bay Booking</button></li>
-          <li><button type="button" onclick="switchCustomerView('view-uhaul')">U-Haul #046117 Neighborhood Rentals</button></li>
-          <li><button type="button" onclick="switchCustomerView('view-support')">Customer Support, Warranty &amp; Returns</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-home')">Overview</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-parts')">OEM Parts Store</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-repair')">Auto Repair &amp; Bay Booking</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-uhaul')">U-Haul #046117 Rentals</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-portal')">My Garage &amp; DVI Portal</button></li>
+          <li><button type="button" onclick="switchCustomerView('view-support')">Inquiries, Warranty &amp; Returns</button></li>
+          <li><button type="button" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')">VIP &amp; Shop Pro Pricing</button></li>
         </ul>
       </div>
+
       <div>
-        <h4>Connected Channels</h4>
-        <ul class="footer-links" id="footer-social-links">
-          <li><a href="https://www.google.com/maps/search/?api=1&amp;query=Aldridge+Auto%27s+Service+%26+Repair+5115+66th+St+W+Bldg+B+University+Place+WA+98467" target="_blank" rel="noopener me">Google Business Profile (5.0★ • 87 Reviews) ↗</a></li>
-          <li><a href="https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/" target="_blank" rel="noopener me">U-Haul Neighborhood Dealer #046117 ↗</a></li>
-          <li><a href="https://www.facebook.com/AldridgeAutos" target="_blank" rel="noopener me">Facebook Business Page (@AldridgeAutos) ↗</a></li>
-          <li><a href="https://www.facebook.com/ProfessionalFacilitatorOfNeeds" target="_blank" rel="noopener me">Facebook Marketplace Profile ↗</a></li>
+        <h4>Verified Profiles &amp; Marketplaces</h4>
+        <ul class="footer-links footer-links-2col" id="footer-social-links">
+          <li><a href="https://www.google.com/maps/search/?api=1&amp;query=Aldridge+Auto%27s+Service+%26+Repair+5115+66th+St+W+Bldg+B+University+Place+WA+98467" target="_blank" rel="noopener me">Google (5.0★ • 87) ↗</a></li>
+          <li><a href="https://www.uhaul.com/Locations/Truck-Rentals-near-Tacoma-WA-98467/046117/" target="_blank" rel="noopener me">U-Haul #046117 ↗</a></li>
+          <li><a href="https://aldridgesales.myshopify.com/" target="_blank" rel="noopener me">Shopify Store ↗</a></li>
+          <li><a href="https://www.ebay.com/usr/aabcas" target="_blank" rel="noopener me">eBay (aabcas) ↗</a></li>
+          <li><a href="https://offerup.com/search?q=Aldridge+Auto+Tacoma" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>
+          <li><a href="https://www.facebook.com/AldridgeAutos" target="_blank" rel="noopener me">Facebook Page ↗</a></li>
+          <li><a href="https://www.facebook.com/ProfessionalFacilitatorOfNeeds" target="_blank" rel="noopener me">FB Marketplace ↗</a></li>
           <li><a href="https://www.instagram.com/aldridgeautos/" target="_blank" rel="noopener me">Instagram ↗</a></li>
           <li><a href="https://www.youtube.com/@AldridgeAutos" target="_blank" rel="noopener me">YouTube ↗</a></li>
-          <li><a href="https://aldridgesales.myshopify.com/" target="_blank" rel="noopener me">Shopify Storefront ↗</a></li>
-          <li><a href="https://www.ebay.com/usr/aabcas" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a></li>
-          <li><a href="https://offerup.com/search?q=Aldridge+Auto+Tacoma" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>
-        </ul>
-      </div>
-      <div>
-        <h4>Shop Hours &amp; Perks</h4>
-        <ul class="footer-links">
-          <li style="opacity:0.88;font-size:0.82rem;">Mon–Fri: 8:00 AM – 6:00 PM</li>
-          <li style="opacity:0.88;font-size:0.82rem;">Sat: 9:00 AM – 4:00 PM • Sun: Closed</li>
-          <li><button type="button" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')">VIP &amp; Shop Pro Member Pricing</button></li>
-          <li><button type="button" onclick="shareSiteWithFriend()">Share Shop With a Friend</button></li>
         </ul>
       </div>
     </div>
-    <div style="max-width:1280px;margin:1.15rem auto 0;padding:0.75rem 1.25rem 0;border-top:1px solid rgba(255,255,255,0.12);display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;font-size:0.74rem;opacity:0.68;">
-      <span>© 2026 Aldridge Auto's Service &amp; Repair • University Place, WA 98467</span>
-      <button type="button" id="mode-staff-btn" style="background:none;border:none;color:inherit;font-size:0.72rem;cursor:pointer;padding:0;text-decoration:underline;opacity:0.75;" aria-label="Staff Portal">Staff Portal</button>
+
+    <div class="footer-bottom-bar">
+      <span>© 2026 Aldridge Auto's Service &amp; Repair • 5115 66th St W, Bldg B, University Place, WA 98467</span>
+      <button type="button" id="mode-staff-btn" class="footer-staff-link" aria-label="Staff Portal">Staff Portal</button>
     </div>
   </footer>
 
-  <script src="/app.js?v=29.3"></script>
-  <script src="/storefront-menu.js?v=29.3"></script>
-  <script src="/sourcing-storefront.js?v=29.3"></script>
-  <script src="/vin-aggregator-ui.js?v=29.3"></script>
-  <script src="/dvi-portal.js?v=29.3"></script>
-  <script src="/wave1-studio.js?v=29.3"></script>
+  <script src="/app.js?v=30.0"></script>
+  <script src="/storefront-menu.js?v=30.0"></script>
+  <script src="/sourcing-storefront.js?v=30.0"></script>
+  <script src="/vin-aggregator-ui.js?v=30.0"></script>
+  <script src="/dvi-portal.js?v=30.0"></script>
+  <script src="/wave1-studio.js?v=30.0"></script>
 </body>
 </html>

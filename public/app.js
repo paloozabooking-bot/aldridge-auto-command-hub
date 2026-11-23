@@ -56,8 +56,9 @@ function switchCustomerView(viewId) {
   const target = document.getElementById(viewId);
   if (target) target.classList.add('active');
 
+  const navMatchView = viewId === 'view-support' ? 'view-portal' : viewId;
   document.querySelectorAll('#customer-nav .nav-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.view === viewId);
+    btn.classList.toggle('active', btn.dataset.view === navMatchView);
   });
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -98,14 +99,14 @@ function renderAll() {
     logoEl.src = settings.logo_url || '/assets/aldridge-crest.jpg?v=11';
   }
 
-  // Branding & Header/Footer
+  // Branding & Header/Footer (null-safe for streamlined single-row header)
   const fullAddr = `${settings.street_address}, ${settings.city_display || settings.city}, ${settings.state} ${settings.zip}`;
   document.title = `${settings.google_listing_name || settings.business_name} — University Place & Tacoma OEM Parts, 5.0★ Service & U-Haul #${settings.uhaul_dealer_id || '046117'}`;
-  document.getElementById('util-address').textContent = fullAddr;
-  document.getElementById('util-hours').textContent = settings.hours_weekday;
-  document.getElementById('util-phone').textContent = settings.phone;
-  const uhaulPhoneEl = document.getElementById('util-uhaul-phone');
-  if (uhaulPhoneEl) uhaulPhoneEl.textContent = settings.uhaul_phone || '(253) 948-3487';
+  const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setText('util-address', fullAddr);
+  setText('util-hours', settings.hours_weekday);
+  setText('util-phone', settings.phone);
+  setText('util-uhaul-phone', settings.uhaul_phone || '(253) 948-3487');
   const ratingEl = document.getElementById('util-rating');
   if (ratingEl && settings.google_rating_badge) {
     ratingEl.textContent = settings.google_rating_badge.startsWith('★')
@@ -113,16 +114,20 @@ function renderAll() {
       : `★ ${settings.google_rating_badge}`;
   }
 
-  document.getElementById('header-business-name').textContent = settings.business_name;
-  document.getElementById('header-tagline').textContent = settings.tagline;
-  document.getElementById('footer-name').textContent = settings.google_listing_name || settings.business_name;
-  document.getElementById('footer-addr').textContent = fullAddr;
-  document.getElementById('footer-contact').textContent =
-    `Shop & Parts: ${settings.phone} • U-Haul: ${settings.uhaul_phone || '(253) 948-3487'} • ${settings.email}`;
+  setText('header-business-name', settings.business_name);
+  setText('header-tagline', settings.tagline);
+  setText('footer-name', settings.google_listing_name || settings.business_name);
+  setText('footer-addr', fullAddr);
+  setText(
+    'footer-contact',
+    `Shop & Parts: ${settings.phone} • U-Haul: ${settings.uhaul_phone || '(253) 948-3487'} • ${settings.email}`
+  );
 
   const activeItems = inventory.filter((i) => i.quantity > 0 && i.status === 'active');
-  document.getElementById('hero-stock-count').textContent =
-    activeItems.length > 0 ? `${activeItems.length} Active SKUs Synced` : 'Photo Triage Live';
+  setText(
+    'hero-stock-count',
+    activeItems.length > 0 ? `${activeItems.length} In Stock` : 'Live Stock'
+  );
 
   // Build verified cross-platform backlinks map
   const canonBase = getCanonicalBaseUrl(settings);
@@ -164,15 +169,15 @@ function renderAll() {
   const footerSocialEl = document.getElementById('footer-social-links');
   if (footerSocialEl) {
     footerSocialEl.innerHTML = [
-      `<li><a href="${esc(gbpUrl)}" target="_blank" rel="noopener me">Google Business Profile (5.0★ • 87 Reviews) ↗</a></li>`,
-      `<li><a href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Neighborhood Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a></li>`,
-      `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook Business Page (@AldridgeAutos) ↗</a></li>`,
-      `<li><a href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">Facebook Marketplace Profile ↗</a></li>`,
+      `<li><a href="${esc(gbpUrl)}" target="_blank" rel="noopener me">Google (5.0★ • 87) ↗</a></li>`,
+      `<li><a href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul #${esc(settings.uhaul_dealer_id || '046117')} ↗</a></li>`,
+      `<li><a href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Store ↗</a></li>`,
+      `<li><a href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay (aabcas) ↗</a></li>`,
+      `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`,
+      `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook Page ↗</a></li>`,
+      `<li><a href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">FB Marketplace ↗</a></li>`,
       `<li><a href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a></li>`,
-      `<li><a href="${esc(ytUrl)}" target="_blank" rel="noopener me">YouTube ↗</a></li>`,
-      `<li><a href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Storefront ↗</a></li>`,
-      `<li><a href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a></li>`,
-      `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`
+      `<li><a href="${esc(ytUrl)}" target="_blank" rel="noopener me">YouTube ↗</a></li>`
     ].join('');
   }
 
@@ -298,7 +303,7 @@ function renderAll() {
 
   renderSpecials(specials);
   populateCategoryFilter(inventory);
-  renderPartsCards(pickBalancedVehicleShowcase(activeItems, 6), 'home-featured-parts');
+  renderPartsCards(pickBalancedVehicleShowcase(activeItems, 8), 'home-featured-parts');
   renderCatalogFiltered();
   renderUhaulHub(settings);
   showCustomerPolicy('master_return_refund_policy');
@@ -389,18 +394,18 @@ function renderSpecials(specials) {
   grid.innerHTML = specials.slice(0, 3).map((sp) => `
     <article class="special-card">
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-          <span class="badge badge-warn">${esc(sp.badge)}</span>
-          <span style="font-size:0.75rem;color:var(--text-muted);">Exp: ${esc(sp.valid_until)}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+          <span class="badge" style="background:var(--bg-subtle);color:var(--text-secondary);border:1px solid var(--border-light);">${esc(sp.badge)}</span>
+          <span style="font-size:0.74rem;color:var(--text-muted);">Exp ${esc(sp.valid_until)}</span>
         </div>
-        <h3 style="margin:0 0 0.3rem;font-size:1.05rem;">${esc(sp.title)}</h3>
-        <div style="font-weight:800;color:var(--brand-amber);font-size:1.1rem;margin-bottom:0.45rem;">${esc(sp.discount_text)}</div>
-        <p style="font-size:0.84rem;color:var(--text-secondary);margin:0 0 0.9rem;">${esc(sp.description)}</p>
+        <h3 style="margin:0 0 0.28rem;font-size:0.98rem;font-weight:800;color:var(--text-primary);">${esc(sp.title)}</h3>
+        <div style="font-weight:800;color:var(--text-primary);font-family:var(--font-mono);font-size:1.05rem;margin-bottom:0.4rem;">${esc(sp.discount_text)}</div>
+        <p style="font-size:0.82rem;color:var(--text-secondary);margin:0 0 0.9rem;line-height:1.42;">${esc(sp.description)}</p>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-        <span class="promo-code-box">CODE: ${esc(sp.promo_code)}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;padding-top:0.65rem;border-top:1px solid var(--border-light);">
+        <span class="promo-code-box">${esc(sp.promo_code)}</span>
         <button type="button" class="btn btn-outline btn-sm" onclick="shareSpecial(${sp.id}, '${esc(sp.title)}', '${esc(sp.promo_code)}')">
-          Share w/ Friend (${sp.share_count || 0})
+          Share (${sp.share_count || 0})
         </button>
       </div>
     </article>
@@ -2097,17 +2102,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     state.deferredInstallPrompt = e;
-    document.getElementById('btn-install-pwa').style.display = 'inline-flex';
+    const installBtn = document.getElementById('btn-install-pwa');
+    if (installBtn) installBtn.style.display = 'inline-flex';
   });
 
-  document.getElementById('btn-install-pwa').addEventListener('click', async () => {
+  document.getElementById('btn-install-pwa')?.addEventListener('click', async () => {
     if (!state.deferredInstallPrompt) return;
     state.deferredInstallPrompt.prompt();
     state.deferredInstallPrompt = null;
-    document.getElementById('btn-install-pwa').style.display = 'none';
+    const installBtn = document.getElementById('btn-install-pwa');
+    if (installBtn) installBtn.style.display = 'none';
   });
 
-  document.getElementById('btn-enable-push').addEventListener('click', async () => {
+  document.getElementById('btn-enable-push')?.addEventListener('click', async () => {
     if (!('Notification' in window)) {
       showToast('Push notifications require a modern mobile/desktop browser.');
       return;

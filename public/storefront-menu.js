@@ -131,38 +131,39 @@
 
       return `
         <article class="chef-special-card">
-          <div class="chef-special-media" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to view full OEM specs &amp; multi-angle photos">
+          <div class="chef-special-media" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to view full OEM specs &amp; multi-angle photos">
             <img src="${esc(img)}" alt="${esc(item.title)}" loading="lazy" />
-            <span class="chef-ribbon">Featured Tested Assembly • Ready for Bay Install</span>
-            <span class="chef-stock-pill">Only 1 on Shelf</span>
+            <span class="chef-stock-pill">In Stock • 1 of 1</span>
           </div>
           <div class="chef-special-body">
-            <div class="chef-special-sku mono">${esc(item.sku)} • ${esc(item.fitment_years || '')} ${esc(item.fitment_make || '')} ${esc(item.fitment_model || '')}</div>
+            <div class="chef-special-sku mono">${esc([item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' '))} • ${esc(item.sku)}</div>
             <h4 class="pdm-clickable-title" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">${esc(item.title)}</h4>
             <div class="chef-dual-row">
               <div class="chef-opt">
-                <span class="chef-opt-lbl">Option A • Carry-Out</span>
+                <span class="chef-opt-lbl">Carry-Out</span>
                 <strong class="chef-opt-price">$${partPrice.toFixed(2)}</strong>
               </div>
-              <div class="chef-opt chef-opt-combo">
-                <span class="chef-opt-lbl">Option B • House Special Installed</span>
+              <div class="chef-opt">
+                <span class="chef-opt-lbl">Bay Installed</span>
                 <strong class="chef-opt-price">$${installCombo.toFixed(2)}</strong>
               </div>
             </div>
-            <div class="member-blur-strip ${isUnlocked ? 'unlocked' : ''}" onclick="window.openMembershipModal('vip_driver_pass')">
-              <span>${isUnlocked ? '🔓 Member Unlocked:' : '🔒 Member Pricing:'}</span>
-              <span class="member-blur-nums">VIP $${vip.toFixed(2)} • Shop Pro $${b2b.toFixed(2)} (-${b2bPct}%)</span>
-              ${isUnlocked ? '' : '<span class="member-unlock-cta">Unlock →</span>'}
+            <div class="member-blur-strip ${isUnlocked ? 'unlocked' : ''}" onclick="window.openMembershipModal('vip_driver_pass')" role="button" tabindex="0">
+              <span>${isUnlocked ? 'Member:' : 'VIP / Pro:'}</span>
+              <span class="member-blur-nums">$${vip.toFixed(2)} / $${b2b.toFixed(2)} (-${b2bPct}%)</span>
+              ${isUnlocked ? '' : '<span class="member-unlock-cta">Unlock</span>'}
             </div>
-            <div class="chef-cta-row" style="flex-wrap:wrap;">
-              <button type="button" class="btn-specs-clean" style="flex:1 1 100%;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
-                🔍 View Full Specs &amp; Photos
-              </button>
-              <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="selectPartAndBuy(${item.id}, true)">
-                Book Installed at Shop
-              </button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="selectPartAndBuy(${item.id}, false)">
-                Add to Cart
+            <div class="chef-cta-row">
+              <div class="chef-cta-pair">
+                <button type="button" class="btn btn-primary btn-sm" onclick="selectPartAndBuy(${item.id}, false)">
+                  Add to Cart
+                </button>
+                <button type="button" class="btn btn-dark btn-sm" onclick="selectPartAndBuy(${item.id}, true)">
+                  Book Bay
+                </button>
+              </div>
+              <button type="button" class="btn-specs-clean" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
+                View Full Specs &amp; Photos
               </button>
             </div>
           </div>
@@ -171,56 +172,72 @@
     }).join('');
 
     const html = `
-      <div class="chef-menu-board">
+      <section class="chef-menu-board" aria-label="Featured Tested Assemblies">
         <div class="chef-menu-head">
           <div>
-            <div class="chef-eyebrow">ALDRIDGE AUTO'S HOUSE BOARD • 5115 66TH ST W, BLDG B • UNIVERSITY PLACE, WA 98467</div>
-            <h3>Shop Specials &amp; High-Margin Tested Assemblies</h3>
-            <p>Inspected on our own bench by our 5.0★ mechanics — carry out today or pair with certified <strong>$${laborRate.toFixed(2)}/hr</strong> House Special bay installation &amp; warranty.</p>
+            <h3>Featured Tested Assemblies</h3>
+            <p>Bench-inspected 1-of-1 OEM assemblies ready for carry-out, nationwide parcel shipping, or certified $${laborRate.toFixed(2)}/hr bay install.</p>
           </div>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-            <button type="button" class="btn btn-primary btn-sm" onclick="window.openMembershipModal('vip_driver_pass')">🔓 Unlock 15%–25% Member Pricing</button>
-            <button type="button" class="btn btn-outline btn-sm" onclick="switchCustomerView('view-parts')">View Full Parts Menu →</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="switchCustomerView('view-parts')">View All OEM Parts →</button>
           </div>
         </div>
         <div class="chef-specials-grid">${cardsHtml}</div>
-      </div>
+      </section>
     `;
     hosts.forEach((h) => { h.innerHTML = html; });
   }
 
   function renderMemberHeaderBar() {
     const bar = document.getElementById('member-club-banner');
-    if (!bar) return;
+    const hdrBtn = document.getElementById('btn-header-member');
     const m = getEffectiveDiscountMember();
-    if (m && m.status !== 'unenrolled') {
-      const tierBadge = m.tier_key === 'b2b_dealer_pro'
-        ? 'B2B Partner Shop / Dealer Pro (20–25% Off Parts)'
+    const isSignedIn = Boolean(m && m.status !== 'unenrolled');
+
+    if (hdrBtn) {
+      if (isSignedIn) {
+        const firstName = String(m.full_name || 'Member').trim().split(/\s+/)[0];
+        hdrBtn.textContent = `✓ ${firstName}`;
+        hdrBtn.classList.add('member-active');
+        hdrBtn.title = `Signed in as ${m.full_name} (${m.member_code || 'Member'})`;
+      } else {
+        hdrBtn.textContent = 'Member Sign In';
+        hdrBtn.classList.remove('member-active');
+        hdrBtn.title = 'Sign in or join Garage Club / VIP / Shop Pro';
+      }
+    }
+
+    if (!bar) return;
+    if (isSignedIn) {
+      const tierLabel = m.tier_key === 'b2b_dealer_pro'
+        ? 'Shop Pro (20–25% Off Parts)'
         : (m.tier_key === 'vip_driver_pass'
-          ? 'VIP Driver / Fleet Pass (15% Off Parts + 10% Off Bay Labor)'
-          : 'Garage Club Basic (My Garage Saved + 10% Off 1st Bay Labor)');
+          ? 'VIP Pass (15% Off Parts + 10% Bay Labor)'
+          : 'Garage Club Basic');
       bar.innerHTML = `
-        <div class="member-banner-inner unlocked">
-          <div>
-            <strong>🔓 Welcome back, ${esc(m.full_name)}!</strong>
-            <span>Active Tier: <strong>${esc(tierBadge)}</strong> • Member ID: <code>${esc(m.member_code)}</code>${m.vehicle_make ? ` • Garage: ${esc([m.vehicle_year, m.vehicle_make, m.vehicle_model].filter(Boolean).join(' '))}` : ''}</span>
+        <div class="hero-trust-strip unlocked">
+          <div class="hero-trust-items">
+            <span><strong>${esc(m.full_name)}</strong> • ${esc(tierLabel)}</span>
+            <span>Member ID: <code>${esc(m.member_code)}</code></span>
           </div>
-          <div style="display:flex;gap:0.45rem;flex-wrap:wrap;">
-            ${m.tier_key === 'garage_club_basic' ? '<button type="button" class="btn btn-primary btn-sm" onclick="window.openMembershipModal(\'vip_driver_pass\')">Upgrade to VIP (-15% Parts)</button>' : ''}
-            <button type="button" class="btn btn-outline btn-sm" onclick="window.signOutMemberAccount()">Sign Out</button>
+          <div class="hero-trust-cta">
+            ${m.tier_key === 'garage_club_basic' ? '<button type="button" class="hero-link-subtle" onclick="window.openMembershipModal(\'vip_driver_pass\')">Upgrade to VIP (-15%)</button>' : ''}
+            <button type="button" class="hero-link-subtle" onclick="window.signOutMemberAccount()">Sign Out</button>
           </div>
         </div>
       `;
     } else {
       bar.innerHTML = `
-        <div class="member-banner-inner">
-          <div>
-            <strong>★ 5.0 Google Rated (87 Reviews) • Plain-English Neighborhood Shop Guarantee</strong>
-            <span>Public prices stay 100% transparent — join <strong>Garage Club ($0/mo)</strong>, <strong>VIP Driver ($19.99/mo • 15% Off Parts)</strong>, or <strong>Shop Pro ($79/mo • 20–25% Wholesale)</strong> in 10 seconds.</span>
+        <div class="hero-trust-strip">
+          <div class="hero-trust-items">
+            <span><strong>5.0★ Google Rated</strong> (87 Reviews)</span>
+            <span>•</span>
+            <span><strong>1-of-1 Verified OEM Stock</strong> (Zero Double-Booking)</span>
+            <span>•</span>
+            <span>Save <strong>15%–25%</strong> with VIP Driver or Shop Pro</span>
           </div>
-          <div style="display:flex;gap:0.45rem;flex-wrap:wrap;">
-            <button type="button" class="btn btn-primary btn-sm" onclick="window.openMembershipModal('vip_driver_pass')">🔓 Unlock Member Pricing (10s)</button>
-            <button type="button" class="btn btn-outline btn-sm" onclick="window.openMembershipModal('garage_club_basic', 'lookup')">Member Sign In</button>
+          <div class="hero-trust-cta">
+            <button type="button" class="hero-link-subtle" onclick="window.openMembershipModal('vip_driver_pass')">Unlock Member Pricing →</button>
           </div>
         </div>
       `;
@@ -347,12 +364,15 @@
   function rerenderStorefrontMenus() {
     renderChefSpecialsMenu();
     if (window.state?.data?.inventory) {
-      const active = window.state.data.inventory.filter((i) => i && i.quantity > 0 && i.status === 'active');
-      const featured6 = typeof window.pickBalancedVehicleShowcase === 'function'
-        ? window.pickBalancedVehicleShowcase(active, 6)
-        : active.slice(0, 6);
-      renderRestaurantMenuPartsCards(featured6, 'home-featured-parts');
-      if (typeof window.renderCatalogFiltered === 'function') window.renderCatalogFiltered();
+      if (typeof window.renderCatalogFiltered === 'function') {
+        window.renderCatalogFiltered();
+      } else {
+        const active = window.state.data.inventory.filter((i) => i && i.quantity > 0 && i.status === 'active');
+        const featured8 = typeof window.pickBalancedVehicleShowcase === 'function'
+          ? window.pickBalancedVehicleShowcase(active, 8)
+          : active.slice(0, 8);
+        renderRestaurantMenuPartsCards(featured8, 'home-featured-parts');
+      }
     }
   }
 
@@ -366,7 +386,7 @@
       <div class="modal-dialog" style="max-width:740px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;margin-bottom:0.85rem;">
           <div>
-            <div class="eyebrow-label" style="color:#c2410c;">ALDRIDGE AUTO'S GARAGE CLUB • INSTANT MEMBER PRICING</div>
+            <div class="eyebrow-label">ALDRIDGE AUTO'S GARAGE CLUB • INSTANT MEMBER PRICING</div>
             <h3 style="margin:0.1rem 0 0;">Unlock Member &amp; Shop Wholesale Pricing in 10 Seconds</h3>
           </div>
           <button type="button" class="btn btn-sm btn-outline" onclick="window.closeMembershipModal()">Close ✕</button>

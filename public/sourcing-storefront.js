@@ -118,35 +118,41 @@
       memberRibbon = `<div class="member-blur-strip" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')" role="button" tabindex="0"><span>🔒 Member Pricing:</span><span class="member-blur-nums">VIP ${money(vipPrice)} • Pro ${money(proPrice)}</span><span class="member-unlock-cta">Unlock 10s</span></div>`;
     }
 
-    const buySubtext = isHeavy ? 'Free Counter Pickup • University Place 98467' : 'Ships Fast or Free 98467 Counter Pickup';
+    const buySubtext = isHeavy ? 'Free 98467 Pickup' : 'Ships Fast or Free 98467 Pickup';
     const hasInstall = Number(item.install_labor_hours || 0) > 0;
 
     return `
       <article class="clean-part-card" data-sku="${esc(item.sku)}">
-        <div class="clean-part-media" style="cursor:pointer;" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to inspect full OEM specs &amp; multi-angle photos">
+        <div class="clean-part-media" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})" title="Click to inspect full OEM specs &amp; multi-angle photos">
           <img src="${esc(photos[0])}" alt="${esc(item.title)}" loading="lazy" />
-          <span class="clean-part-badge ${isHeavy ? 'pickup-badge' : ''}">${isHeavy ? '📍 Ready at 98467 Shop' : '✓ In Stock • Ready Today'}</span>
-          ${photos.length > 1 ? `<span class="clean-part-photo-pill">📷 ${photos.length} Photos</span>` : ''}
+          <span class="clean-part-badge ${isHeavy ? 'pickup-badge' : ''}">${isHeavy ? '98467 Pickup' : 'In Stock'}</span>
+          ${photos.length > 1 ? `<span class="clean-part-photo-pill">${photos.length} Photos</span>` : ''}
         </div>
         <div class="clean-part-body">
-          <div class="clean-part-fitment">Fits ${esc(fitmentLine)}</div>
+          <div class="clean-part-fitment">${esc(fitmentLine)}</div>
           <h3 class="clean-part-title pdm-clickable-title" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">${esc(item.title)}</h3>
-          ${mpn ? `<span class="clean-part-mpn">OEM # ${esc(mpn)}</span>` : ''}
+          <div class="clean-part-meta-row">
+            ${mpn ? `<span class="clean-part-mpn">OEM #${esc(mpn)}</span>` : `<span class="clean-part-mpn">${esc(item.sku)}</span>`}
+          </div>
+          <div class="clean-part-price-line">
+            <span class="clean-part-price">${money(displayBuyPrice)}</span>
+            ${hasInstall ? `<span class="clean-part-install-hint">Installed: ${money(installPrice)}</span>` : ''}
+          </div>
           ${memberRibbon}
           <div class="clean-part-actions">
-            <button type="button" class="btn-specs-clean" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
-              🔍 View Full Specs &amp; Photos
-            </button>
             <button type="button" class="btn-buy-clean" onclick="window.selectPartAndBuy && window.selectPartAndBuy(${Number(item.id)}, false)">
               <span>Add to Cart — ${money(displayBuyPrice)}</span>
               <small>${buySubtext}</small>
             </button>
             ${hasInstall ? `
               <button type="button" class="btn-install-clean" onclick="window.selectPartAndBuy && window.selectPartAndBuy(${Number(item.id)}, true)">
-                <span>Book Installed at Shop — ${money(installPrice)}</span>
-                <small>Part + 5.0★ Certified Bay Install</small>
+                <span>Book Bay Install — ${money(installPrice)}</span>
+                <small>Part + 5.0★ Certified Shop Install</small>
               </button>
             ` : ''}
+            <button type="button" class="btn-specs-clean" onclick="window.openPublicProductModal && window.openPublicProductModal(${Number(item.id)})">
+              View Full Specs &amp; Photos
+            </button>
           </div>
         </div>
       </article>
@@ -218,7 +224,7 @@
       <div class="vehicle-selector-card">
         <div class="vehicle-selector-head">
           <h3>Step-by-Step Vehicle Selector</h3>
-          <span style="font-size:0.82rem;color:#6c5945;font-weight:700;">Pick your car to see ONLY parts that fit — zero clutter</span>
+          <span style="font-size:0.8rem;color:var(--text-muted);font-weight:600;">Filter by Year, Make, Model &amp; System for verified fitment</span>
         </div>
         <div class="vehicle-steps-grid">
           <div class="vehicle-step-box">
@@ -379,75 +385,63 @@
       }
     }
 
-    // Keep Home "Fresh Off the Shelf" crisp & balanced across 6 distinct donor vehicles (never 6 consecutive Fiat 500s!)
+    // Keep Home "Fresh Off the Shelf" crisp & balanced across 8 distinct donor vehicles (4x2 uniform grid)
     const homeFeatured = document.getElementById('home-featured-parts');
     if (homeFeatured) {
       const catalog = getActiveCatalog();
-      const top6 = typeof window.pickBalancedVehicleShowcase === 'function'
-        ? window.pickBalancedVehicleShowcase(catalog, 6)
-        : catalog.slice(0, 6);
-      if (top6.length) homeFeatured.innerHTML = top6.map(renderCleanZeroJargonCard).join('');
+      const top8 = typeof window.pickBalancedVehicleShowcase === 'function'
+        ? window.pickBalancedVehicleShowcase(catalog, 8)
+        : catalog.slice(0, 8);
+      if (top8.length) homeFeatured.innerHTML = top8.map(renderCleanZeroJargonCard).join('');
     }
   }
 
-  /* ==================== 3. SHOP SERVICES & BAY MENU + SOURCING BANNER ==================== */
+  /* ==================== 3. POPULAR REPAIR & MAINTENANCE MENU (CLEAN 4x2 GRID) ==================== */
   function renderSourcingBanner() {
+    // Mid-page sourcing banner intentionally omitted on Overview; accessible via Hero quick-action & OEM Parts Store.
     const host = document.getElementById('home-sourcing-banner');
-    if (!host) return;
-    host.innerHTML = `
-      <div class="sourcing-hero-banner">
-        <div>
-          <div style="font-size:0.74rem;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#fdba74;">COMMERCIAL WHOLESALE NETWORK • UNIVERSITY PLACE 98467</div>
-          <h3>If We Don't Have It, We Can Get It — Instant Part Finder</h3>
-          <p>Looking for an alternator, brake kit, engine, transmission, or module not currently on our shelf? Get an instant quote priced at our honest <strong>+50% over wholesale</strong> — counter pickup or installed in our 5.0★ bays.</p>
-        </div>
-        <div style="display:flex;gap:0.65rem;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary" onclick="window.openPartSourcingModal && window.openPartSourcingModal()">Instant Part Finder Quote</button>
-          <button type="button" class="btn btn-outline" style="background:rgba(255,255,255,0.1);color:#fff;border-color:rgba(255,255,255,0.35);" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure What You Need?</button>
-        </div>
-      </div>
-    `;
+    if (host) host.innerHTML = '';
   }
 
   function buildServiceMenuHtml(services) {
     return `
-      <section class="services-menu-section" id="shop-services-menu">
+      <section class="services-menu-section" id="shop-services-menu" aria-label="Popular Repair and Maintenance Menu">
         <div class="services-menu-header">
           <div>
-            <div class="eyebrow-label" style="margin-bottom:0;">INSTANT BOOKABLE BAY MENU • 5115 66TH ST W, BLDG B • UNIVERSITY PLACE, WA 98467</div>
-            <h2>Shop Services &amp; Certified Bay Menu</h2>
-            <p style="margin:0;color:#5c4b39;font-size:0.9rem;">Clear menu pricing with zero guesswork — book your bay slot or storage spot online in seconds.</p>
+            <h2>Popular Repair &amp; Maintenance Menu</h2>
+            <p>Transparent shop menu pricing at 5115 66th St W, Bldg B — book your bay slot or storage spot online.</p>
           </div>
-          <button type="button" class="btn btn-dark btn-sm" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure Which Service? Ask Our Helper</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="window.openGuidedHelperModal && window.openGuidedHelperModal()">Not Sure Which Service?</button>
         </div>
         <div class="services-menu-grid">
           ${services.map((svc) => {
             const isFree = Number(svc.price_usd) === 0;
             const isHourly = svc.billing_type === 'hourly_block';
+            const badgeText = isFree ? 'FREE' : String(svc.badge || '').split('•')[0].trim();
+            const bullets = (svc.includes || []).slice(0, 3);
             return `
-              <div class="service-menu-card ${svc.highlight ? 'featured-svc' : ''}" data-svc-card="${esc(svc.id)}">
-                <span class="service-badge ${isFree ? 'free-badge' : ''}">${esc(svc.badge)}</span>
-                <div class="service-price-row">
-                  <span class="service-price-big ${isFree ? 'free-price' : ''}" data-svc-price="${esc(svc.id)}">${esc(svc.price_label)}</span>
-                  <span style="font-size:0.76rem;color:#6c5945;font-weight:700;">${esc(svc.duration_label)}</span>
+              <article class="service-menu-card" data-svc-card="${esc(svc.id)}">
+                <div class="service-card-top">
+                  <span class="service-badge ${isFree ? 'free-badge' : ''}">${esc(badgeText)}</span>
+                  <span class="service-duration">${esc(svc.duration_label)}</span>
                 </div>
-                <h3 style="margin:0;font-size:1rem;color:#1f1711;line-height:1.3;">${esc(svc.name)}</h3>
-                <p style="margin:0;font-size:0.84rem;color:#5c4b39;line-height:1.45;">${esc(svc.summary)}</p>
+                <div class="service-price-big ${isFree ? 'free-price' : ''}" data-svc-price="${esc(svc.id)}">${esc(svc.price_label)}</div>
+                <h3 class="service-card-title">${esc(svc.short_name || svc.name)}</h3>
                 <ul class="service-includes">
-                  ${(svc.includes || []).map((inc) => `<li>${esc(inc)}</li>`).join('')}
+                  ${bullets.map((inc) => `<li>${esc(inc)}</li>`).join('')}
                 </ul>
                 ${isHourly ? `
                   <div class="hourly-picker-row">
-                    <label for="hrs-${esc(svc.id)}">Bay Hours (1–8 hrs):</label>
-                    <select id="hrs-${esc(svc.id)}" class="select" style="width:auto;padding:0.28rem 0.55rem;" onchange="window.updateHourlyServicePrice('${esc(svc.id)}', this.value)">
+                    <label for="hrs-${esc(svc.id)}">Hours:</label>
+                    <select id="hrs-${esc(svc.id)}" class="select" style="width:auto;padding:0.24rem 0.5rem;font-size:0.78rem;" onchange="window.updateHourlyServicePrice('${esc(svc.id)}', this.value)">
                       ${[1, 2, 3, 4, 5, 6, 7, 8].map((h) => `<option value="${h}">${h} hr${h > 1 ? 's' : ''} — ${money(h * svc.price_usd)}</option>`).join('')}
                     </select>
                   </div>
                 ` : ''}
-                <button type="button" class="btn ${isFree ? 'btn-primary' : 'btn-dark'}" style="width:100%;margin-top:auto;" onclick="window.openServiceBookingModal('${esc(svc.id)}')">
-                  ${esc(svc.cta_label)}
+                <button type="button" class="btn ${svc.highlight ? 'btn-primary' : 'btn-dark'} btn-sm" style="width:100%;margin-top:auto;" onclick="window.openServiceBookingModal('${esc(svc.id)}')">
+                  Book Bay
                 </button>
-              </div>
+              </article>
             `;
           }).join('')}
         </div>
@@ -485,10 +479,10 @@
     const wrap = document.createElement('div');
     wrap.id = id;
     wrap.className = 'modal-backdrop';
-    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(20,14,9,0.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.62);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;';
     wrap.innerHTML = `
-      <div style="background:#fffdf9;border:1.5px solid #e2d2ba;border-radius:18px;max-width:660px;width:100%;max-height:92vh;overflow-y:auto;padding:1.35rem 1.45rem;box-shadow:0 24px 60px rgba(0,0,0,0.32);position:relative;">
-        <button type="button" aria-label="Close" onclick="document.getElementById('${id}')?.remove()" style="position:absolute;top:12px;right:14px;background:#f4ece0;border:1px solid #dfd0b8;border-radius:999px;width:32px;height:32px;font-weight:800;cursor:pointer;">✕</button>
+      <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;max-width:660px;width:100%;max-height:92vh;overflow-y:auto;padding:1.35rem 1.45rem;box-shadow:0 24px 60px rgba(15,23,42,0.28);position:relative;">
+        <button type="button" aria-label="Close" onclick="document.getElementById('${id}')?.remove()" style="position:absolute;top:12px;right:14px;background:#F1F5F9;border:1px solid #CBD5E1;color:#0F172A;border-radius:8px;width:32px;height:32px;font-weight:700;cursor:pointer;">✕</button>
         ${innerHtml}
       </div>
     `;
@@ -500,8 +494,8 @@
   window.openPartSourcingModal = function (prefill = {}) {
     openCustomModal('part-sourcing-modal', `
       <div class="eyebrow-label" style="margin-bottom:0.25rem;">IF WE DON'T HAVE IT, WE CAN GET IT • +50% OVER WHOLESALE</div>
-      <h2 style="margin:0 0 0.35rem;font-family:'Fraunces',Georgia,serif;color:#1f1711;">Instant Part Finder &amp; Shop Quote</h2>
-      <p style="margin:0 0 1rem;font-size:0.88rem;color:#5c4b39;">Tell us your car and what you need. We check our live shelf AND commercial wholesale network (priced transparently at +50% markup) plus optional 5.0★ bay installation.</p>
+      <h2 style="margin:0 0 0.35rem;color:#0F172A;">Instant Part Finder &amp; Shop Quote</h2>
+      <p style="margin:0 0 1rem;font-size:0.88rem;color:#475569;">Tell us your car and what you need. We check our live shelf AND commercial wholesale network (priced transparently at +50% markup) plus optional 5.0★ bay installation.</p>
       <form id="part-sourcing-form">
         <div class="grid-2" style="gap:0.65rem;">
           <div class="form-group"><label>Your Name *</label><input class="input" name="customer_name" required placeholder="Alex Rivera" /></div>
@@ -530,7 +524,7 @@
       const fd = new FormData(e.target);
       const body = Object.fromEntries(fd.entries());
       const out = document.getElementById('part-sourcing-result');
-      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">Checking shelf & commercial wholesale network...</p>';
+      out.innerHTML = '<p style="color:#475569;font-weight:700;">Checking shelf & commercial wholesale network...</p>';
       try {
         const r = await fetch('/api/parts-sourcing/quote', {
           method: 'POST',
@@ -541,36 +535,36 @@
         if (!r.ok || !d.ok) throw new Error(d.error || 'Could not calculate quote');
         const q = d.quote;
         const inStockHtml = (d.in_stock_matches || []).length
-          ? `<div style="margin-top:0.65rem;padding:0.6rem;background:#ecfdf5;border:1px solid #86efac;border-radius:10px;font-size:0.83rem;">
+          ? `<div style="margin-top:0.65rem;padding:0.6rem;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;font-size:0.83rem;">
               <strong>Good news — similar verified OEM parts already in stock today:</strong>
               <ul style="margin:0.35rem 0 0;padding-left:1.1rem;">
-                ${d.in_stock_matches.map((m) => `<li><strong>${esc(m.title)}</strong> — ${money(m.price_we_pull)} <button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 8px;" onclick="document.getElementById('part-sourcing-modal')?.remove(); window.openPartDetail && window.openPartDetail('${esc(m.sku)}')">View</button></li>`).join('')}
+                ${d.in_stock_matches.map((m) => `<li><strong>${esc(m.title)}</strong> — ${money(m.price_we_pull)} <button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 8px;" onclick="document.getElementById('part-sourcing-modal')?.remove(); window.openPublicProductModal && window.openPublicProductModal('${esc(m.sku)}')">View</button></li>`).join('')}
               </ul>
             </div>`
           : '';
         out.innerHTML = `
-          <div style="background:#fff7ed;border:1.5px solid #fb923c;border-radius:12px;padding:0.9rem;">
-            <div style="font-size:0.75rem;font-weight:800;color:#9a3412;text-transform:uppercase;">Quote Confirmed • Ref ${esc(q.request_code)}</div>
-            <h4 style="margin:0.2rem 0 0.45rem;color:#1f1711;">${esc(q.part_label)}</h4>
+          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;padding:0.9rem;">
+            <div style="font-size:0.73rem;font-weight:700;color:#64748B;text-transform:uppercase;">Quote Confirmed • Ref ${esc(q.request_code)}</div>
+            <h4 style="margin:0.2rem 0 0.45rem;color:#0F172A;">${esc(q.part_label)}</h4>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;margin-bottom:0.65rem;">
-              <div style="background:#fff;border:1px solid #e5d5bc;border-radius:10px;padding:0.6rem;">
-                <div style="font-size:0.73rem;color:#6c5945;font-weight:700;">SOURCED PART ONLY (+50% Markup)</div>
-                <div style="font-size:1.3rem;font-weight:800;color:#1f1711;">${money(q.retail_price_usd)}</div>
-                <div style="font-size:0.74rem;color:#5c4b39;">${esc(q.eta_label)}</div>
+              <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:0.6rem;">
+                <div style="font-size:0.72rem;color:#64748B;font-weight:700;">SOURCED PART ONLY (+50% Markup)</div>
+                <div style="font-size:1.25rem;font-weight:800;color:#0F172A;font-family:var(--font-mono);">${money(q.retail_price_usd)}</div>
+                <div style="font-size:0.74rem;color:#475569;">${esc(q.eta_label)}</div>
               </div>
-              <div style="background:#fff;border:1px solid #fdba74;border-radius:10px;padding:0.6rem;">
-                <div style="font-size:0.73rem;color:#9a3412;font-weight:700;">TURNKEY INSTALLED AT SHOP</div>
-                <div style="font-size:1.3rem;font-weight:800;color:#9a3412;">${money(q.installed_total_usd)}</div>
-                <div style="font-size:0.74rem;color:#5c4b39;">Includes ~${q.estimated_labor_hours} hr @ ${money(q.labor_rate_hourly)}/hr + tax</div>
+              <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:0.6rem;">
+                <div style="font-size:0.72rem;color:#64748B;font-weight:700;">TURNKEY INSTALLED AT SHOP</div>
+                <div style="font-size:1.25rem;font-weight:800;color:#0F172A;font-family:var(--font-mono);">${money(q.installed_total_usd)}</div>
+                <div style="font-size:0.74rem;color:#475569;">Includes ~${q.estimated_labor_hours} hr @ ${money(q.labor_rate_hourly)}/hr + tax</div>
               </div>
             </div>
-            <p style="margin:0 0 0.6rem;font-size:0.82rem;color:#4f4032;">Our parts desk at <strong>5115 66th St W, Bldg B</strong> has your request (${esc(q.request_code)}) and will verify exact VIN fitment & text you confirmation.</p>
+            <p style="margin:0 0 0.6rem;font-size:0.82rem;color:#475569;">Our parts desk at <strong>5115 66th St W, Bldg B</strong> has your request (${esc(q.request_code)}) and will verify exact VIN fitment & text you confirmation.</p>
             <button type="button" class="btn btn-dark btn-sm" onclick="document.getElementById('part-sourcing-modal')?.remove(); window.openServiceBookingModal('svc-hourly-bay')">Reserve Certified Bay Slot Now</button>
             ${inStockHtml}
           </div>
         `;
       } catch (err) {
-        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;">${esc(err.message)}</div>`;
+        out.innerHTML = `<div style="color:#B91C1C;font-weight:700;">${esc(err.message)}</div>`;
       }
     });
   };
@@ -580,8 +574,8 @@
     let selectedSymptom = 'check_engine';
     openCustomModal('guided-helper-modal', `
       <div class="eyebrow-label" style="margin-bottom:0.25rem;">PLAIN-ENGLISH MECHANIC HELPER • ZERO JARGON</div>
-      <h2 style="margin:0 0 0.35rem;font-family:'Fraunces',Georgia,serif;color:#1f1711;">Not Sure What You Need? Tell Us What Your Car Is Doing</h2>
-      <p style="margin:0 0 0.85rem;font-size:0.88rem;color:#5c4b39;">Tap what sounds closest and we will point you to the exact right fix — never guess or buy the wrong part.</p>
+      <h2 style="margin:0 0 0.35rem;color:#0F172A;">Not Sure What You Need? Tell Us What Your Car Is Doing</h2>
+      <p style="margin:0 0 0.85rem;font-size:0.88rem;color:#475569;">Tap what sounds closest and we will point you to the exact right fix — never guess or buy the wrong part.</p>
       <div class="symptom-tile-grid" id="guided-symptom-tiles">
         <button type="button" class="symptom-tile active" data-sym="check_engine">🟡 Check Engine Light On</button>
         <button type="button" class="symptom-tile" data-sym="noises_brakes">🔊 Noises / Shaking / Brakes</button>
@@ -662,8 +656,8 @@
 
     openCustomModal('service-booking-modal', `
       <div class="eyebrow-label" style="margin-bottom:0.25rem;">INSTANT BAY RESERVATION • 5115 66TH ST W, BLDG B • 98467</div>
-      <h2 style="margin:0 0 0.25rem;font-family:'Fraunces',Georgia,serif;color:#1f1711;">${esc(svc.name)}</h2>
-      <p style="margin:0 0 0.9rem;font-size:0.9rem;color:#9a3412;font-weight:800;">
+      <h2 style="margin:0 0 0.25rem;color:#0F172A;">${esc(svc.name)}</h2>
+      <p style="margin:0 0 0.9rem;font-size:0.9rem;color:#475569;font-weight:700;">
         ${svc.billing_type === 'hourly_block' ? `${money(totalUsd)} (${pickedHours} hr @ $174.99/hr)` : esc(svc.price_label)} • ${esc(svc.duration_label)}
       </p>
       <form id="service-booking-form">
@@ -705,7 +699,7 @@
       const body = Object.fromEntries(fd.entries());
       body.service_id = svc.id;
       const out = document.getElementById('service-booking-result');
-      out.innerHTML = '<p style="color:#9a3412;font-weight:700;">Confirming your bay reservation...</p>';
+      out.innerHTML = '<p style="color:#475569;font-weight:700;">Confirming your bay reservation...</p>';
       try {
         const r = await fetch('/api/services/book', {
           method: 'POST',
@@ -719,17 +713,17 @@
           return;
         }
         out.innerHTML = `
-          <div style="background:#ecfdf5;border:1.5px solid #22c55e;border-radius:12px;padding:0.9rem;">
-            <div style="font-size:0.75rem;font-weight:800;color:#166534;text-transform:uppercase;">Confirmed • Booking Code ${esc(d.booking_code)}</div>
-            <h4 style="margin:0.2rem 0 0.35rem;color:#1f1711;">${esc(d.service.name)} — ${esc(d.service.price_label)}</h4>
-            <p style="margin:0;font-size:0.84rem;color:#374151;">
+          <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:0.9rem;">
+            <div style="font-size:0.73rem;font-weight:700;color:#15803D;text-transform:uppercase;">Confirmed • Booking Code ${esc(d.booking_code)}</div>
+            <h4 style="margin:0.2rem 0 0.35rem;color:#0F172A;">${esc(d.service.name)} — ${esc(d.service.price_label)}</h4>
+            <p style="margin:0;font-size:0.84rem;color:#475569;">
               Scheduled for <strong>${esc(d.appointment.preferred_date)} at ${esc(d.appointment.preferred_time)}</strong><br/>
-              📍 ${esc(d.appointment.location)}
+              ${esc(d.appointment.location)}
             </p>
           </div>
         `;
       } catch (err) {
-        out.innerHTML = `<div style="color:#b91c1c;font-weight:700;">${esc(err.message)}</div>`;
+        out.innerHTML = `<div style="color:#B91C1C;font-weight:700;">${esc(err.message)}</div>`;
       }
     });
   };
