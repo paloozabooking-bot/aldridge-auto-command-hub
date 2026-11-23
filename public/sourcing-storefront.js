@@ -379,10 +379,13 @@
       }
     }
 
-    // Also keep Home featured parts crisp & limited to 6 clean cards
+    // Keep Home "Fresh Off the Shelf" crisp & balanced across 6 distinct donor vehicles (never 6 consecutive Fiat 500s!)
     const homeFeatured = document.getElementById('home-featured-parts');
     if (homeFeatured) {
-      const top6 = getActiveCatalog().slice(0, 6);
+      const catalog = getActiveCatalog();
+      const top6 = typeof window.pickBalancedVehicleShowcase === 'function'
+        ? window.pickBalancedVehicleShowcase(catalog, 6)
+        : catalog.slice(0, 6);
       if (top6.length) homeFeatured.innerHTML = top6.map(renderCleanZeroJargonCard).join('');
     }
   }

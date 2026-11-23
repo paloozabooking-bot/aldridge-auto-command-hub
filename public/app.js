@@ -47,9 +47,10 @@ async function loadBootstrap() {
 
 /* ==================== NAVIGATION & MODES ==================== */
 function switchCustomerView(viewId) {
-  document.getElementById('mode-customer-btn').classList.add('active');
-  document.getElementById('mode-staff-btn').classList.remove('active');
-  document.getElementById('customer-nav').style.display = 'flex';
+  document.getElementById('mode-customer-btn')?.classList.add('active');
+  document.getElementById('mode-staff-btn')?.classList.remove('active');
+  const navEl = document.getElementById('customer-nav');
+  if (navEl) navEl.style.display = 'flex';
 
   document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
   const target = document.getElementById(viewId);
@@ -61,10 +62,11 @@ function switchCustomerView(viewId) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function activateStaffMode(staffTabId = 'staff-review') {
-  document.getElementById('mode-staff-btn').classList.add('active');
-  document.getElementById('mode-customer-btn').classList.remove('active');
-  document.getElementById('customer-nav').style.display = 'none';
+function activateStaffMode(staffTabId = 'staff-intake') {
+  document.getElementById('mode-staff-btn')?.classList.add('active');
+  document.getElementById('mode-customer-btn')?.classList.remove('active');
+  const navEl = document.getElementById('customer-nav');
+  if (navEl) navEl.style.display = 'none';
 
   document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
   document.getElementById('view-staff').classList.add('active');
@@ -165,15 +167,12 @@ function renderAll() {
       `<li><a href="${esc(gbpUrl)}" target="_blank" rel="noopener me">Google Business Profile (5.0★ • 87 Reviews) ↗</a></li>`,
       `<li><a href="${esc(uhaulUrl)}" target="_blank" rel="noopener me">U-Haul Neighborhood Dealer #${esc(settings.uhaul_dealer_id || '046117')} ↗</a></li>`,
       `<li><a href="${esc(fbUrl)}" target="_blank" rel="noopener me">Facebook Business Page (@AldridgeAutos) ↗</a></li>`,
-      `<li><a href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">Facebook Personal Marketplace Profile ↗</a></li>`,
+      `<li><a href="${esc(fbMarketplaceUrl)}" target="_blank" rel="noopener me">Facebook Marketplace Profile ↗</a></li>`,
       `<li><a href="${esc(igUrl)}" target="_blank" rel="noopener me">Instagram ↗</a></li>`,
       `<li><a href="${esc(ytUrl)}" target="_blank" rel="noopener me">YouTube ↗</a></li>`,
       `<li><a href="${esc(shopifyUrl)}" target="_blank" rel="noopener me">Shopify Storefront ↗</a></li>`,
       `<li><a href="${esc(ebayUrl)}" target="_blank" rel="noopener me">eBay Store (aabcas) ↗</a></li>`,
-      `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`,
-      `<li><a href="/api/feeds/google-merchant.xml" target="_blank">Google Merchant XML Feed</a></li>`,
-      `<li><a href="/api/feeds/meta-catalog.csv" target="_blank">Meta Commerce Catalog Feed</a></li>`,
-      `<li><a href="/sitemap.xml" target="_blank">SEO XML Sitemap</a></li>`
+      `<li><a href="${esc(offerupUrl)}" target="_blank" rel="noopener me">OfferUp Local ↗</a></li>`
     ].join('');
   }
 
@@ -299,7 +298,7 @@ function renderAll() {
 
   renderSpecials(specials);
   populateCategoryFilter(inventory);
-  renderPartsCards(activeItems.slice(0, 6), 'home-featured-parts');
+  renderPartsCards(pickBalancedVehicleShowcase(activeItems, 6), 'home-featured-parts');
   renderCatalogFiltered();
   renderUhaulHub(settings);
   showCustomerPolicy('master_return_refund_policy');
@@ -321,6 +320,63 @@ function getCanonicalBaseUrl(settings) {
   const raw = settings?.canonical_domain || settings?.public_pwa_url || 'https://aldridgeautosupply.com';
   return String(raw).trim().replace(/\/+$/, '') || 'https://aldridgeautosupply.com';
 }
+
+function pickBalancedVehicleShowcase(items, count = 6, { sortByPrice = false, excludeSkus = new Set() } = {}) {
+  const clean = (Array.isArray(items) ? items : []).filter((i) => {
+    if (!i || i.status !== 'active' || Number(i.quantity || 0) <= 0) return false;
+    if (excludeSkus && excludeSkus.has(String(i.sku || '').toUpperCase())) return false;
+    const hasPhoto = Array.isArray(i.photos) && i.photos.length > 0;
+    return hasPhoto;
+  });
+  if (!clean.length) return [];
+
+  // Group by donor vehicle family (Make + Model) so consecutive cards never repeat the same car model
+  const buckets = new Map();
+  for (const item of clean) {
+    const mk = String(item.fitment_make || '').trim().toUpperCase();
+    const md = String(item.fitment_model || '').trim().toUpperCase().replace(/\s+PICKUP$/i, '');
+    const familyKey = `${mk}|${md}` || `SKU:${item.sku}`;
+    if (!buckets.has(familyKey)) buckets.set(familyKey, []);
+    buckets.get(familyKey).push(item);
+  }
+
+  for (const list of buckets.values()) {
+    list.sort((a, b) => {
+      if (sortByPrice) {
+        const dp = Number(b.price_we_pull || 0) - Number(a.price_we_pull || 0);
+        if (dp !== 0) return dp;
+      }
+      const photoDiff = (b.photos?.length || 0) - (a.photos?.length || 0);
+      if (photoDiff !== 0) return photoDiff;
+      return Number(b.price_we_pull || 0) - Number(a.price_we_pull || 0);
+    });
+  }
+
+  // Order vehicle families by catalog depth (largest fleets represented first, diversified across makes)
+  const orderedFamilies = Array.from(buckets.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([, list]) => list);
+
+  const picked = [];
+  const usedSkus = new Set();
+  let round = 0;
+  while (picked.length < count && round < 10) {
+    let addedInRound = 0;
+    for (const list of orderedFamilies) {
+      if (picked.length >= count) break;
+      const cand = list[round];
+      if (cand && !usedSkus.has(cand.sku)) {
+        usedSkus.add(cand.sku);
+        picked.push(cand);
+        addedInRound++;
+      }
+    }
+    if (addedInRound === 0) break;
+    round++;
+  }
+  return picked;
+}
+window.pickBalancedVehicleShowcase = pickBalancedVehicleShowcase;
 
 /* ==================== SPECIALS & SHARE-TO-FRIEND ==================== */
 function renderSpecials(specials) {
@@ -2076,8 +2132,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     switchCustomerView('view-home');
   });
-  document.getElementById('mode-customer-btn').addEventListener('click', () => switchCustomerView('view-home'));
-  document.getElementById('mode-staff-btn').addEventListener('click', () => activateStaffMode('staff-review'));
+  document.getElementById('mode-customer-btn')?.addEventListener('click', () => switchCustomerView('view-home'));
+  document.getElementById('mode-staff-btn')?.addEventListener('click', () => activateStaffMode('staff-intake'));
   document.querySelectorAll('.staff-tab').forEach((tab) => {
     tab.addEventListener('click', () => switchStaffTab(tab.dataset.staff));
   });

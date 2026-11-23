@@ -91,24 +91,19 @@
   ];
 
   function pickChefSpecialItems() {
-    const inv = (window.state?.data?.inventory || []).filter((i) => i.status === 'active' && Number(i.quantity) > 0);
-    const picked = [];
-    const used = new Set();
-    for (const sku of CHEF_SPECIAL_SKUS) {
-      const hit = inv.find((i) => String(i.sku || '').toUpperCase() === sku);
-      if (hit) {
-        picked.push(hit);
-        used.add(hit.sku);
-      }
+    const inv = (window.state?.data?.inventory || []).filter((i) => i && i.status === 'active' && Number(i.quantity || 0) > 0 && Array.isArray(i.photos) && i.photos.length > 0);
+    if (typeof window.pickBalancedVehicleShowcase === 'function') {
+      return window.pickBalancedVehicleShowcase(inv, 4, { sortByPrice: true });
     }
-    if (picked.length < 4) {
-      const sorted = [...inv]
-        .filter((i) => !used.has(i.sku))
-        .sort((a, b) => Number(b.price_we_pull || 0) - Number(a.price_we_pull || 0));
-      for (const extra of sorted) {
-        if (picked.length >= 4) break;
-        picked.push(extra);
-      }
+    const picked = [];
+    const seenVehicles = new Set();
+    const sorted = [...inv].sort((a, b) => Number(b.price_we_pull || 0) - Number(a.price_we_pull || 0));
+    for (const item of sorted) {
+      if (picked.length >= 4) break;
+      const vKey = `${String(item.fitment_make || '').toUpperCase()}|${String(item.fitment_model || '').toUpperCase()}`;
+      if (seenVehicles.has(vKey)) continue;
+      seenVehicles.add(vKey);
+      picked.push(item);
     }
     return picked;
   }
@@ -352,8 +347,11 @@
   function rerenderStorefrontMenus() {
     renderChefSpecialsMenu();
     if (window.state?.data?.inventory) {
-      const active = window.state.data.inventory.filter((i) => i.quantity > 0 && i.status === 'active');
-      renderRestaurantMenuPartsCards(active.slice(0, 6), 'home-featured-parts');
+      const active = window.state.data.inventory.filter((i) => i && i.quantity > 0 && i.status === 'active');
+      const featured6 = typeof window.pickBalancedVehicleShowcase === 'function'
+        ? window.pickBalancedVehicleShowcase(active, 6)
+        : active.slice(0, 6);
+      renderRestaurantMenuPartsCards(featured6, 'home-featured-parts');
       if (typeof window.renderCatalogFiltered === 'function') window.renderCatalogFiltered();
     }
   }
