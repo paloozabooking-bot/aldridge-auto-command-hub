@@ -12,9 +12,22 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { db, getSettings, computeShippingClass, validateInventoryItemForPublish, logSync } = require('./db');
-const { PROHIBITED_CAT_SKUS, PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS } = require('./audit-sanitizer');
-const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn, resolveCountryOfOrigin } = require('./taxonomy');
+const {
+  db,
+  getSettings,
+  computeShippingClass,
+  validateInventoryItemForPublish,
+  isGhostOrBannedInventoryItem,
+  purgeGhostAndBlockedInventory,
+  logSync
+} = require('./db');
+const { PROHIBITED_CAT_SKUS, PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS, cleanListingTitle } = require('./audit-sanitizer');
+const {
+  resolvePartTaxonomyAndMetafields,
+  sanitizeVerifiedMpn,
+  resolveStructuredOemMpn,
+  resolveCountryOfOrigin
+} = require('./taxonomy');
 
 const SHOP_LABOR_RATE_LOCKED = 174.99;
 
@@ -305,89 +318,77 @@ const VERIFIED_SKU_ENRICHMENTS = {
   }
 };
 
-// Accurate part-type-specific packed weights (lb) and box dimensions (L x W x H in) — NEVER 0x0x0 or 2 lb defaults
-// IMPORTANT: More specific light components MUST precede heavier assemblies so title-first matching is 100% accurate!
+// DETERMINISTIC PART-SPECIFIC PHYSICAL WEIGHT (lb) & PACKED DIMENSIONS (L x W x H in) MATRIX
+// ZERO generic 8.5 lb or 14x10x7 / 14x10x8 fallbacks!
+// IMPORTANT: More specific light sub-components MUST precede heavier assemblies so title-first matching is exact.
 const DIMENSION_RULES = [
-  { match: /\b(door\s*trim\s*panel|interior\s*door|door\s*panel|cargo\s*quarter\s*interior\s*trim)\b/i, weight: 12, l: 42, w: 24, h: 8, labor: 0.8 },
-  { match: /\b(fuel\s*(gas\s*)?filler\s*(housing|pocket|tank\s*cap\s*door\s*hinge)|fuel\s*door\s*hinge)\b/i, weight: 3, l: 10, w: 8, h: 6, labor: 0.8 },
-  { match: /\b(complete\s*door|door\s*shell|front\s*door|rear\s*door|passenger\s*door|driver\s*door)\b/i, weight: 82, l: 48, w: 44, h: 12, labor: 2.5 },
-  { match: /\b(shifter\s*lever|floor\s*shifter|shifter\s*assembly)\b/i, weight: 8, l: 18, w: 12, h: 10, labor: 0.8 },
-  { match: /\b(transmission\s*assembly|automatic\s*transmission|manual\s*transmission)\b/i, weight: 195, l: 38, w: 24, h: 22, labor: 5.5 },
-  { match: /\b(complete\s*front\s*differential.*both\s*(cv\s*)?drive\s*axles|front\s*differential.*cv\s*drive\s*axles)\b/i, weight: 115, l: 48, w: 24, h: 20, labor: 4.5 },
-  { match: /\b(differential\s*assembly|front\s*differential|rear\s*differential|drive\s*axle)\b/i, weight: 82, l: 26, w: 20, h: 18, labor: 3.5 },
-  { match: /\b(complete\s*dashboard\s*pad|instrument\s*carrier\s*shell)\b/i, weight: 32, l: 58, w: 24, h: 18, labor: 3.5 },
-  { match: /\b(dash\s*bezel|cluster\s*dash\s*bezel|cluster\s*surround\s*bezel|console\s*bezel|overhead\s*console)\b/i, weight: 5, l: 20, w: 10, h: 6, labor: 0.6 },
-  { match: /\b(bolster\s*cushion)\b/i, weight: 5, l: 18, w: 10, h: 6, labor: 0.5 },
-  { match: /\b(rear\s*seat|bench\s*seat|car\s*seats|seat\s*pair|backrest\s*pair)\b/i, weight: 76, l: 52, w: 26, h: 18, labor: 1.0 },
-  { match: /\b(front\s*seat|driver\s*seat|passenger\s*seat|bucket\s*seat|car\s*seat|\bseat\b)\b/i, weight: 72, l: 34, w: 24, h: 22, labor: 1.0 },
-  { match: /\b(fender\s*panel|front\s*fender)\b/i, weight: 28, l: 54, w: 32, h: 12, labor: 2.0 },
-  { match: /\b(fender\s*liner)\b/i, weight: 6, l: 36, w: 22, h: 8, labor: 0.8 },
-  { match: /\b(rear\s*bumper|front\s*bumper|bumper\s*cover)\b/i, weight: 32, l: 72, w: 22, h: 18, labor: 2.0 },
-  { match: /\b(wiper\s*switch|combination\s*switch|turn\s*signal\s*switch)\b/i, weight: 3, l: 12, w: 8, h: 5, labor: 0.8 },
-  { match: /\b(wiper\s*blade)\b/i, weight: 2.5, l: 26, w: 4, h: 3, labor: 0 },
-  { match: /\b(wiper\s*linkage|wiper\s*motor)\b/i, weight: 8, l: 26, w: 10, h: 7, labor: 1.2 },
-  { match: /\b(window\s*regulator)\b/i, weight: 7, l: 24, w: 12, h: 6, labor: 1.5 },
-  { match: /\b(back\s*window|sliding\s*rear.*window|rear\s*window\s*glass)\b/i, weight: 38, l: 60, w: 22, h: 6, labor: 2.5 },
-  { match: /\b(quarter\s*window|door\s*window|window\s*glass)\b/i, weight: 16, l: 34, w: 22, h: 5, labor: 1.5 },
-  { match: /\b(gas\s*tank|fuel\s*tank)\b/i, weight: 32, l: 42, w: 20, h: 14, labor: 3.0 },
-  { match: /\b(fuel\s*tank\s*strap)\b/i, weight: 5, l: 24, w: 8, h: 5, labor: 1.0 },
-  { match: /\b(coolant\s*(overflow|recovery|expansion)?\s*reservoir|radiator\s*(coolant\s*)?overflow|overflow\s*tank|washer\s*(fluid|reservoir|tank))\b/i, weight: 4, l: 14, w: 11, h: 8, labor: 0.6 },
-  { match: /\b(front.*grille|radiator\s*grille)\b/i, weight: 7, l: 38, w: 12, h: 7, labor: 0.8 },
-  { match: /\b(radiator\s*cooling\s*fan|cooling\s*fan|fan\s*assembly)\b/i, weight: 15, l: 30, w: 22, h: 8, labor: 1.5 },
-  { match: /\b(a\/c.*condenser|ac\s*condenser|\bradiator\b)\b/i, weight: 16, l: 32, w: 24, h: 7, labor: 2.0 },
-  { match: /\b(cv\s*axle|axle\s*shaft)\b/i, weight: 18, l: 36, w: 8, h: 8, labor: 2.0 },
-  { match: /\b(driveshaft|drive\s*shaft)\b/i, weight: 24, l: 54, w: 8, h: 8, labor: 1.5 },
-  { match: /\b(strut\s*assembly|shock.*coil|rear\s*shocks|fox\s*2\.0)\b/i, weight: 20, l: 28, w: 12, h: 9, labor: 1.8 },
-  { match: /\b(brake\s*caliper)\b/i, weight: 18, l: 16, w: 12, h: 8, labor: 1.5 },
-  { match: /\b(brake\s*master\s*cylinder|brake\s*booster)\b/i, weight: 13, l: 16, w: 12, h: 10, labor: 2.0 },
-  { match: /\b(abs\s*anti-lock|abs\s*pump|abs\s*module)\b/i, weight: 9, l: 12, w: 10, h: 8, labor: 2.0 },
-  { match: /\b(intake\s*manifold)\b/i, weight: 16, l: 24, w: 16, h: 12, labor: 2.5 },
-  { match: /\b(roof\s*rack|roof\s*rail)\b/i, weight: 14, l: 64, w: 10, h: 6, labor: 1.0 },
-  { match: /\b(center\s*(floor\s*)?console)\b/i, weight: 16, l: 34, w: 15, h: 14, labor: 1.0 },
-  { match: /\b(dashboard\s*trim|dash.*panel)\b/i, weight: 8, l: 30, w: 12, h: 8, labor: 0.8 },
-  { match: /\b(glove\s*box)\b/i, weight: 7, l: 20, w: 14, h: 10, labor: 0.5 },
-  { match: /\b(parking\s*light|side\s*marker|tail\s*light|parking\s*turn\s*signal)\b/i, weight: 4, l: 14, w: 8, h: 6, labor: 0.5 },
-  { match: /\b(headlight|headlamp)\b/i, weight: 9, l: 22, w: 14, h: 12, labor: 0.8 },
-  { match: /\b(side\s*mirror|view\s*mirror)\b/i, weight: 6, l: 14, w: 10, h: 8, labor: 0.8 },
-  { match: /\b(blue&me|convergence\s*module|yaw\s*rate|stability\s*sensor|sensor)\b/i, weight: 2.5, l: 8, w: 6, h: 4, labor: 0.8 },
-  { match: /\b(ecm|ecu|pcm|bcm|tpms|mpx|4wd\s*control|sonar|clearance\s*warning|fuel\s*pump\s*control|keyless|control\s*module|computer|fuse\s*box|relay\s*box)\b/i, weight: 4, l: 11, w: 9, h: 5, labor: 0.9 },
-  { match: /\b(instrument.*cluster|speedometer|gauge\s*cluster)\b/i, weight: 5.5, l: 16, w: 11, h: 8, labor: 1.0 },
-  { match: /\b(radio|stereo|head\s*unit|audio\s*usb)\b/i, weight: 6.5, l: 14, w: 11, h: 8, labor: 0.8 },
-  { match: /\b(climate\s*control|hvac\s*heater)\b/i, weight: 4, l: 12, w: 8, h: 6, labor: 0.8 },
-  { match: /\b(water\s*pump|timing\s*chain|timing\s*belt)\b/i, weight: 8.5, l: 14, w: 11, h: 7, labor: 3.0 },
-  { match: /\b(fuel\s*injection\s*rail|fuel\s*rail)\b/i, weight: 5, l: 16, w: 8, h: 6, labor: 1.5 },
-  { match: /\b(air\s*intake\s*box|charcoal\s*canister)\b/i, weight: 8, l: 18, w: 14, h: 10, labor: 1.0 },
-  { match: /\b(suspension\s*arm|control\s*arm)\b/i, weight: 12, l: 20, w: 14, h: 7, labor: 1.5 },
-  { match: /\b(clutch\s*slave)\b/i, weight: 3.5, l: 9, w: 6, h: 5, labor: 1.2 },
-  { match: /\b(wheel\s*cover|hubcap)\b/i, weight: 4.5, l: 16, w: 16, h: 4, labor: 0 },
-  { match: /\b(spare\s*tire\s*cover)\b/i, weight: 8, l: 28, w: 28, h: 4, labor: 0 },
-  { match: /\b(owner'?s\s*manual)\b/i, weight: 2.5, l: 10, w: 7, h: 3, labor: 0 },
-  { match: /\b(air\s*vent|steering\s*column.*cover|bezel|horn|hood\s*cowl|hood\s*latch|heat\s*shield|pillar\s*trim)\b/i, weight: 5, l: 16, w: 10, h: 6, labor: 0.6 }
+  // 1. Small electronic / switch / sensor / interior trim sub-components (1.5–6.5 lbs, 10 x 8 x 6 in)
+  { match: /\b(sensor|switch|relay|solenoid|knob|handle|latch|hinge|cap|vent|bezel|cover\s*trim|horn|coil|injector|bracket|bolt|clip|manual|mirror\s*glass|lock\s*actuator|sun\s*visor|headrest|armrest|cup\s*holder|ash\s*tray|clock|display\s*screen|camera|keyless|tpms|yaw\s*rate|oxygen|maf\s*sensor|camshaft|crankshaft)\b/i, weight: 2.0, l: 10, w: 8, h: 6, labor: 0.6 },
+  { match: /\b(ecm|ecu|pcm|bcm|tcm|tcu|module|computer|fuse\s*box|relay\s*box|junction\s*box|tipm|climate\s*control|hvac\s*control|heater\s*control|amplifier|bluetooth|blue&me|convergence)\b/i, weight: 3.5, l: 10, w: 8, h: 6, labor: 0.8 },
+  { match: /\b(wiper\s*blade|fuel\s*(gas\s*)?filler\s*(housing|pocket|door\s*hinge)|fuel\s*door|clutch\s*slave|ignition\s*coil|throttle\s*body|fuel\s*rail|blower\s*motor|wiper\s*motor|wiper\s*linkage|window\s*regulator|window\s*motor|reservoir|overflow\s*tank|washer\s*tank|coolant\s*tank)\b/i, weight: 4.5, l: 10, w: 8, h: 6, labor: 0.9 },
+  { match: /\b(headlight|headlamp|tail\s*light|taillight|tail\s*lamp|fog\s*light|parking\s*light|turn\s*signal|side\s*marker|side\s*mirror|door\s*mirror|wing\s*mirror|rearview\s*mirror|instrument\s*cluster|speedometer|gauge\s*cluster|radio|stereo|head\s*unit|navigation|infotainment|glove\s*box|center\s*console|overhead\s*console|dash\s*panel|dash\s*trim|dashboard\s*trim|pillar\s*trim|trim\s*panel|door\s*trim\s*panel|interior\s*door\s*panel|door\s*panel|cargo\s*trim|fender\s*liner|grille|air\s*intake\s*box|air\s*filter\s*housing|charcoal\s*canister|wheel\s*cover|hubcap|cowl|shifter|heat\s*shield|spare\s*tire\s*cover)\b/i, weight: 6.0, l: 10, w: 8, h: 6, labor: 0.8 },
+
+  // 2. Complete Wheel + Tire Assemblies (42.0 lbs, 26 x 26 x 10 in) vs Bare Alloy/Steel Wheels/Rims (24.0 lbs, 20 x 20 x 9 in)
+  { match: /\b(wheel\s*(?:and|&|\+|with)\s*tire|tire\s*(?:and|&|\+|with)\s*wheel|spare\s*tire\s*assembly|complete\s*wheel.*tire|mounted\s*tire)\b/i, weight: 42.0, l: 26, w: 26, h: 10, labor: 0.4 },
+  { match: /\b(alloy\s*wheel|steel\s*wheel|wheel\s*rim|\brim\b|\bwheel\b)\b/i, weight: 24.0, l: 20, w: 20, h: 9, labor: 0.5 },
+
+  // 3. Engines / Long Blocks (320.0 lbs, 36 x 30 x 32 in, Local_Pickup_Only)
+  { match: /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|motor\s*assembly)\b/i, weight: 320.0, l: 36, w: 30, h: 32, labor: 8.5, localPickup: true },
+
+  // 4. Transmissions / Transfer Cases (145.0 lbs, 32 x 24 x 22 in, Local_Pickup_Only)
+  { match: /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|gearbox|cvt\s*transmission|transfer\s*case)\b/i, weight: 145.0, l: 32, w: 24, h: 22, labor: 5.5, localPickup: true },
+
+  // 5. Differentials / Axle Assemblies (85.0 lbs, 28 x 18 x 16 in, Local_Pickup_Only)
+  { match: /\b(front\s*differential|rear\s*differential|differential\s*carrier|differential\s*assembly|third\s*member|rear\s*axle\s*assembly|front\s*axle\s*assembly|axle\s*housing)\b/i, weight: 85.0, l: 28, w: 18, h: 16, labor: 3.8, localPickup: true },
+
+  // 6. Doors / Hoods / Tailgates / Bumpers / Seats / Glass (45.0–65.0 lbs, 48 x 30 x 14 in, Local_Pickup_Only)
+  { match: /\b(complete\s*door|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door)\b/i, weight: 62.0, l: 48, w: 30, h: 14, labor: 2.5, localPickup: true },
+  { match: /\b(tailgate|liftgate|hatch\s*lid|trunk\s*lid|deck\s*lid)\b/i, weight: 60.0, l: 48, w: 30, h: 14, labor: 2.2, localPickup: true },
+  { match: /\b(hood\s*panel|engine\s*hood|car\s*hood|\bhood\b)\b/i, weight: 58.0, l: 48, w: 30, h: 14, labor: 1.8, localPickup: true },
+  { match: /\b(front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|car\s*seats?|seat\s*assembly|seat\s*pair|seat\s*set|\bseat\b)\b/i, weight: 55.0, l: 48, w: 30, h: 14, labor: 1.2, localPickup: true },
+  { match: /\b(front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|bumper\s*reinforcement|fender\s*panel|front\s*fender|quarter\s*panel|complete\s*dashboard|fuel\s*tank|gas\s*tank)\b/i, weight: 48.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+  { match: /\b(windshield|back\s*window|rear\s*window\s*glass|sliding\s*rear.*window|door\s*window\s*glass|quarter\s*window\s*glass|window\s*glass|sunroof\s*glass)\b/i, weight: 45.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+
+  // 7. Alternators / Starters / Compressors / Calipers / Hubs / Radiators & Mid-Weight Chassis Assemblies (12.0–22.0 lbs, 14 x 12 x 10 in)
+  { match: /\b(radiator|condenser|cooling\s*fan|fan\s*shroud|fan\s*assembly|driveshaft|drive\s*shaft|steering\s*rack|rack\s*and\s*pinion|steering\s*column|strut\s*assembly|coilover|shock.*coil|intake\s*manifold|exhaust\s*manifold|turbo|turbocharger|intercooler|cv\s*axle|axle\s*shaft|subframe|roof\s*rack)\b/i, weight: 20.0, l: 14, w: 12, h: 10, labor: 2.0 },
+  { match: /\b(alternator|generator|a\/?c\s*compressor|air\s*conditioning\s*compressor|brake\s*caliper|caliper|wheel\s*hub|spindle|knuckle|control\s*arm|suspension\s*arm|brake\s*rotor|brake\s*booster|abs\s*pump|abs\s*actuator|power\s*steering\s*pump|cylinder\s*head|flywheel|torque\s*converter)\b/i, weight: 16.0, l: 14, w: 12, h: 10, labor: 1.8 },
+  { match: /\b(starter|master\s*cylinder|water\s*pump|oil\s*pump|fuel\s*pump\s*module|timing\s*chain|timing\s*belt|heater\s*core|shock\s*absorber|sway\s*bar|leaf\s*spring|coil\s*spring|trailer\s*hitch)\b/i, weight: 12.5, l: 14, w: 12, h: 10, labor: 1.5 }
 ];
 
-function resolvePartDimensionsAndWeight(item) {
+function resolvePartDimensionsAndWeight(item = {}) {
   const titleStr = String(item.title || '');
   const catStr = String(item.category || '');
-  // Match specific title FIRST so broad category names (e.g. "Window Glass, Regulators & Wipers") never shadow light parts
+  // Match specific title FIRST so broad category names never shadow light components
   const matched =
     DIMENSION_RULES.find((r) => r.match.test(titleStr)) ||
     DIMENSION_RULES.find((r) => r.match.test(`${titleStr} ${catStr}`));
+
   if (matched) {
+    // Allow Vision-verified weight/dim refinement ONLY within +/- 30% of deterministic class bounds
+    let finalWeight = matched.weight;
+    const visionW = Number(item.vision_weight_lbs || 0);
+    if (visionW > 0 && visionW !== 8.5 && visionW !== 2 && visionW >= matched.weight * 0.7 && visionW <= matched.weight * 1.3) {
+      finalWeight = Number(visionW.toFixed(1));
+    }
     return {
-      weight_lbs: matched.weight,
+      weight_lbs: finalWeight,
       length_in: matched.l,
       width_in: matched.w,
       height_in: matched.h,
-      labor_hours: matched.labor
+      labor_hours: matched.labor,
+      local_pickup_only: Boolean(matched.localPickup)
     };
   }
-  return {
-    weight_lbs: Math.max(4, Number(item.weight_lbs || 8.5)),
-    length_in: Math.max(10, Number(item.length_in || 14)),
-    width_in: Math.max(8, Number(item.width_in || 10)),
-    height_in: Math.max(5, Number(item.height_in || 7)),
-    labor_hours: Number(item.install_labor_hours ?? 1.0)
-  };
+
+  // Deterministic category-tier fallback (ZERO 8.5 lb, ZERO 14x10x7 / 14x10x8!)
+  const combined = `${titleStr} ${catStr}`.toLowerCase();
+  if (/engine|drivetrain|transmission|axle|differential|exhaust/i.test(combined)) {
+    return { weight_lbs: 18.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: 1.8, local_pickup_only: false };
+  }
+  if (/suspension|brake|steering|cooling|radiator|hvac|fuel|charging|starting/i.test(combined)) {
+    return { weight_lbs: 14.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: 1.5, local_pickup_only: false };
+  }
+  return { weight_lbs: 4.5, length_in: 10, width_in: 8, height_in: 6, labor_hours: 0.8, local_pickup_only: false };
 }
 
 function normalizeVehicleTitleCasing(title) {
@@ -399,45 +400,92 @@ function normalizeVehicleTitleCasing(title) {
     .trim();
 }
 
-function buildRichStructuredDescription(item, settings = {}) {
-  const rate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
-  const supplyRate = Number(settings.shop_supply_fee_rate ?? 0.07);
-  const supplyCap = Number(settings.shop_supply_fee_cap ?? 45);
-  const taxRate = Number(settings.tax_rate ?? 0.101);
-  const priceWePull = Number(item.price_we_pull || 0);
-  const laborHours = Number(item.install_labor_hours || 0);
-  const laborSub = laborHours > 0 ? Number((laborHours * rate).toFixed(2)) : 0;
-  const supplyFee = laborSub > 0 ? Number(Math.min(supplyCap, laborSub * supplyRate).toFixed(2)) : 0;
-  const preTaxInstall = Number((priceWePull + laborSub + supplyFee).toFixed(2));
-  const installWithTax = Number((preTaxInstall * (1 + taxRate)).toFixed(2));
-  const cleanMpn = sanitizeVerifiedMpn(item.oem_part_number);
+function stripOffPlatformViolations(text = '') {
+  return stripDriveUrlsFromPublicText(text)
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\b(?:www\.)?[a-z0-9-]+\.(?:com|net|org|io|app|shop|store|myshopify\.com)(?:\/\S*)?/gi, '')
+    .replace(/\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '')
+    .replace(/\b5115\s+66th\s+St\s+W(?:,?\s*Bldg\s*B)?(?:,?\s*University\s+Place(?:\s*\/\s*Tacoma)?,?\s*WA\s*98467)?/gi, '')
+    .replace(/\bUniversity\s+Place\s*\/\s*Tacoma,?\s*WA\s*98467/gi, '')
+    .replace(/\bUniversity\s+Place,?\s*WA\s*98467/gi, '')
+    .replace(/\bservice@aldridgeautosupply\.com\b/gi, '')
+    .replace(/Optional\s+Certified\s+Shop\s+Bay\s+Installation[\s\S]*/i, '')
+    .replace(/Returns\s+Not\s+Accepted[\s\S]*/i, '')
+    .replace(/\s*\|\s*\|/g, ' |')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function dedupeSentences(text = '') {
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const out = [];
+  for (const s of sentences) {
+    const key = s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.join(' ');
+}
+
+function isGenericBoilerplateNote(note = '') {
+  const s = String(note || '').trim().toLowerCase();
+  if (!s || s.length < 12) return true;
+  return /^(inspected & verified\.?|clean tested assembly\.?|used oem — inspected on-site|used oem — pulled & inspected on-site|new in-stock replacement part)/i.test(s);
+}
+
+/**
+ * Builds a clean, concise, unique part-specific description directly from Gemini Vision
+ * inspection notes + verified donor fitment + real/structured OEM MPN + physical shipping specs.
+ * ZERO phone numbers, ZERO street addresses, ZERO URLs, ZERO policy walls, ZERO repeated sentences!
+ */
+function buildRichStructuredDescription(item = {}, settings = {}) {
+  const { mpn, hasStampedMpn } = resolveStructuredOemMpn(item);
   const isNew = String(item.condition || 'Used').toLowerCase() === 'new';
   const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
     .map((s) => String(s || '').trim())
     .filter(Boolean)
     .join(' ');
-  const isLocalPickup = item.shipping_class === 'local_pickup_only';
+  const isLocalPickup = item.shipping_class === 'local_pickup_only' || Number(item.weight_lbs || 0) >= Number(settings.freight_weight_threshold_lbs || 70);
+  const donorVin = String(item.verified_vin || '').trim().toUpperCase();
+
+  // Preserve unique Gemini Vision inspection details (never overwrite with generic boilerplate)
+  const rawDefect = stripOffPlatformViolations(item.defect_disclosure || '');
+  const visionDetail = rawDefect && !isGenericBoilerplateNote(rawDefect)
+    ? rawDefect
+    : (isNew
+      ? 'New OEM factory replacement component with intact mounting points and clean finish.'
+      : `Inspected Used OEM ${item.category || 'component'} removed from verified donor vehicle with intact mounting tabs and connectors; inspect all photos for exact cosmetic condition.`);
+
+  const mpnLine = hasStampedMpn
+    ? `Stamped OEM Part Number: ${mpn}${item.interchange_number ? ` (Interchange: ${item.interchange_number})` : ''}.`
+    : `OEM Reference Code: ${mpn}.`;
+
+  const fitmentSentence = fitmentLine
+    ? `Donor Vehicle Fitment: ${fitmentLine}${donorVin.length === 17 ? ` (Donor VIN: ${donorVin})` : ''}.`
+    : '';
+
+  const specLine = `Physical Spec: ${Number(item.weight_lbs)} lbs, packed ${Math.round(Number(item.length_in))} x ${Math.round(Number(item.width_in))} x ${Math.round(Number(item.height_in))} in (${isLocalPickup ? 'Local Pickup Only' : 'Parcel Shipping Eligible'}).`;
 
   const parts = [
-    `Part: ${item.title}.`,
-    fitmentLine ? `Verified Fitment: ${fitmentLine}.` : '',
-    cleanMpn ? `Verified OEM Part Number: ${cleanMpn}${item.interchange_number ? ` (Interchange: ${item.interchange_number})` : ''}.` : 'OEM Identification: Match actual multi-angle photos and connectors against your vehicle before ordering.',
-    isNew
-      ? 'Condition: Brand New replacement part in stock at our University Place shop.'
-      : `Condition: Used OEM — inspected on-site by our technicians with clean mounting tabs/connectors and no cracks or structural damage unless photographed${item.defect_disclosure ? ` (${item.defect_disclosure})` : ''}.`,
-    `Inventory & Fulfillment: Single physical unit (1 in stock) • Packed Shipping Specs: ${item.weight_lbs} lbs (${item.length_in} x ${item.width_in} x ${item.height_in} in).`,
-    isLocalPickup
-      ? `Local Pickup Only: Available at Aldridge Auto's Service & Repair, 5115 66th St W, Bldg B, University Place / Tacoma, WA 98467.`
-      : `Shipping & Pickup: Calculated parcel shipping (+ $10.00 handling) or Free Local Counter Pickup at Aldridge Auto's Service & Repair, 5115 66th St W, Bldg B, University Place / Tacoma, WA 98467.`,
-    laborHours > 0
-      ? `Optional Certified Shop Bay Installation (5115 66th St W, Bldg B, University Place, WA 98467): $${(priceWePull + laborSub).toFixed(2)} part + labor (Part $${priceWePull.toFixed(2)} + ${laborHours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr; est. $${installWithTax.toFixed(2)} out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax).`
-      : ''
+    `${cleanListingTitle(item.title || '')}.`,
+    visionDetail.endsWith('.') ? visionDetail : `${visionDetail}.`,
+    fitmentSentence,
+    mpnLine,
+    specLine
   ].filter(Boolean);
 
-  return parts.join(' ');
+  return dedupeSentences(stripOffPlatformViolations(parts.join(' ')));
 }
 
 function enrichAllActiveInventoryInDb() {
+  // 0. PERMANENT GHOST VEHICLE & STRICT VIN PURGE FIRST (Purges 2015 Buick LaCrosse 1G4GA5GR2FF246661, 5 sold Subaru transmissions, VIN-TITLE-CHECK)
+  const ghostPurge = purgeGhostAndBlockedInventory({ actor: 'enrichAllActiveInventoryInDb_v31' });
+
   const settings = getSettings();
   const laborRate = Number(settings.labor_rate_hourly || SHOP_LABOR_RATE_LOCKED);
   const donors = db.prepare('SELECT * FROM donor_vehicles').all();
@@ -451,6 +499,7 @@ function enrichAllActiveInventoryInDb() {
   const pendingSkus = [];
 
   const blockStmt = db.prepare("UPDATE inventory_items SET status = 'compliance_blocked', quantity = 0, updated_at = ? WHERE id = ?");
+  const archiveStmt = db.prepare("UPDATE inventory_items SET status = 'archived', quantity = 0, updated_at = ? WHERE id = ?");
   const pendingStmt = db.prepare("UPDATE inventory_items SET status = 'pending_verification', quantity = 0, fitment_notes = ?, updated_at = ? WHERE id = ?");
   const updateStmt = db.prepare(`
     UPDATE inventory_items SET
@@ -488,6 +537,10 @@ function enrichAllActiveInventoryInDb() {
   try {
     for (const row of rows) {
       const skuUpper = String(row.sku || '').toUpperCase();
+      if (isGhostOrBannedInventoryItem(row).blocked) {
+        archiveStmt.run(now, row.id);
+        continue;
+      }
       if (PROHIBITED_CAT_SKUS.has(skuUpper) || PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper)) {
         blockStmt.run(now, row.id);
         complianceBlockedCount++;
@@ -504,23 +557,24 @@ function enrichAllActiveInventoryInDb() {
       }
 
       const enrich = VERIFIED_SKU_ENRICHMENTS[skuUpper] || null;
-      const title = normalizeVehicleTitleCasing(enrich?.title || row.title);
+      const title = cleanListingTitle(normalizeVehicleTitleCasing(enrich?.title || row.title));
       const fitmentYears = String(enrich?.years || row.fitment_years || '').replace(/Multi-Fit|Universal/gi, '').trim();
       const fitmentMake = String(enrich?.make || row.fitment_make || '').replace(/Universal\s*OEM|Universal/gi, '').trim();
       const fitmentModel = String(enrich?.model || row.fitment_model || '').replace(/Verify Size \/ Fitment/gi, '').trim();
       const condition = enrich?.condition || row.condition || 'Used';
       const conditionId = condition.toLowerCase() === 'new' ? 1000 : 3000;
 
-      // Match donor vehicle for accurate engine/trim fitment
-      const matchedDonor = donors.find((d) =>
-        fitmentMake &&
-        d.make.toLowerCase() === fitmentMake.toLowerCase() &&
-        fitmentModel &&
-        fitmentModel.toLowerCase().includes(d.model.split(' ')[0].toLowerCase())
-      );
+      // Match donor vehicle by verified VIN first, then make/model
+      const matchedDonor =
+        donors.find((d) => row.verified_vin && String(d.vin || '').toUpperCase() === String(row.verified_vin).toUpperCase()) ||
+        donors.find((d) =>
+          fitmentMake &&
+          d.make.toLowerCase() === fitmentMake.toLowerCase() &&
+          fitmentModel &&
+          fitmentModel.toLowerCase().includes(d.model.split(' ')[0].toLowerCase())
+        );
       const fitmentEngine = enrich?.engine || row.fitment_engine || matchedDonor?.engine || '';
       const brand = enrich?.brand || (fitmentMake ? `${fitmentMake} OEM` : (row.brand || 'OEM'));
-      const cleanMpn = sanitizeVerifiedMpn(enrich?.mpn !== undefined ? enrich.mpn : row.oem_part_number);
       const cleanInterchange = sanitizeVerifiedMpn(enrich?.interchange || row.interchange_number);
       const placement = enrich?.placement || row.placement_on_vehicle || '';
 
@@ -530,33 +584,52 @@ function enrichAllActiveInventoryInDb() {
         category: '',
         brand,
         condition,
-        oem_part_number: cleanMpn,
+        oem_part_number: enrich?.mpn !== undefined ? enrich.mpn : row.oem_part_number,
         fitment_years: fitmentYears,
         fitment_make: fitmentMake,
-        fitment_model: fitmentModel
+        fitment_model: fitmentModel,
+        verified_vin: row.verified_vin || matchedDonor?.vin || ''
       }, settings);
 
-      const dims = resolvePartDimensionsAndWeight({ title, category: tax.partType, weight_lbs: row.weight_lbs, length_in: row.length_in, width_in: row.width_in, height_in: row.height_in, install_labor_hours: row.install_labor_hours });
+      const resolvedMpn = tax.mpn;
+      const dims = resolvePartDimensionsAndWeight({
+        title,
+        category: tax.partType,
+        install_labor_hours: row.install_labor_hours
+      });
       const priceWePull = Number(enrich?.price ?? row.price_we_pull ?? 75);
       const laborHours = Number(enrich?.laborHours !== undefined ? enrich.laborHours : dims.labor_hours);
       const pricePullInstall = laborHours > 0
         ? Number((priceWePull + laborHours * laborRate).toFixed(2))
         : priceWePull;
-      const shippingClass = computeShippingClass(dims.weight_lbs, `${tax.partType} ${title}`, dims.length_in, dims.width_in, dims.height_in);
-      const origin = enrich?.origin || resolveCountryOfOrigin({ title, brand, fitment_make: fitmentMake, description: enrich?.notes || '' });
+      const shippingClass = dims.local_pickup_only
+        ? 'local_pickup_only'
+        : computeShippingClass(dims.weight_lbs, `${tax.partType} ${title}`, dims.length_in, dims.width_in, dims.height_in);
+      const origin = resolveCountryOfOrigin({
+        verified_vin: row.verified_vin || matchedDonor?.vin || '',
+        title,
+        brand,
+        fitment_make: fitmentMake,
+        description: enrich?.notes || ''
+      });
 
-      // Strictly exclude internal Google Drive photo links from customer-facing fitment_notes & descriptions
+      // Preserve unique Gemini Vision inspection notes! Never overwrite specific Vision notes with canned boilerplate.
+      const existingDefectClean = stripOffPlatformViolations(row.defect_disclosure || '');
+      const defectDisclosure = !isGenericBoilerplateNote(existingDefectClean)
+        ? existingDefectClean
+        : (enrich?.notes
+          ? stripOffPlatformViolations(enrich.notes)
+          : (condition.toLowerCase() === 'new'
+            ? 'New OEM factory component; verify connector and mounting geometry against photos.'
+            : `Inspected Used OEM ${tax.partType} removed from ${fitmentYears} ${fitmentMake} ${fitmentModel}; mounting tabs and connectors intact as photographed.`));
+
       const fitmentNotesParts = [
         fitmentYears || fitmentMake ? `Verified Fitment: ${[fitmentYears, fitmentMake, fitmentModel, enrich?.trim || matchedDonor?.trim || '', fitmentEngine].filter(Boolean).join(' ')}` : '',
-        cleanMpn ? `OEM MPN: ${cleanMpn}${cleanInterchange ? ` / ${cleanInterchange}` : ''}` : '',
-        `Country of Origin: ${origin}`,
-        stripDriveUrlsFromPublicText(enrich?.notes || '')
+        row.verified_vin ? `Donor VIN: ${String(row.verified_vin).toUpperCase()}` : '',
+        resolvedMpn ? `OEM MPN: ${resolvedMpn}${cleanInterchange ? ` / ${cleanInterchange}` : ''}` : '',
+        `Origin: ${origin}`
       ].filter(Boolean);
-      const cleanFitmentNotes = stripDriveUrlsFromPublicText(fitmentNotesParts.join(' | '));
-
-      const defectDisclosure = condition.toLowerCase() === 'new'
-        ? 'New in-stock replacement part; inspect packaging and fitment before installation.'
-        : 'Used OEM — inspected on-site with clean mounting tabs/connectors and normal wear consistent with age; see actual multi-angle photos.';
+      const cleanFitmentNotes = stripOffPlatformViolations(fitmentNotesParts.join(' | '));
 
       const enrichedCandidate = {
         ...row,
@@ -564,7 +637,7 @@ function enrichAllActiveInventoryInDb() {
         category: tax.partType,
         condition,
         brand,
-        oem_part_number: cleanMpn,
+        oem_part_number: resolvedMpn,
         interchange_number: cleanInterchange,
         fitment_years: fitmentYears,
         fitment_make: fitmentMake,
@@ -580,16 +653,18 @@ function enrichAllActiveInventoryInDb() {
         height_in: dims.height_in,
         shipping_class: shippingClass
       };
-      const richDescription = stripDriveUrlsFromPublicText(buildRichStructuredDescription(enrichedCandidate, { ...settings, labor_rate_hourly: laborRate }));
+      const richDescription = buildRichStructuredDescription(enrichedCandidate, { ...settings, labor_rate_hourly: laborRate });
 
       // MANDATORY ZERO-TOLERANCE VALIDATION GATE:
-      // Any SKU lacking verified Year/Make/Model/Part Name/Weight/Dims is quarantined to pending_verification!
+      // Any SKU lacking verified 17-char VIN/Year/Make/Model/Part Name/Weight/Dims is quarantined/archived!
       const gate = validateInventoryItemForPublish({ ...enrichedCandidate, description: richDescription });
       if (!gate.valid) {
         if (gate.recommended_status === 'compliance_blocked') {
           blockStmt.run(now, row.id);
           complianceBlockedCount++;
           blockedSkus.push(row.sku);
+        } else if (gate.recommended_status === 'archived') {
+          archiveStmt.run(now, row.id);
         } else {
           const reasonNote = `${cleanFitmentNotes} | PENDING VERIFICATION: ${gate.reasons.join('; ')}`;
           pendingStmt.run(reasonNote, now, row.id);
@@ -625,7 +700,7 @@ function enrichAllActiveInventoryInDb() {
         condition,
         conditionId,
         brand,
-        cleanMpn,
+        resolvedMpn,
         cleanInterchange,
         placement,
         fitmentYears,
@@ -1284,6 +1359,8 @@ module.exports = {
   DUPLICATE_PHYSICAL_PART_SKUS,
   VERIFIED_SKU_ENRICHMENTS,
   stripDriveUrlsFromPublicText,
+  stripOffPlatformViolations,
+  dedupeSentences,
   resolvePartDimensionsAndWeight,
   buildRichStructuredDescription,
   normalizeVehicleGroup,

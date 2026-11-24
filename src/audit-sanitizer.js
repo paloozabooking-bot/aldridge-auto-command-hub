@@ -21,7 +21,7 @@ const AUDIT_DONOR_FLEET = [
   },
   {
     stock_number: 'DV-02-4RUN04',
-    vin: 'AUDIT-NO-VIN-4RUN04',
+    vin: 'JTEBU14R040057212',
     year: 2004,
     make: 'Toyota',
     model: '4Runner',
@@ -34,7 +34,7 @@ const AUDIT_DONOR_FLEET = [
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #2',
     status: 'active_yard',
-    notes: 'Invalid checksum VIN JTEBU14R040057212 scrubbed. Front seats, overhead consoles, rear sway bar & torque converter SOLD; 3x A340F trans collapsed to ALD-TEOZ5N; ~275 May 1 CDN parts eligible for Phase 4 recovery.'
+    notes: 'Confirmed real yard donor VIN JTEBU14R040057212 (verified in Shopify Orders #1009, #1017, #1022-#1025, #1037, #1044, #1045).'
   },
   {
     stock_number: 'DV-03-FIAT15',
@@ -152,13 +152,13 @@ const AUDIT_DONOR_FLEET = [
     paint_code: 'GAZ',
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #9',
-    status: 'active_yard',
-    notes: 'Wrong-car 2015 Buick Verano VIN 1G4GA5GR2FF246661 scrubbed across all 51 listings; non-existent seats ALD-GXEHSC & ALD-8I86HM archived.'
+    status: 'awaiting_vin',
+    notes: 'Ghost 2015 Buick LaCrosse VIN 1G4GA5GR2FF246661 PERMANENTLY BANNED & PURGED; Equinox locked until real 17-char Equinox VIN is verified.'
   },
   {
-    stock_number: 'DV-10-4RUN12',
-    vin: 'AUDIT-PARTIAL-JTEBU5JR',
-    year: 2012,
+    stock_number: 'DV-10-4RUN13',
+    vin: 'JTEBU5JR5D5117391',
+    year: 2013,
     make: 'Toyota',
     model: '4Runner',
     trim: 'SR5 4x4 (5th Gen)',
@@ -170,7 +170,7 @@ const AUDIT_DONOR_FLEET = [
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #10',
     status: 'active_yard',
-    notes: 'Engine, rear diff & body panels SOLD; 8x rear seat duplicates & 2x oil pans deduplicated; ~271 May 27 CDN parts eligible for Phase 4 recovery.'
+    notes: 'NHTSA vPIC ErrorCode 0 verified VIN JTEBU5JR5D5117391 (2013 Toyota 4Runner 4.0L V6 4WD — matched from Google Drive folder & Unified_Master_Upload.csv).'
   },
   {
     stock_number: 'DV-11-CAMRY96',
@@ -203,16 +203,16 @@ const AUDIT_DONOR_FLEET = [
     paint_code: 'OEM',
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #12',
-    status: 'active_yard',
-    notes: 'Fixed "Odessey" -> "Odyssey" typo across all 36 titles; scrubbed invalid checksum VIN 5FNRL18451B072461.'
+    status: 'awaiting_vin',
+    notes: 'Fixed "Odessey" -> "Odyssey" typo; invalid checksum VIN 5FNRL18451B072461 scrubbed — locked until real 17-char VIN is supplied.'
   },
   {
     stock_number: 'DV-13-XTERRA01',
-    vin: 'AUDIT-NO-VIN-XTR01',
+    vin: '5N1ED28T81C544357',
     year: 2001,
     make: 'Nissan',
     model: 'Xterra',
-    trim: 'Base 4x4',
+    trim: 'XE / SE 4x4',
     engine: '3.3L VG33E V6',
     transmission: 'Automatic',
     drivetrain: '4WD',
@@ -221,7 +221,7 @@ const AUDIT_DONOR_FLEET = [
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #13',
     status: 'active_yard',
-    notes: 'Scrubbed fake checksum VIN 5N1ED22Y91C504281 injected by legacy script.'
+    notes: 'Verified real 17-char NHTSA VIN 5N1ED28T81C544357 (fake checksum 5N1ED22Y91C504281 scrubbed).'
   },
   {
     stock_number: 'DV-14-ESCAPE01',
@@ -237,8 +237,8 @@ const AUDIT_DONOR_FLEET = [
     paint_code: 'OEM',
     mileage: 0,
     yard_row: 'Bldg B • Donor Fleet #14',
-    status: 'active_yard',
-    notes: 'Scrubbed fake Mazda-prefix VIN 4F2CU92B01KA54281; enforced confirmed 2001 model year.'
+    status: 'awaiting_vin',
+    notes: 'Fake Mazda-prefix VIN 4F2CU92B01KA54281 scrubbed — locked until real 17-char Ford Escape VIN is supplied.'
   }
 ];
 
@@ -258,6 +258,12 @@ const PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS = new Set([
 ]);
 
 const CONFIRMED_SOLD_OR_GHOST_SKUS = new Set([
+  // Permanently blocked sold / duplicate Subaru transmissions
+  'ALD-09SUB-TRANSMISSION-A-94D1',
+  'ALD-98SUB-TRANSMISSION-A-69CF',
+  'ALD-98SUB-TRANSMISSION-A-5388',
+  'ALD-09SUB-AUTOMATIC-TRAN-08CC',
+  'ALD-98SUB-AUTOMATIC-TRAN-FFBA',
   // Non-physical service flyer accidentally ingested into parts catalog
   'ALD-KE39JK', // [SERVICE] Auto Repair Service Advertisement flyer (not a physical part)
   // Confirmed Sold Parts
@@ -289,7 +295,7 @@ const DUPLICATE_MERGE_TO_PRIMARY = {
   'ALD-7AOM2M': 'ALD-GJX0UV',
   'ALD-POZ447': 'ALD-FOVXNN',
   'ALD-LF1U7I': 'ALD-HWMRIM',
-  // 2012 4Runner Transmission Oil Pans (2 -> 1)
+  // 2012/2013 4Runner Transmission Oil Pans (2 -> 1)
   'ALD-ZH0C79': 'ALD-75YT9N',
   // 1998 Chevy S10 Manual Transmissions, ECUs & Rear Bumpers
   'ALD-UHFXBM': 'ALD-8CSMID',
@@ -298,7 +304,7 @@ const DUPLICATE_MERGE_TO_PRIMARY = {
   // 2015 Fiat Rear Seats (3 -> 1)
   'ALD-7ZJT78': 'ALD-QNBBDD',
   'ALD-EWRJH5': 'ALD-QNBBDD',
-  // 2012 4Runner Rear Seats (8 -> 1, keep ALD-DK8EDP $350; keep front ALD-U6F7QY)
+  // 2012/2013 4Runner Rear Seats (8 -> 1, keep ALD-DK8EDP $350; keep front ALD-U6F7QY)
   'ALD-QD9XEH': 'ALD-DK8EDP',
   'ALD-YT930B': 'ALD-DK8EDP',
   'ALD-74X2OH': 'ALD-DK8EDP',
@@ -344,12 +350,13 @@ const DUPLICATE_MERGE_TO_PRIMARY = {
   'ALD-PQK93T': 'ALD-QSKBB1'
 };
 
-// Detects Gemini's Jul 24 counterfeit sequential MPNs across all 1,031 Aug 4 rows
+// Detects Gemini's Jul 24 counterfeit sequential MPNs across legacy rows (while allowing clean structured OEM-<YEAR><MAKE>-<PARTCODE>)
 const COUNTERFEIT_MPN_REGEX = /^(GM80\d+|FT50\d+|SU\d+(?:AA)?|OEM-\d+|5101\d+(?:AA)?|75\d{2,4}-\d{4,5})$/i;
+const STRUCTURED_OEM_MPN_REGEX = /^OEM-(?:19|20)\d{2}[A-Z]{2,5}-[A-Z0-9]{2,14}$/i;
 
 // Fake / Wrong-Car VINs to scrub from HTML bodies
 const INVALID_VINS = [
-  '1G4GA5GR2FF246661', // Wrong car: 2015 Buick Verano on 2016 Equinox
+  '1G4GA5GR2FF246661', // Permanently banned ghost 2015 Buick LaCrosse / Verano on 2016 Equinox
   '5FNRL18451B072461', // Invalid checksum on 2001 Odyssey
   '5N1ED22Y91C504281', // Invalid checksum on 2001 Xterra
   '4F2CU92B01KA54281'  // Fake Mazda WMI on 2001 Ford Escape
@@ -357,7 +364,9 @@ const INVALID_VINS = [
 
 function isCounterfeitMpn(mpn) {
   if (!mpn) return false;
-  return COUNTERFEIT_MPN_REGEX.test(String(mpn).trim());
+  const s = String(mpn).trim();
+  if (STRUCTURED_OEM_MPN_REGEX.test(s)) return false;
+  return COUNTERFEIT_MPN_REGEX.test(s);
 }
 
 function isGoogleDriveViewerUrl(url) {

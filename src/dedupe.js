@@ -299,14 +299,26 @@ function getLiveSoldSkuSet() {
 const SOLD_SUBARU_TRANSMISSION_SKUS = new Set([
   'ALD-09SUB-TRANSMISSION-A-94D1',
   'ALD-98SUB-TRANSMISSION-A-69CF',
-  'ALD-98SUB-TRANSMISSION-A-5388'
+  'ALD-98SUB-TRANSMISSION-A-5388',
+  'ALD-09SUB-AUTOMATIC-TRAN-08CC',
+  'ALD-98SUB-AUTOMATIC-TRAN-FFBA'
 ]);
 const SOLD_SUBARU_TRANSMISSION_FILE_REGEX = /\b(?:P0126__|P1942__|P0082__)|1998[\s_-]+subaru[\s_-]+(?:outback|forester)[\s_-]+(?:automatic[\s_-]+)?transmission|2003[\s_-]+subaru[\s_-]+outback[\s_-]+manual[\s_-]+transmission/i;
+const GHOST_LACROSSE_REGEX = /\b(1G4GA5GR2FF246661|LACROSSE-15-BAYB|buick[\s_-]+lacrosse)\b/i;
 
 function checkSoldOrderAndSrsBlocklist({ filename = '', legacySku = '', title = '', description = '' } = {}) {
   const legacyInfo = legacySku ? { code: String(legacySku).toUpperCase() } : extractLegacySkuPrefix(filename);
   const skuCode = legacyInfo?.code || '';
   const soldSet = getLiveSoldSkuSet();
+  const rawBlob = `${filename} ${legacySku} ${title} ${description}`;
+
+  if (GHOST_LACROSSE_REGEX.test(rawBlob)) {
+    return {
+      blocked: true,
+      category: 'ghost_vehicle_banned',
+      reason: 'Permanently blocked ghost vehicle: 2015 Buick LaCrosse (1G4GA5GR2FF246661) was never owned by Aldridge Auto.'
+    };
+  }
 
   if (
     (skuCode && (soldSet.has(skuCode) || SOLD_SUBARU_TRANSMISSION_SKUS.has(skuCode))) ||

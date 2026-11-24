@@ -66,80 +66,53 @@ Every shipped parcel order includes a ${handlingDays}-business-day handling buff
 3. TCPA SMS & EMAIL MARKETING CONSENT
   • By opting into ${name} Text (SMS) or Email alerts on our website, mobile app, intake counter, or U-Haul/Repair check-in, you consent to receive appointment updates, order readiness alerts, and periodic shop/parts specials. Message & data rates may apply. Reply STOP anytime to unsubscribe from SMS or click Unsubscribe in any email. Your phone number and email are never sold to third parties.`,
 
-    // 1. Shopify & Direct Website HTML Template (Includes Certified Shop Install Callout + Direct Website/PWA App Links)
-    shopify_direct_html_template: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:860px;margin:0 auto;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;color:#0f172a;">
-  <div style="background:#0b1628;color:#ffffff;padding:18px 22px;border-bottom:4px solid #ea580c;">
-    <h2 style="margin:0;font-size:20px;letter-spacing:0.3px;">{{BUSINESS_NAME}} — Verified Used OEM Auto Parts</h2>
-    <p style="margin:6px 0 0;font-size:13px;color:#cbd5e1;">University Place, WA 98467 &nbsp;|&nbsp; SKU: <strong>{{SKU}}</strong> (1-of-1 Single Unit) &nbsp;|&nbsp; MPN: <strong>{{OEM_PART_NUMBER}}</strong> &nbsp;|&nbsp; Security ID: <strong>{{SECURITY_CODE}}</strong></p>
+    // 1. Clean Cross-Platform OEM HTML Template (ZERO phone numbers, ZERO street addresses, ZERO off-platform URLs, ZERO policy walls!)
+    shopify_direct_html_template: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:820px;margin:0 auto;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;color:#0f172a;">
+  <div style="background:#0f172a;color:#ffffff;padding:14px 18px;border-bottom:3px solid #d97706;">
+    <h2 style="margin:0;font-size:18px;font-weight:700;">{{TITLE}}</h2>
+    <p style="margin:4px 0 0;font-size:12.5px;color:#cbd5e1;">SKU: <strong>{{SKU}}</strong> &nbsp;|&nbsp; MPN: <strong>{{OEM_PART_NUMBER}}</strong> &nbsp;|&nbsp; Qty: <strong>1 Single Verified Unit</strong></p>
   </div>
-  <div style="padding:20px 22px;background:#ffffff;">
-    <h3 style="margin-top:0;color:#0b1628;font-size:18px;">{{TITLE}}</h3>
-    <p style="line-height:1.55;font-size:14px;">{{DESCRIPTION}}</p>
-    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;width:32%;"><strong>Condition</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{CONDITION}} — {{DEFECT_DISCLOSURE}}</td></tr>
-      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Manufacturer Part # (MPN)</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{OEM_PART_NUMBER}} / {{INTERCHANGE_NUMBER}} {{HOLLANDER_NUMBER}}</td></tr>
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Donor Fitment Range</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_YEARS}} {{FITMENT_MAKE}} {{FITMENT_MODEL}} ({{FITMENT_ENGINE}})</td></tr>
-      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Fitment Notes</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_NOTES}}</td></tr>
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Warehouse Bin / Shipping Spec</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{BIN_LOCATION}} ({{WEIGHT_LBS}} lbs • {{DIMENSIONS_IN}} in • {{SHIPPING_SUMMARY_LABEL}})</td></tr>
+  <div style="padding:16px 18px;background:#ffffff;">
+    <p style="margin:0 0 14px;line-height:1.55;font-size:14px;color:#1e293b;">{{INSPECTION_SUMMARY}}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;width:32%;"><strong>Condition</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{CONDITION}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>OEM Part Number (MPN)</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{OEM_PART_NUMBER}}{{INTERCHANGE_SUFFIX}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Donor Vehicle Fitment</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_LINE}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Verified Donor VIN</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{DONOR_VIN}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Placement &amp; Bin</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{PLACEMENT}} &bull; Bin {{BIN_LOCATION}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Packed Weight &amp; Dimensions</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{WEIGHT_LBS}} lbs &bull; {{DIMENSIONS_IN}} in &bull; {{SHIPPING_SUMMARY_LABEL}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Country of Origin</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{COUNTRY_OF_ORIGIN}}</td></tr>
     </table>
-    {{INSTALL_CALLOUT_HTML}}
-    {{DIRECT_APP_CALLOUT_HTML}}
-    <div style="background:#fff7ed;border:1px solid #ea580c;border-radius:6px;padding:12px 14px;font-size:12.5px;line-height:1.5;">
-      <strong>SHIPPING, LOCAL PICKUP &amp; DEFECT-ONLY RETURN POLICY:</strong><br/>
-      • <strong>Single-Variant Stock Protection:</strong> Listed strictly as 1 single physical unit so your part is never double-booked across channels.<br/>
-      • <strong>Shipping &amp; $${handlingFee} Handling Buffer:</strong> Eligible non-hazmat items under ${freightLbs} lbs ship Calculated Parcel + $${handlingFee} protective packaging/handling buffer within ${handlingDays} business days (or Free Counter Pickup at 5115 66th St W, Bldg B, University Place, WA 98467). Heavy/oversized/hazmat items (${freightLbs}+ lbs) are strictly <strong>Local Pickup Only in University Place, WA 98467</strong>.<br/>
-      • <strong>Returns Not Accepted (Defect-Only Coverage):</strong> Returns Not Accepted for buyer remorse or wrong fitment. Match MPN &amp; photos prior to ordering. Defect-Only claims require OBD-II/photo proof and intact UV/Paint Tamper Serial Mark (<strong>{{SECURITY_CODE}}</strong>); buyer pays return shipping; parts-only coverage.
-    </div>
   </div>
 </div>`,
 
-    // 2. eBay Motors (aabcas) & External Marketplace HTML Template (100% Policy Compliant — ZERO External URLs, ZERO Domains, ZERO Phone Numbers!)
-    ebay_motors_html_template: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:860px;margin:0 auto;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;color:#0f172a;">
-  <div style="background:#0b1628;color:#ffffff;padding:18px 22px;border-bottom:4px solid #ea580c;">
-    <h2 style="margin:0;font-size:20px;letter-spacing:0.3px;">{{BUSINESS_NAME}} — Verified Used OEM Auto Parts</h2>
-    <p style="margin:6px 0 0;font-size:13px;color:#cbd5e1;">University Place, WA 98467 &nbsp;|&nbsp; SKU: <strong>{{SKU}}</strong> (1-of-1 Single Unit) &nbsp;|&nbsp; MPN: <strong>{{OEM_PART_NUMBER}}</strong> &nbsp;|&nbsp; Security ID: <strong>{{SECURITY_CODE}}</strong></p>
+    // 2. eBay US HTML Template (100% unified with Shopify clean OEM spec card — ZERO URLs, ZERO phone numbers, ZERO addresses, ZERO policy walls!)
+    ebay_motors_html_template: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:820px;margin:0 auto;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;color:#0f172a;">
+  <div style="background:#0f172a;color:#ffffff;padding:14px 18px;border-bottom:3px solid #d97706;">
+    <h2 style="margin:0;font-size:18px;font-weight:700;">{{TITLE}}</h2>
+    <p style="margin:4px 0 0;font-size:12.5px;color:#cbd5e1;">SKU: <strong>{{SKU}}</strong> &nbsp;|&nbsp; MPN: <strong>{{OEM_PART_NUMBER}}</strong> &nbsp;|&nbsp; Qty: <strong>1 Single Verified Unit</strong></p>
   </div>
-  <div style="padding:20px 22px;background:#ffffff;">
-    <h3 style="margin-top:0;color:#0b1628;font-size:18px;">{{TITLE}}</h3>
-    <p style="line-height:1.55;font-size:14px;">{{DESCRIPTION}}</p>
-    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;width:32%;"><strong>Condition</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{CONDITION}} — {{DEFECT_DISCLOSURE}}</td></tr>
-      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Manufacturer Part # (MPN)</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{OEM_PART_NUMBER}} / {{INTERCHANGE_NUMBER}} {{HOLLANDER_NUMBER}}</td></tr>
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Donor Fitment Range</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_YEARS}} {{FITMENT_MAKE}} {{FITMENT_MODEL}} ({{FITMENT_ENGINE}})</td></tr>
-      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Fitment Notes</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_NOTES}}</td></tr>
-      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Warehouse Bin / Shipping Spec</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{BIN_LOCATION}} ({{WEIGHT_LBS}} lbs • {{DIMENSIONS_IN}} in • {{SHIPPING_SUMMARY_LABEL}})</td></tr>
+  <div style="padding:16px 18px;background:#ffffff;">
+    <p style="margin:0 0 14px;line-height:1.55;font-size:14px;color:#1e293b;">{{INSPECTION_SUMMARY}}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;width:32%;"><strong>Condition</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{CONDITION}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>OEM Part Number (MPN)</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{OEM_PART_NUMBER}}{{INTERCHANGE_SUFFIX}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Donor Vehicle Fitment</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{FITMENT_LINE}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Verified Donor VIN</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{DONOR_VIN}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Placement &amp; Bin</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{PLACEMENT}} &bull; Bin {{BIN_LOCATION}}</td></tr>
+      <tr><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Packed Weight &amp; Dimensions</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{WEIGHT_LBS}} lbs &bull; {{DIMENSIONS_IN}} in &bull; {{SHIPPING_SUMMARY_LABEL}}</td></tr>
+      <tr style="background:#f8fafc;"><td style="padding:8px 10px;border:1px solid #e2e8f0;"><strong>Country of Origin</strong></td><td style="padding:8px 10px;border:1px solid #e2e8f0;">{{COUNTRY_OF_ORIGIN}}</td></tr>
     </table>
-    {{INSTALL_CALLOUT_EBAY_HTML}}
-    <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:11px 14px;margin-bottom:12px;font-size:12.5px;line-height:1.5;">
-      <strong>AUTHENTIC {{BUSINESS_NAME}} SHOP PACKAGING &amp; REPEAT-BUYER CERTIFICATE:</strong><br/>
-      Every order ships from our 5.0★ rated University Place, WA 98467 automotive facility with our printed Bench-Inspection Tag, QR Bin Verification Slip, and Repeat-Customer VIP Shop Card enclosed inside the package. Have a 17-digit VIN fitment question or picking up locally in University Place, WA 98467? Send us a message anytime via <strong>eBay Messages</strong>!
-    </div>
-    <div style="background:#fff7ed;border:1px solid #ea580c;border-radius:6px;padding:12px 14px;font-size:12.5px;line-height:1.5;">
-      <strong>SHIPPING, LOCAL PICKUP &amp; DEFECT-ONLY RETURN POLICY:</strong><br/>
-      • <strong>Shipping &amp; $${handlingFee} Handling Buffer:</strong> Eligible non-hazmat items under ${freightLbs} lbs ship Calculated Parcel + $${handlingFee} protective packaging/handling buffer within ${handlingDays} business days. Items ${freightLbs}+ lbs (or oversized/hazmat) are strictly <strong>Local Pickup Only in University Place, WA 98467</strong>.<br/>
-      • <strong>Returns Not Accepted (Defect-Only Coverage):</strong> Returns Not Accepted for buyer remorse or wrong fitment. Match MPN &amp; photos prior to ordering (message us your valid 17-digit VIN via eBay Messages to confirm). Defect-Only claims require OBD-II/photo proof and intact UV/Paint Tamper Serial Mark (<strong>{{SECURITY_CODE}}</strong>); buyer pays return shipping; parts-only coverage.
-    </div>
   </div>
 </div>`,
 
     local_marketplace_template: `{{TITLE}}
-MPN: {{OEM_PART_NUMBER}} | Interchange: {{INTERCHANGE_NUMBER}} | Stock SKU: {{SKU}} (1-of-1 Single Unit)
-Fits: {{FITMENT_YEARS}} {{FITMENT_MAKE}} {{FITMENT_MODEL}} ({{FITMENT_ENGINE}})
-Verified Spec: {{WEIGHT_LBS}} lbs • {{DIMENSIONS_IN}} in
-
-CONDITION: {{CONDITION}}
-{{DESCRIPTION}}
-Inspection Note: {{DEFECT_DISCLOSURE}}
-
-SINGLE-UNIT PRICING & OPTIONAL SHOP INSTALLATION AT ${name.toUpperCase()} (University Place, WA 98467):
-• PART PRICE: {{SHIPPING_OR_PICKUP_LINE}}
-• {{PULL_INSTALL_LINE}}
-
-SHOP DIRECT & MOBILE APP:
-• Direct Catalog & Installable Mobile App: {{DIRECT_WEBSITE_URL}}
-• Location: ${addr} | Shop & Parts: ${phone}${settings.uhaul_phone ? ` | U-Haul #046117: ${settings.uhaul_phone}` : ''}
-• Hours: ${settings.hours_weekday}
-• All parts carry serialized UV/Paint security marks ({{SECURITY_CODE}}). Returns Not Accepted for remorse/fitment (Defect-Only with security mark & diagnostic proof; buyer covers return shipping).`,
+MPN: {{OEM_PART_NUMBER}} | Stock SKU: {{SKU}} (1-of-1 Single Unit)
+Donor Fitment: {{FITMENT_LINE}} | Donor VIN: {{DONOR_VIN}}
+Condition: {{CONDITION}}
+Visual Inspection: {{INSPECTION_SUMMARY}}
+Physical Spec: {{WEIGHT_LBS}} lbs | {{DIMENSIONS_IN}} in | {{SHIPPING_SUMMARY_LABEL}}
+Bin Location: {{BIN_LOCATION}}`,
 
     platform_enforcement_notes: [
       {

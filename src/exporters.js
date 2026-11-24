@@ -7,18 +7,33 @@ const {
   getSettings,
   generateSecurityCode,
   computeShippingClass,
+  PERMANENTLY_BANNED_GHOST_VINS,
+  PERMANENTLY_BANNED_SOLD_SKUS,
   validateVinStrict,
+  isGhostOrBannedInventoryItem,
+  purgeGhostAndBlockedInventory,
   validatePartCompliance,
   validateInventoryItemForPublish,
   logSync
 } = require('./db');
 const { generateAllPolicies } = require('./policies');
 const { csvEscape, xmlEscape, parseCsv } = require('./exporters-csv-utils');
-const { isQrCardUrl, generatePartQrCardPng } = require('./qr-card');
-const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn, resolveCountryOfOrigin } = require('./taxonomy');
+const { isQrCardUrl } = require('./qr-card');
+const {
+  resolvePartTaxonomyAndMetafields,
+  sanitizeVerifiedMpn,
+  resolveStructuredOemMpn,
+  resolveCountryOfOrigin
+} = require('./taxonomy');
+const {
+  resolvePartDimensionsAndWeight,
+  stripOffPlatformViolations,
+  dedupeSentences
+} = require('./catalog-enrichment');
 const {
   PROHIBITED_CAT_SKUS,
   PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS,
+  CONFIRMED_SOLD_OR_GHOST_SKUS,
   isCounterfeitMpn,
   isGoogleDriveViewerUrl,
   cleanListingTitle,
@@ -38,7 +53,7 @@ function extractRawPhotoArray(item) {
       })();
 }
 
-// Marketplace-Safe Clean Photos ONLY (excludes QR/info cards for eBay Motors & Google Merchant Center)
+// Marketplace-Safe Clean Photos ONLY (NEVER includes QR/info cards or Drive viewer URLs!)
 function getValidPhotos(item) {
   return extractRawPhotoArray(item)
     .map((u) => String(u || '').trim())
@@ -49,43 +64,26 @@ function hasRealPhotos(item) {
   return getValidPhotos(item).length > 0;
 }
 
-// Shopify Gallery Photos: 1..N Clean Real Part Photos + Final (N+1) QR-Branded Info & App Card
-function getShopifyGalleryPhotos(item, settings, uploadsDir) {
-  const cleanPhotos = getValidPhotos(item);
-  if (!cleanPhotos.length) return [];
-
-  const existingQrCdn = extractRawPhotoArray(item)
-    .map((u) => String(u || '').trim())
-    .find((u) => /^https?:\/\//i.test(u) && isQrCardUrl(u));
-
-  const dir = uploadsDir || path.join(DATA_DIR, 'uploads');
-  const safeSku = String(item?.sku || 'ALD-PART').replace(/[^A-Za-z0-9-]/g, '').toUpperCase() || 'ALD-PART';
-  const qrPublicPath = `/uploads/${safeSku}.qr.png`;
-  const qrAbsPath = path.join(dir, `${safeSku}.qr.png`);
-
-  if (!fs.existsSync(qrAbsPath)) {
-    generatePartQrCardPng(item, settings || getSettings(), dir);
-  }
-
-  const finalQrImage = existingQrCdn || qrPublicPath;
-  return [...cleanPhotos, finalQrImage];
+// v31.0 ZERO-QR MEDIA POLICY: Shopify product media MUST contain ONLY real part photos — NEVER *.qr.png!
+function getShopifyGalleryPhotos(item) {
+  return getValidPhotos(item);
 }
 
 function isMarketplaceSafeItem(item) {
-  if (!item || item.quantity <= 0 || item.status !== 'active') return false;
+  if (!item || Number(item.quantity || 0) <= 0 || item.status !== 'active') return false;
+  if (isGhostOrBannedInventoryItem(item).blocked) return false;
   const vVin = String(item.verified_vin || '').trim().toUpperCase();
-  const isTitleCheckOverride =
-    vVin === 'VIN-TITLE-CHECK' &&
-    Boolean(item.intake_session_id) &&
-    item.intake_source === 'vin_intake_pipeline' &&
-    Boolean(
-      db.prepare("SELECT id FROM vin_intake_sessions WHERE UPPER(session_code) = ? AND vin = 'VIN-TITLE-CHECK' AND status = 'active'").get(String(item.intake_session_id).toUpperCase())
-    );
-  if ((!vVin || !validateVinStrict(vVin).valid) && !isTitleCheckOverride) return false;
+  // STRICT NO REAL 17-CHAR VERIFIED DONOR VIN = NO LISTING (zero VIN-TITLE-CHECK bypass)
+  if (!vVin || vVin.length !== 17 || !validateVinStrict(vVin).valid) return false;
   if (!item.intake_session_id || item.intake_source !== 'vin_intake_pipeline') return false;
   if (!hasRealPhotos(item)) return false;
   const skuUpper = String(item.sku || '').trim().toUpperCase();
-  if (PROHIBITED_CAT_SKUS.has(skuUpper) || PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper)) {
+  if (
+    PROHIBITED_CAT_SKUS.has(skuUpper) ||
+    PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper) ||
+    CONFIRMED_SOLD_OR_GHOST_SKUS.has(skuUpper) ||
+    PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)
+  ) {
     return false;
   }
   const gate = validateInventoryItemForPublish(item);
@@ -99,21 +97,26 @@ function isMarketplaceSafeItem(item) {
 }
 
 /**
- * PERMANENT PRE-EXPORT DEDUPLICATION & MANDATORY VIN-INTAKE GATE:
- * Runs deduplicateCatalog() before every marketplace CSV/XML export and strictly
- * excludes any item that did not enter through the verified VIN/Plate Intake Pipeline.
+ * PERMANENT PRE-EXPORT DEDUPLICATION, GHOST PURGE & MANDATORY STRICT 17-CHAR VIN GATE:
+ * Runs purgeGhostAndBlockedInventory() + deduplicateCatalog() before every marketplace CSV/XML export
+ * and strictly excludes any item without a real 17-character NHTSA-verified donor VIN.
  */
 function ensureDeduplicatedItems(items) {
+  try {
+    purgeGhostAndBlockedInventory({ actor: 'pre_export_gate' });
+  } catch (_) {}
   try {
     const { deduplicateCatalog } = require('./catalog-enrichment');
     deduplicateCatalog();
   } catch (_) {}
   if (!Array.isArray(items) || !items.length) return [];
   const activeRows = db.prepare(`
-    SELECT sku, status, quantity, photos_json, verified_vin, intake_session_id, intake_source
+    SELECT sku, status, quantity, photos_json, verified_vin, intake_session_id, intake_source,
+           weight_lbs, length_in, width_in, height_in, oem_part_number, title, description, defect_disclosure, shipping_class
     FROM inventory_items
     WHERE status = 'active'
-      AND COALESCE(verified_vin, '') != ''
+      AND LENGTH(TRIM(COALESCE(verified_vin, ''))) = 17
+      AND UPPER(TRIM(COALESCE(verified_vin, ''))) != '1G4GA5GR2FF246661'
       AND COALESCE(intake_session_id, '') != ''
       AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
   `).all();
@@ -133,7 +136,16 @@ function ensureDeduplicatedItems(items) {
       photos_json: live.photos_json || item.photos_json,
       verified_vin: live.verified_vin,
       intake_session_id: live.intake_session_id,
-      intake_source: live.intake_source
+      intake_source: live.intake_source,
+      weight_lbs: live.weight_lbs || item.weight_lbs,
+      length_in: live.length_in || item.length_in,
+      width_in: live.width_in || item.width_in,
+      height_in: live.height_in || item.height_in,
+      oem_part_number: live.oem_part_number || item.oem_part_number,
+      title: live.title || item.title,
+      description: live.description || item.description,
+      defect_disclosure: live.defect_disclosure || item.defect_disclosure,
+      shipping_class: live.shipping_class || item.shipping_class
     });
   }
   return out;
@@ -145,9 +157,33 @@ function sanitizeMpnField(rawMpn) {
   return isCounterfeitMpn(clean) ? '' : clean;
 }
 
-function resolveExportMpn(rawMpn) {
-  // STRICT ANTI-PLACEHOLDER RULE: NEVER output "Does Not Apply" or fake hex/year-make tokens as MPN.
-  return sanitizeMpnField(rawMpn);
+function resolveExportMpn(itemOrRawMpn) {
+  if (itemOrRawMpn && typeof itemOrRawMpn === 'object') {
+    return resolveStructuredOemMpn(itemOrRawMpn).mpn;
+  }
+  return sanitizeMpnField(itemOrRawMpn);
+}
+
+function resolveExportDims(item = {}) {
+  const det = resolvePartDimensionsAndWeight(item);
+  const w = Number(item.weight_lbs || 0);
+  const l = Number(item.length_in || 0);
+  const wi = Number(item.width_in || 0);
+  const h = Number(item.height_in || 0);
+  const isLegacyDefault =
+    w <= 0 || w === 2 || w === 8.5 ||
+    (l === 14 && wi === 10 && (h === 7 || h === 8));
+  if (isLegacyDefault || l <= 0 || wi <= 0 || h <= 0) {
+    return det;
+  }
+  return {
+    weight_lbs: Number(w.toFixed(1)),
+    length_in: Math.round(l),
+    width_in: Math.round(wi),
+    height_in: Math.round(h),
+    labor_hours: Number(item.install_labor_hours ?? det.labor_hours),
+    local_pickup_only: Boolean(det.local_pickup_only || item.shipping_class === 'local_pickup_only')
+  };
 }
 
 function normalizeExportCondition(rawCondition) {
@@ -159,7 +195,9 @@ function normalizeExportCondition(rawCondition) {
 
 function isHeavyLocalPickupItem(item, settings) {
   const threshold = Number(settings?.freight_weight_threshold_lbs || 70);
-  return Number(item.weight_lbs || 0) >= threshold || item.shipping_class !== 'parcel_calculated';
+  const dims = resolveExportDims(item);
+  const girth = dims.length_in + 2 * (dims.width_in + dims.height_in);
+  return dims.local_pickup_only || dims.weight_lbs >= threshold || girth > 130 || item.shipping_class !== 'parcel_calculated';
 }
 
 function resolveExportPhotoUrl(photoPath, baseUrl, settings) {
@@ -179,7 +217,8 @@ function resolveExportPhotoUrl(photoPath, baseUrl, settings) {
 }
 
 function formatDimensionsIn(item) {
-  return `${Math.ceil(Number(item.length_in || 14))}x${Math.ceil(Number(item.width_in || 10))}x${Math.ceil(Number(item.height_in || 8))}`;
+  const dims = resolveExportDims(item);
+  return `${Math.ceil(dims.length_in)}x${Math.ceil(dims.width_in)}x${Math.ceil(dims.height_in)}`;
 }
 
 function computeInstallEstimate(item, settings) {
@@ -197,12 +236,7 @@ function computeInstallEstimate(item, settings) {
 }
 
 function stripOffEbayContactText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/\S+/gi, '')
-    .replace(/\b[a-z0-9-]+\.(com|net|org|io|app|shop|store|myshopify\.com)(\/\S*)?/gi, '')
-    .replace(/\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  return stripOffPlatformViolations(text);
 }
 
 function resolveDirectPublicUrls(settings, baseUrl) {
@@ -223,150 +257,114 @@ function stripDriveUrlsFromPublicText(text) {
     .trim();
 }
 
-function buildExpectedShopifyImageAlt(item, isQr = false) {
+function buildExpectedShopifyImageAlt(item) {
   const sku = String(item?.sku || '').trim();
-  const sec = String(item?.security_mark_code || '').trim();
-  if (isQr) {
-    return `${sku} Security Tag ${sec} - Scan QR for Aldridge Auto's App`.replace(/\s{2,}/g, ' ').trim().slice(0, 125);
-  }
-  const cleanTitle = String(item?.title || '').trim();
+  const cleanTitle = cleanListingTitle(item?.title || '').slice(0, 80);
   const suffix = sku ? ` (${sku})` : '';
   const maxTitleLen = Math.max(20, 125 - suffix.length);
   return `${cleanTitle.slice(0, maxTitleLen).trim()}${suffix}`.trim();
 }
 
-function renderShopifyHtml(item, settings, baseUrl) {
+function buildCleanInspectionSummary(item = {}) {
+  const cleanDefect = stripOffPlatformViolations(item.defect_disclosure || '');
+  const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  const isGeneric = !cleanDefect || cleanDefect.length < 12 || /^(inspected & verified\.?|clean tested assembly\.?)$/i.test(cleanDefect);
+  const baseNote = isGeneric
+    ? `Genuine factory OEM ${item.category || 'component'} removed from ${fitmentLine || 'verified donor vehicle'}. Mounting points and connectors inspected intact; see all photos for exact cosmetic condition.`
+    : cleanDefect;
+  return dedupeSentences(stripOffPlatformViolations(baseNote));
+}
+
+function buildCleanPlainListingDesc(item, settings) {
+  const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+  const tax = resolvePartTaxonomyAndMetafields(item, settings);
+  const dims = resolveExportDims(item);
+  const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+  const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  const donorVin = String(item.verified_vin || '').trim().toUpperCase();
+  const summary = buildCleanInspectionSummary(item);
+  const shipText = heavyPickupOnly ? 'Local Pickup Only' : 'Calculated Parcel Shipping';
+  return dedupeSentences(
+    stripOffPlatformViolations(
+      `${title80}. ${summary} OEM MPN: ${tax.mpn}. Donor Fitment: ${fitmentLine || tax.customLabel0}${donorVin.length === 17 ? ` (VIN ${donorVin})` : ''}. Condition: ${normalizeExportCondition(item.condition)} OEM. Packed Spec: ${dims.weight_lbs} lbs (${dims.length_in}x${dims.width_in}x${dims.height_in} in) - ${shipText}. Origin: ${tax.countryCodeOfOrigin}.`
+    )
+  );
+}
+
+function renderCleanOemSpecHtml(item, settings, templateKey = 'shopify_direct_html_template') {
   const policies = generateAllPolicies(settings);
-  const tpl = policies.shopify_direct_html_template || policies.ebay_motors_html_template;
-  const mpnOut = resolveExportMpn(item.oem_part_number);
-  const mpnLabel = mpnOut || 'OEM Factory Part (Match Photos & VIN)';
-  const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
+  const tpl = policies[templateKey] || policies.shopify_direct_html_template;
+  const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+  const tax = resolvePartTaxonomyAndMetafields(item, settings);
+  const dims = resolveExportDims(item);
   const condOut = normalizeExportCondition(item.condition);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, otdTotal, supplyFee, supplyCap, taxRate, hours, rate } = computeInstallEstimate(item, settings);
-  const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
-  const phone = settings.phone || '(253) 245-4206';
-
-  const installCalloutHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
-      <strong style="color:#0369a1;">🔧 OPTIONAL CERTIFIED SHOP BAY INSTALLATION (INFO-ONLY — SINGLE-UNIT PART):</strong><br/>
-      Estimated Turnkey Part + Certified Installation at our 5.0★ University Place, WA 98467 bays: <strong>$${installTotal.toFixed(2)}</strong> part + labor <em>(~${hours.toFixed(1)} hrs certified technician labor @ $${rate.toFixed(2)}/hr; est. <strong>$${otdTotal.toFixed(2)}</strong> out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax at 5115 66th St W, Bldg B)</em>.<br/>
-      <span style="font-size:12px;color:#334155;">To prevent double-booking this 1-of-1 part, purchase the part here first to lock it in, then schedule your bay installation on our <a href="${pwaUrl}" style="color:#0369a1;font-weight:700;">Live Website &amp; Mobile App (${pwaUrl.replace(/^https?:\/\//i, '')})</a> or call/text <strong>${phone}</strong>.</span>
-    </div>`;
-
-  const directAppCalloutHtml = `<div style="background:#f8fafc;border:1px solid #0b1628;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;line-height:1.5;">
-      <strong style="color:#0b1628;">📱 BUY DIRECT &amp; INSTALL THE ALDRIDGE AUTO'S MOBILE APP (SAVE ON MARKETPLACE FEES):</strong><br/>
-      Shop our full verified photo catalog directly at <a href="${pwaUrl}" style="color:#ea580c;font-weight:700;">${pwaUrl}</a> and tap <strong>"Add to Home Screen"</strong> on iPhone or Android for instant 17-digit VIN checks, bay booking, and direct repeat-customer pricing!
-    </div>`;
-
-  const shipLabel = heavyPickupOnly
-    ? 'Local Pickup Only in University Place, WA 98467'
-    : `Calculated Parcel + $${Number(settings.handling_fee_default ?? 10).toFixed(2)} Handling`;
-
-  const safeDesc = stripDriveUrlsFromPublicText(item.description || item.title);
-  const safeNotes = stripDriveUrlsFromPublicText(item.fitment_notes) || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).';
-  const safeDefect = stripDriveUrlsFromPublicText(item.defect_disclosure || 'Inspected & verified.');
+  const interchangeClean = sanitizeMpnField(item.interchange_number);
+  const interchangeSuffix = interchangeClean
+    ? ` / Interchange: ${interchangeClean}`
+    : (item.hollander_number ? ` (Hollander #${item.hollander_number})` : '');
+  const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' ') || tax.customLabel0;
+  const donorVin = String(item.verified_vin || '').trim().toUpperCase();
+  const shipLabel = heavyPickupOnly ? 'Local Pickup Only' : 'Calculated Parcel Shipping';
+  const inspectionSummary = buildCleanInspectionSummary(item);
 
   return tpl
-    .replaceAll('{{BUSINESS_NAME}}', settings.business_name)
-    .replaceAll('{{SKU}}', item.sku)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
-    .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
-    .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
-    .replaceAll('{{TITLE}}', item.title)
-    .replaceAll('{{DESCRIPTION}}', safeDesc)
-    .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DEFECT_DISCLOSURE}}', safeDefect)
-    .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
-    .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
-    .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
-    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
-    .replaceAll('{{FITMENT_NOTES}}', safeNotes)
-    .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
-    .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
-    .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
+    .replaceAll('{{SKU}}', item.sku || '')
+    .replaceAll('{{TITLE}}', title80)
+    .replaceAll('{{OEM_PART_NUMBER}}', tax.mpn)
+    .replaceAll('{{INTERCHANGE_SUFFIX}}', interchangeSuffix)
+    .replaceAll('{{INSPECTION_SUMMARY}}', inspectionSummary)
+    .replaceAll('{{CONDITION}}', condOut === 'New' ? 'New OEM' : 'Used OEM')
+    .replaceAll('{{FITMENT_LINE}}', fitmentLine)
+    .replaceAll('{{DONOR_VIN}}', donorVin)
+    .replaceAll('{{PLACEMENT}}', stripOffPlatformViolations(item.placement_on_vehicle || 'Vehicle Specific') || 'Vehicle Specific')
+    .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'BAY-B')
+    .replaceAll('{{WEIGHT_LBS}}', String(dims.weight_lbs))
+    .replaceAll('{{DIMENSIONS_IN}}', `${dims.length_in} x ${dims.width_in} x ${dims.height_in}`)
     .replaceAll('{{SHIPPING_SUMMARY_LABEL}}', shipLabel)
-    .replaceAll('{{INSTALL_CALLOUT_HTML}}', installCalloutHtml)
-    .replaceAll('{{DIRECT_APP_CALLOUT_HTML}}', directAppCalloutHtml);
+    .replaceAll('{{COUNTRY_OF_ORIGIN}}', tax.countryCodeOfOrigin);
+}
+
+function renderShopifyHtml(item, settings) {
+  return renderCleanOemSpecHtml(item, settings, 'shopify_direct_html_template');
 }
 
 function renderEbayHtml(item, settings) {
-  const tpl = generateAllPolicies(settings).ebay_motors_html_template;
-  const mpnOut = resolveExportMpn(item.oem_part_number);
-  const mpnLabel = mpnOut || 'OEM Factory Part (Match Photos & VIN)';
-  const interchangeLabel = sanitizeMpnField(item.interchange_number) || (item.hollander_number ? `Hollander #${item.hollander_number}` : 'Verify via Donor Fitment');
-  const condOut = normalizeExportCondition(item.condition);
-  const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, otdTotal, supplyFee, supplyCap, taxRate, hours, rate } = computeInstallEstimate(item, settings);
-
-  // 100% eBay Policy Compliant Callout — ZERO external URLs, domains, or phone numbers!
-  const installCalloutEbayHtml = `<div style="background:#f0f9ff;border:1px solid #0284c7;border-radius:6px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
-      <strong style="color:#0369a1;">OPTIONAL CERTIFIED IN-HOUSE SHOP INSTALLATION (UNIVERSITY PLACE, WA 98467):</strong><br/>
-      Informational Turnkey Part + Certified Bay Installation Estimate: <strong>$${installTotal.toFixed(2)}</strong> part + labor <em>(~${hours.toFixed(1)} hrs certified technician labor @ $${rate.toFixed(2)}/hr; est. $${otdTotal.toFixed(2)} out-the-door incl. $${supplyFee.toFixed(2)} 7% shop supplies capped at $${supplyCap} + ${(taxRate * 100).toFixed(1)}% WA tax)</em>. Listed strictly as 1 single physical unit so inventory is never double-booked — local Pierce County buyers may message us directly via <strong>eBay Messages</strong> regarding counter pickup or bay installation availability!
-    </div>`;
-
-  const shipLabel = heavyPickupOnly
-    ? 'Local Pickup Only in University Place, WA 98467'
-    : `Calculated Parcel + $${Number(settings.handling_fee_default ?? 10).toFixed(2)} Handling`;
-
-  return tpl
-    .replaceAll('{{BUSINESS_NAME}}', settings.business_name)
-    .replaceAll('{{SKU}}', item.sku)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
-    .replaceAll('{{HOLLANDER_NUMBER}}', item.hollander_number ? `(Hollander #${item.hollander_number})` : '')
-    .replaceAll('{{SECURITY_CODE}}', item.security_mark_code)
-    .replaceAll('{{TITLE}}', stripOffEbayContactText(item.title))
-    .replaceAll('{{DESCRIPTION}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.description || item.title)))
-    .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DEFECT_DISCLOSURE}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.defect_disclosure || 'Inspected & verified.')))
-    .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
-    .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
-    .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
-    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || 'Verify OEM # / VIN')
-    .replaceAll('{{FITMENT_NOTES}}', stripOffEbayContactText(stripDriveUrlsFromPublicText(item.fitment_notes) || 'Match OEM photos & VIN prior to purchase (Returns Not Accepted for remorse/fitment).'))
-    .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'MAIN-WHSE')
-    .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
-    .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
-    .replaceAll('{{SHIPPING_SUMMARY_LABEL}}', shipLabel)
-    .replaceAll('{{INSTALL_CALLOUT_EBAY_HTML}}', installCalloutEbayHtml);
+  return renderCleanOemSpecHtml(item, settings, 'ebay_motors_html_template');
 }
 
-function renderLocalMarketplacePacket(item, settings, baseUrl) {
+function renderLocalMarketplacePacket(item, settings) {
   const tpl = generateAllPolicies(settings).local_marketplace_template;
-  const mpnOut = resolveExportMpn(item.oem_part_number);
-  const mpnLabel = mpnOut || 'Verified OEM (Match Photos/VIN)';
-  const interchangeLabel = sanitizeMpnField(item.interchange_number) || item.hollander_number || 'Match Donor Vehicle';
-  const condOut = normalizeExportCondition(item.condition);
-  const handlingFee = Number(settings.handling_fee_default ?? 10).toFixed(2);
+  const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+  const tax = resolvePartTaxonomyAndMetafields(item, settings);
+  const dims = resolveExportDims(item);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
-  const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
-
-  const shipOrPickupLine = heavyPickupOnly
-    ? `$${Number(item.price_we_pull || 0).toFixed(2)} — LOCAL PICKUP ONLY in University Place, WA 98467 (70+ lb / oversized / hazmat assembly at 5115 66th St W, Bldg B)`
-    : `$${Number(item.price_we_pull || 0).toFixed(2)} (+ Calculated Parcel Shipping + $${handlingFee} handling buffer if shipped, or FREE Shop Counter Pickup in University Place, WA 98467!)`;
-
-  const installLine = `OPTIONAL CERTIFIED SHOP INSTALLATION (INFO CALLOUT): ~$${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs certified bay labor @ $${rate.toFixed(2)}/hr in University Place, WA 98467 — purchase single-unit part to reserve)!`;
+  const fitmentLine = [item.fitment_years, item.fitment_make, item.fitment_model, item.fitment_engine]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' ') || tax.customLabel0;
 
   return tpl
-    .replaceAll('{{TITLE}}', item.title)
-    .replaceAll('{{OEM_PART_NUMBER}}', mpnLabel)
-    .replaceAll('{{INTERCHANGE_NUMBER}}', interchangeLabel)
-    .replaceAll('{{SKU}}', item.sku)
-    .replaceAll('{{FITMENT_YEARS}}', item.fitment_years || '')
-    .replaceAll('{{FITMENT_MAKE}}', item.fitment_make || '')
-    .replaceAll('{{FITMENT_MODEL}}', item.fitment_model || '')
-    .replaceAll('{{FITMENT_ENGINE}}', item.fitment_engine || '')
-    .replaceAll('{{WEIGHT_LBS}}', String(item.weight_lbs || 10))
-    .replaceAll('{{DIMENSIONS_IN}}', formatDimensionsIn(item))
-    .replaceAll('{{CONDITION}}', condOut)
-    .replaceAll('{{DESCRIPTION}}', stripDriveUrlsFromPublicText(item.description || ''))
-    .replaceAll('{{DEFECT_DISCLOSURE}}', stripDriveUrlsFromPublicText(item.defect_disclosure || 'Clean tested assembly.'))
-    .replaceAll('{{SHIPPING_OR_PICKUP_LINE}}', shipOrPickupLine)
-    .replaceAll('{{PULL_INSTALL_LINE}}', installLine)
-    .replaceAll('{{DIRECT_WEBSITE_URL}}', pwaUrl)
-    .replaceAll('{{SECURITY_CODE}}', item.security_mark_code);
+    .replaceAll('{{TITLE}}', title80)
+    .replaceAll('{{OEM_PART_NUMBER}}', tax.mpn)
+    .replaceAll('{{SKU}}', item.sku || '')
+    .replaceAll('{{FITMENT_LINE}}', fitmentLine)
+    .replaceAll('{{DONOR_VIN}}', String(item.verified_vin || '').trim().toUpperCase())
+    .replaceAll('{{CONDITION}}', normalizeExportCondition(item.condition) === 'New' ? 'New OEM' : 'Used OEM')
+    .replaceAll('{{INSPECTION_SUMMARY}}', buildCleanInspectionSummary(item))
+    .replaceAll('{{WEIGHT_LBS}}', String(dims.weight_lbs))
+    .replaceAll('{{DIMENSIONS_IN}}', `${dims.length_in}x${dims.width_in}x${dims.height_in}`)
+    .replaceAll('{{SHIPPING_SUMMARY_LABEL}}', heavyPickupOnly ? 'Local Pickup Only' : 'Calculated Parcel Shipping')
+    .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'BAY-B');
 }
 
 function generateMasterImportTemplateCsv() {
@@ -676,20 +674,26 @@ function generateShopifyCsv(items, settings, baseUrl) {
     'Option1 Name', 'Option1 Value', 'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker',
     'Variant Inventory Qty', 'Variant Inventory Policy', 'Variant Fulfillment Service',
     'Variant Price', 'Variant Requires Shipping', 'Variant Taxable', 'Image Src', 'Image Position', 'Image Alt Text',
+    'SEO Title', 'SEO Description',
     'Google Shopping / Google Product Category',
     'Google Shopping / MPN',
     'Google Shopping / Condition',
+    'Google Shopping / Age Group',
+    'Google Shopping / Gender',
     'Google Shopping / Custom Label 0',
     'Google Shopping / Custom Label 1',
     'Metafield: custom.oem_part_number [single_line_text_field]',
+    'Metafield: custom.donor_vin [single_line_text_field]',
     'Metafield: custom.condition [single_line_text_field]',
     'Metafield: custom.bin_location [single_line_text_field]',
-    'Metafield: custom.security_mark [single_line_text_field]',
-    'Metafield: custom.shipping_class [single_line_text_field]',
-    'Metafield: custom.package_dimensions [single_line_text_field]',
+    'Metafield: custom.packed_dimensions [single_line_text_field]',
+    'Metafield: custom.country_of_origin [single_line_text_field]',
+    'Metafield: custom.color [single_line_text_field]',
+    'Metafield: custom.material [single_line_text_field]',
+    'Metafield: custom.manufacturer_type [single_line_text_field]',
+    'Metafield: custom.finish [single_line_text_field]',
     'Metafield: custom.ebay_us_category_id [single_line_text_field]',
     'Metafield: custom.shopify_taxonomy_id [single_line_text_field]',
-    'Metafield: custom.return_policy [single_line_text_field]',
     'Status'
   ];
 
@@ -699,49 +703,38 @@ function generateShopifyCsv(items, settings, baseUrl) {
 
   const rows = [headers.join(',')];
   for (const item of items) {
-    // Hard compliance, anti-placeholder, deduplication, fake-VIN & real-photo guard
-    if (item.status === 'pending_verification' || item.status === 'compliance_blocked' || item.status === 'duplicate_archived') continue;
-    if (!hasRealPhotos(item)) continue;
-    const gate = validateInventoryItemForPublish(item);
-    if (!gate.valid) continue;
-    if (item.donor_vehicle_id) {
-      const dv = db.prepare('SELECT vin FROM donor_vehicles WHERE id = ?').get(item.donor_vehicle_id);
-      if (dv && dv.vin && !validateVinStrict(dv.vin).valid) continue;
-    }
-    const skuUpper = String(item.sku || '').trim().toUpperCase();
-    if (PROHIBITED_CAT_SKUS.has(skuUpper) || PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(skuUpper)) continue;
-
-    const tax = resolvePartTaxonomyAndMetafields(item, settings);
+    if (!isMarketplaceSafeItem(item)) continue;
+    const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+    const dims = resolveExportDims(item);
+    const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
     const handle = item.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const photos = getValidPhotos(item);
     const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
     const condOut = normalizeExportCondition(item.condition);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const effectiveShippingClass = heavyPickupOnly ? 'local_pickup_only_98467' : 'parcel_calculated_plus_10_handling';
 
-    const htmlBody = renderShopifyHtml(item, settings, baseUrl);
-    const grams = Math.round(Number(item.weight_lbs || 8) * 453.592);
-    const tags = tax.seoTags.join(', ');
-    const safeActive = isMarketplaceSafeItem(item);
-    const status = item.status === 'archived' ? 'archived' : (safeActive ? 'active' : 'draft');
+    const htmlBody = renderShopifyHtml({ ...item, title: title80 }, settings);
+    const grams = Math.round(Number(dims.weight_lbs) * 453.592);
+    const dimsLabel = `${dims.length_in}x${dims.width_in}x${dims.height_in} in (${dims.weight_lbs} lbs)`;
+    const tags = [...tax.seoTags, `Dims:${dims.length_in}x${dims.width_in}x${dims.height_in}`].join(', ');
+    const donorVin = String(item.verified_vin || '').trim().toUpperCase();
 
-    // STRICT SINGLE-VARIANT RULE: Only 1 physical unit variant (Default Title) so inventory can NEVER be double-booked!
     rows.push([
       handle,
-      item.title,
+      title80,
       htmlBody,
-      settings.business_name,
+      tax.brand || item.fitment_make || 'OEM',
       tax.shopifyProductCategory,
       tax.partType,
       tags,
-      status === 'active' ? 'true' : 'false',
+      'true',
       'Title',
       'Default Title',
       item.sku,
       grams,
       'shopify',
-      status === 'active' ? Math.max(1, Number(item.quantity || 1)) : 0,
+      1,
       'deny',
       'manual',
       Number(item.price_we_pull || 0).toFixed(2),
@@ -749,40 +742,45 @@ function generateShopifyCsv(items, settings, baseUrl) {
       'true',
       imgUrl,
       imgUrl ? '1' : '',
-      imgUrl ? item.title.slice(0, 70) : '',
+      imgUrl ? buildExpectedShopifyImageAlt({ ...item, title: title80 }) : '',
+      tax.seoTitle,
+      tax.seoDescription,
       tax.googleProductCategory,
       tax.mpn,
       tax.condition,
+      'adult',
+      'unisex',
       tax.customLabel0,
       tax.customLabel1,
       tax.mpn,
+      donorVin,
       condOut,
-      item.bin_location,
-      item.security_mark_code,
-      effectiveShippingClass,
-      `${formatDimensionsIn(item)} in`,
+      item.bin_location || '',
+      dimsLabel,
+      tax.countryCodeOfOrigin,
+      tax.attributes.color,
+      tax.attributes.material,
+      tax.attributes.manufacturer_type,
+      tax.attributes.finish,
       tax.ebayUsCategoryId,
       tax.shopifyTaxonomyId,
-      'Returns Not Accepted (Defect-Only)',
-      status
+      'active'
     ].map(csvEscape).join(','));
 
-    // Secondary angle photos + FINAL gallery image = QR-Branded Info & App Card (strictly blank Variant/Option/Price columns!)
+    // Secondary real part photos ONLY (NEVER *.qr.png!)
     photos.slice(1).forEach((secPhoto, secIdx) => {
       const secRow = new Array(headers.length).fill('');
       secRow[0] = handle;
       secRow[imgSrcIdx] = resolvePhoto(secPhoto);
       secRow[imgPosIdx] = String(secIdx + 2);
-      secRow[imgAltIdx] = isQrCardUrl(secPhoto)
-        ? `${item.sku} Security Tag ${item.security_mark_code} - Scan QR for Aldridge Auto's App`.slice(0, 70)
-        : item.title.slice(0, 70);
+      secRow[imgAltIdx] = buildExpectedShopifyImageAlt({ ...item, title: title80 });
       rows.push(secRow.map(csvEscape).join(','));
     });
   }
   return rows.join('\n') + '\n';
 }
 
-// STRICT STANDARD EBAY US (ebay.com, SiteID=US) ONLY — NEVER eBay Motors!
+// STRICT STANDARD EBAY US (ebay.com, SiteID=US) ONLY
 function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false } = {}) {
   items = ensureDeduplicatedItems(items);
   const headers = [
@@ -797,6 +795,7 @@ function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false }
     'C:OE/OEM Part Number',
     'C:Interchange Part Number',
     'C:Placement on Vehicle',
+    'C:Country/Region of Manufacture',
     'PicURL',
     '*Description',
     '*Format',
@@ -820,13 +819,15 @@ function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false }
   const rows = [headers.join(',')];
   for (const item of items) {
     if (!isMarketplaceSafeItem(item)) continue;
+    const dims = resolveExportDims(item);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
     if (freightOnly && !heavyPickupOnly) continue;
-    const tax = resolvePartTaxonomyAndMetafields(item, settings);
+    const ebayTitle = cleanListingTitle(item.title || '').slice(0, 80);
+    const tax = resolvePartTaxonomyAndMetafields({ ...item, title: ebayTitle, weight_lbs: dims.weight_lbs }, settings);
     const photos = getValidPhotos(item);
     const picUrl = photos.map((p) => resolveExportPhotoUrl(p, baseUrl, settings)).join('|');
-    const ebayTitle = cleanListingTitle(item.title).slice(0, 80);
     const condOut = normalizeExportCondition(item.condition);
+    const condDesc = buildCleanInspectionSummary(item).slice(0, 280);
 
     rows.push([
       'Add',
@@ -834,19 +835,20 @@ function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false }
       tax.ebayUsCategoryId,
       ebayTitle,
       condOut === 'New' ? 1000 : 3000,
-      `${condOut} — ${item.defect_disclosure} | Fits: ${tax.customLabel0} | Returns Not Accepted (Defect-Only) | Security Mark ID: ${item.security_mark_code}`,
+      condDesc,
       tax.brand,
       tax.mpn,
       tax.mpn,
       [sanitizeMpnField(item.interchange_number), item.hollander_number].filter(Boolean).join(', '),
       item.placement_on_vehicle || 'Vehicle Specific',
+      tax.countryCodeOfOrigin,
       picUrl,
-      renderEbayHtml(item, settings),
+      renderEbayHtml({ ...item, title: ebayTitle }, settings),
       'FixedPrice',
       'GTC',
       Number(item.price_we_pull || 0).toFixed(2),
       1,
-      'University Place, WA 98467',
+      '98467',
       settings.handling_days_default || 3,
       heavyPickupOnly ? (freightOnly ? 'FreightFlat' : 'Flat') : 'Calculated',
       heavyPickupOnly ? 'US_Pickup' : 'UPSGround',
@@ -854,10 +856,10 @@ function generateEbayMotorsCsv(items, settings, baseUrl, { freightOnly = false }
       'US_Pickup',
       '0.00',
       'ReturnsNotAccepted',
-      Math.ceil(Number(item.weight_lbs || 8)),
-      Math.ceil(Number(item.length_in || 14)),
-      Math.ceil(Number(item.width_in || 10)),
-      Math.ceil(Number(item.height_in || 8))
+      Math.ceil(dims.weight_lbs),
+      Math.ceil(dims.length_in),
+      Math.ceil(dims.width_in),
+      Math.ceil(dims.height_in)
     ].map(csvEscape).join(','));
   }
   return rows.join('\n') + '\n';
@@ -872,46 +874,48 @@ function generateGoogleMerchantXml(items, settings, baseUrl) {
   const activeItems = items.filter(isMarketplaceSafeItem);
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const itemNodes = activeItems.map((item) => {
-    const tax = resolvePartTaxonomyAndMetafields(item, settings);
+    const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+    const dims = resolveExportDims(item);
+    const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
     const photos = getValidPhotos(item);
     const imgUrl = resolveExportPhotoUrl(photos[0], baseUrl, settings);
-    const avail = item.quantity > 0 ? 'in_stock' : 'out_of_stock';
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
-    const mpnTag = tax.mpn ? `\n      <g:mpn>${xmlEscape(tax.mpn)}</g:mpn>` : '';
-    const mpnDesc = tax.mpn ? ` | OEM MPN: ${tax.mpn}` : '';
+    const cleanDesc = buildCleanPlainListingDesc({ ...item, title: title80 }, settings);
     return `    <item>
       <g:id>${xmlEscape(item.sku)}</g:id>
-      <g:title>${xmlEscape(item.title)}</g:title>
-      <g:description>${xmlEscape(`${item.description} | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr) | Fits: ${tax.customLabel0}${mpnDesc}`)}</g:description>
+      <g:title>${xmlEscape(title80)}</g:title>
+      <g:description>${xmlEscape(cleanDesc)}</g:description>
       <g:link>${xmlEscape(`${pwaUrl}/?sku=${encodeURIComponent(item.sku)}`)}</g:link>
       <g:image_link>${xmlEscape(imgUrl)}</g:image_link>
       <g:condition>${xmlEscape(tax.condition)}</g:condition>
-      <g:availability>${avail}</g:availability>
+      <g:age_group>adult</g:age_group>
+      <g:gender>unisex</g:gender>
+      <g:availability>in_stock</g:availability>
       <g:price>${Number(item.price_we_pull || 0).toFixed(2)} USD</g:price>
-      <g:brand>${xmlEscape(tax.brand)}</g:brand>${mpnTag}
-      <g:identifier_exists>${tax.identifierExists ? 'yes' : 'no'}</g:identifier_exists>
+      <g:brand>${xmlEscape(tax.brand)}</g:brand>
+      <g:mpn>${xmlEscape(tax.mpn)}</g:mpn>
+      <g:identifier_exists>yes</g:identifier_exists>
       <g:google_product_category>${xmlEscape(tax.googleProductCategory)}</g:google_product_category>
+      <g:color>${xmlEscape(tax.attributes.color)}</g:color>
+      <g:material>${xmlEscape(tax.attributes.material)}</g:material>
       <g:custom_label_0>${xmlEscape(tax.customLabel0)}</g:custom_label_0>
       <g:custom_label_1>${xmlEscape(tax.customLabel1)}</g:custom_label_1>
-      <g:shipping_weight>${Number(item.weight_lbs || 8).toFixed(1)} lb</g:shipping_weight>
-      <g:shipping_length>${Math.ceil(Number(item.length_in || 14))} in</g:shipping_length>
-      <g:shipping_width>${Math.ceil(Number(item.width_in || 10))} in</g:shipping_width>
-      <g:shipping_height>${Math.ceil(Number(item.height_in || 8))} in</g:shipping_height>
-      <g:shipping_label>${xmlEscape(heavyPickupOnly ? 'local_pickup_only_university_place_wa_98467' : 'calculated_parcel_plus_10_00_handling')}</g:shipping_label>
+      <g:shipping_weight>${Number(dims.weight_lbs).toFixed(1)} lb</g:shipping_weight>
+      <g:shipping_length>${Math.ceil(dims.length_in)} in</g:shipping_length>
+      <g:shipping_width>${Math.ceil(dims.width_in)} in</g:shipping_width>
+      <g:shipping_height>${Math.ceil(dims.height_in)} in</g:shipping_height>
+      <g:shipping_label>${xmlEscape(heavyPickupOnly ? 'local_pickup_only' : 'calculated_parcel')}</g:shipping_label>
       <g:min_handling_time>2</g:min_handling_time>
       <g:max_handling_time>${Number(settings.handling_days_default || 3)}</g:max_handling_time>
-      <g:pickup_method>buy</g:pickup_method>
-      <g:pickup_sla>multi-day</g:pickup_sla>
     </item>`;
   }).join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
   <channel>
-    <title>${xmlEscape(settings.business_name)} — Google Merchant, YouTube &amp; Local Feed</title>
+    <title>${xmlEscape(settings.business_name)} — OEM Auto Parts Catalog Feed</title>
     <link>${xmlEscape(pwaUrl)}</link>
-    <description>${xmlEscape(settings.tagline)}</description>
+    <description>Verified OEM Auto Parts Catalog</description>
 ${itemNodes}
   </channel>
 </rss>`;
@@ -921,7 +925,8 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
   items = ensureDeduplicatedItems(items);
   const headers = [
     'id', 'title', 'description', 'availability', 'condition', 'price',
-    'link', 'image_link', 'brand', 'mpn', 'quantity_to_sell_on_facebook', 'google_product_category'
+    'link', 'image_link', 'brand', 'mpn', 'quantity_to_sell_on_facebook',
+    'age_group', 'gender', 'color', 'material', 'google_product_category'
   ];
   const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
   const rows = [headers.join(',')];
@@ -929,26 +934,29 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
     if (!isMarketplaceSafeItem(item)) continue;
     const photos = getValidPhotos(item);
     if (!photos.length) continue;
-    const tax = resolvePartTaxonomyAndMetafields(item, settings);
+    const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+    const dims = resolveExportDims(item);
+    const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
     const imgUrl = resolveExportPhotoUrl(photos[0], baseUrl, settings);
-    const mpnOut = resolveExportMpn(item.oem_part_number);
     const condOut = normalizeExportCondition(item.condition);
     const cond = condOut === 'New' ? 'new' : 'used';
-    const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
-    const mpnClause = mpnOut ? ` OEM MPN: ${mpnOut}.` : '';
+    const cleanDesc = buildCleanPlainListingDesc({ ...item, title: title80 }, settings);
     rows.push([
       item.sku,
-      item.title.slice(0, 150),
-      `${item.title}. Single-unit inspected Used OEM part (1 in stock).${mpnClause} Fits: ${tax.customLabel0}. Optional Certified Shop Installation at 5115 66th St W, Bldg B, University Place, WA 98467: $${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr). ${heavyPickupOnly ? 'Local Pickup Only in University Place, WA 98467.' : 'Calculated Parcel + $10.00 handling or Free Local Pickup in University Place, WA 98467.'} Returns Not Accepted (Defect-Only).`,
-      item.quantity > 0 && item.status === 'active' ? 'in stock' : 'out of stock',
+      title80,
+      cleanDesc,
+      'in stock',
       cond,
       `${Number(item.price_we_pull || 0).toFixed(2)} USD`,
       `${pwaUrl}/?sku=${encodeURIComponent(item.sku)}`,
       imgUrl,
       tax.brand || item.brand || 'OEM',
-      mpnOut,
-      item.status === 'active' ? Math.max(1, Number(item.quantity || 1)) : 0,
+      tax.mpn,
+      1,
+      'adult',
+      'unisex',
+      tax.attributes.color,
+      tax.attributes.material,
       tax.googleProductCategory || 'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts'
     ].map(csvEscape).join(','));
   }
@@ -959,51 +967,46 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
   items = ensureDeduplicatedItems(items);
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
-    ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Year', 'Make', 'Model', 'eBay_US_Category_ID', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Return_Policy', 'Zip Code', 'Shop_Install_Price_98467', 'Image 1', 'Additional_Images', 'Internal Notes']
-    : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Local_Pickup_Location', 'Return_Policy', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
+    ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Year', 'Make', 'Model', 'Donor_VIN', 'Origin_Country', 'eBay_US_Category_ID', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Zip Code', 'Image 1', 'Additional_Images', 'Bin_Location']
+    : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Origin_Country', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
 
   const rows = [headers.join(',')];
   for (const item of items) {
     if (!isMarketplaceSafeItem(item)) continue;
-    const tax = resolvePartTaxonomyAndMetafields(item, settings);
+    const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+    const dims = resolveExportDims(item);
+    const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
     const photos = getValidPhotos(item);
     const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
     const extraImgs = photos.slice(1).map(resolvePhoto).join('|');
-    const mpnOut = resolveExportMpn(item.oem_part_number);
     const condOut = normalizeExportCondition(item.condition);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-    const shippingPolicy = heavyPickupOnly
-      ? 'Local Pickup Only — University Place, WA 98467'
-      : `Calculated Parcel + $${handlingFee.toFixed(2)} Handling`;
-    const returnPolicy = 'Returns Not Accepted (Defect-Only)';
+    const shippingPolicy = heavyPickupOnly ? 'Local_Pickup_Only' : 'Calculated_Parcel';
     const basePrice = Number(item.price_we_pull || 0).toFixed(2);
-    const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
-    const mpnSegment = mpnOut ? ` | OEM MPN: ${mpnOut}` : '';
-    // Compliant marketplace description (includes Certified Shop Install price at 5115 66th St W Bldg B @ $174.99/hr, zero external URLs/phones so eBay aabcas + OfferUp + FB Marketplace channels stay safe)
-    const compliantDesc = `${stripOffEbayContactText(item.title)}${mpnSegment} | Single-Unit Inspected OEM Part (1 in stock) | Fits: ${tax.customLabel0} | Spec: ${item.weight_lbs} lbs (${formatDimensionsIn(item)} in) | Optional Certified Shop Bay Installation at 5115 66th St W, Bldg B, University Place, WA 98467: ~$${installTotal.toFixed(2)} turnkey installed (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr) | ${shippingPolicy} | ${returnPolicy} | Security ID: ${item.security_mark_code}`;
+    const cleanDesc = buildCleanPlainListingDesc({ ...item, title: title80 }, settings);
+    const donorVin = String(item.verified_vin || '').trim().toUpperCase();
 
     if (mode === 'crosslist') {
       rows.push([
-        item.sku, item.title, compliantDesc, tax.brand || item.brand || 'OEM', mpnOut, condOut,
+        item.sku, title80, cleanDesc, tax.brand || item.brand || 'OEM', tax.mpn, condOut,
         basePrice, 1, item.fitment_years || '', item.fitment_make || '', item.fitment_model || '',
-        tax.ebayUsCategoryId, item.weight_lbs, item.length_in, item.width_in, item.height_in,
-        shippingPolicy, returnPolicy,
-        settings.zip || '98467', installTotal.toFixed(2), imgUrl, extraImgs,
-        `SINGLE_VARIANT_ONLY | eBay aabcas + OfferUp + FB Marketplace | Bin: ${item.bin_location} | Security: ${item.security_mark_code}`
+        donorVin, tax.countryCodeOfOrigin,
+        tax.ebayUsCategoryId, dims.weight_lbs, dims.length_in, dims.width_in, dims.height_in,
+        shippingPolicy, settings.zip || '98467', imgUrl, extraImgs,
+        item.bin_location || ''
       ].map(csvEscape).join(','));
     } else {
       rows.push([
-        item.sku, item.title, compliantDesc, tax.brand || item.brand || 'OEM', mpnOut, condOut,
+        item.sku, title80, cleanDesc, tax.brand || item.brand || 'OEM', tax.mpn, condOut,
         basePrice, Number(item.cost_basis || 0).toFixed(2), 1,
-        item.weight_lbs, item.length_in, item.width_in, item.height_in,
+        dims.weight_lbs, dims.length_in, dims.width_in, dims.height_in,
         shippingPolicy,
         heavyPickupOnly ? '0.00' : handlingFee.toFixed(2),
-        'University Place, WA 98467',
-        returnPolicy,
+        tax.countryCodeOfOrigin,
         imgUrl,
         extraImgs,
-        `1-Variant Only | Shop Install Est: $${installTotal.toFixed(2)} | Bin: ${item.bin_location} | Security: ${item.security_mark_code}`
+        `Bin: ${item.bin_location || ''} | VIN: ${donorVin}`
       ].map(csvEscape).join(','));
     }
   }
@@ -1221,41 +1224,60 @@ async function resolveShopifyAccessToken(settingsOverride = null, { forceRefresh
 }
 
 function buildShopifyProductMetafields(item, settings, tax) {
+  const dims = resolveExportDims(item);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-  const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
-  const weightLbs = Number(item.weight_lbs || 8);
-  const { installTotal, otdTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const dimsLabel = `${dims.length_in}x${dims.width_in}x${dims.height_in} in (${dims.weight_lbs} lbs)`;
   const donorVehicle = [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim() || tax.customLabel0;
+  const donorVin = String(item.verified_vin || '').trim().toUpperCase();
   const condLabel = normalizeExportCondition(item.condition) === 'New' ? 'New OEM' : 'Used OEM';
-  const fulfillmentLabel = heavyPickupOnly
-    ? 'Local Pickup Only — University Place, WA 98467'
-    : 'Calculated Parcel Shipping + Free Local Pickup (98467)';
+  const fulfillmentLabel = heavyPickupOnly ? 'Local_Pickup_Only' : 'Calculated_Parcel';
+  const attrs = tax.attributes || { color: 'Black', material: 'OEM Composite', condition: 'Used', manufacturer_type: 'OEM', finish: 'Factory OEM' };
 
   const raw = [
+    // Google & YouTube / Shopping Channel Metafields
     { namespace: 'mm-google-shopping', key: 'google_product_category', value: tax.googleProductCategory, type: 'single_line_text_field' },
     { namespace: 'mm-google-shopping', key: 'condition', value: tax.condition, type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'age_group', value: 'adult', type: 'single_line_text_field' },
+    { namespace: 'mm-google-shopping', key: 'gender', value: 'unisex', type: 'single_line_text_field' },
     { namespace: 'mm-google-shopping', key: 'mpn', value: tax.mpn, type: 'single_line_text_field' },
     { namespace: 'mm-google-shopping', key: 'custom_label_0', value: tax.customLabel0, type: 'single_line_text_field' },
     { namespace: 'mm-google-shopping', key: 'custom_label_1', value: tax.customLabel1, type: 'single_line_text_field' },
+    // Product & Warehouse Metafields
+    { namespace: 'custom', key: 'bin_location', value: String(item.bin_location || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'donor_vin', value: donorVin, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'packed_dimensions', value: dimsLabel, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'package_dimensions', value: dimsLabel, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'oem_mpn', value: tax.mpn, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'oem_part_number', value: tax.mpn, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'donor_vehicle', value: donorVehicle, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'fitment_years', value: String(item.fitment_years || '').trim(), type: 'single_line_text_field' },
     { namespace: 'custom', key: 'part_condition', value: condLabel, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'fulfillment_type', value: fulfillmentLabel, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'shop_install_price', value: `$${installTotal.toFixed(2)} part+labor (~${hours.toFixed(1)} hrs @ $${rate.toFixed(2)}/hr; est. $${otdTotal.toFixed(2)} OTD w/ 7% supplies & 10.1% WA tax)`, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'packed_dimensions', value: `${dimsLabel} (${weightLbs} lbs)`, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'package_dimensions', value: `${dimsLabel} (${weightLbs} lbs)`, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'bin_location', value: String(item.bin_location || '').trim(), type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'security_mark', value: String(item.security_mark_code || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'country_of_origin', value: tax.countryCodeOfOrigin || 'US', type: 'single_line_text_field' },
     { namespace: 'custom', key: 'ebay_us_category_id', value: tax.ebayUsCategoryId, type: 'single_line_text_field' },
     { namespace: 'custom', key: 'shopify_taxonomy_id', value: tax.shopifyTaxonomyId, type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'country_of_origin', value: tax.countryOfOrigin || 'US', type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'return_policy', value: 'Returns Not Accepted (Defect-Only)', type: 'single_line_text_field' },
-    { namespace: 'custom', key: 'crosslist_offerup_fb_sync', value: 'enabled_auto_delist_on_zero', type: 'single_line_text_field' }
+    // Category Attributes (Color, Material, Condition, Manufacturer Type = OEM, Finish)
+    { namespace: 'custom', key: 'color', value: attrs.color, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'material', value: attrs.material, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'condition', value: attrs.condition, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'manufacturer_type', value: attrs.manufacturer_type || 'OEM', type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'finish', value: attrs.finish, type: 'single_line_text_field' }
   ];
 
-  // Shopify metafieldsSet rejects empty string values — omit blank optional keys (e.g., unstamped MPN).
+  return raw.filter((m) => String(m.value || '').trim().length > 0);
+}
+
+function buildShopifyVariantMetafields(item, tax) {
+  const dims = resolveExportDims(item);
+  const dimsLabel = `${dims.length_in}x${dims.width_in}x${dims.height_in} in (${dims.weight_lbs} lbs)`;
+  const donorVin = String(item.verified_vin || '').trim().toUpperCase();
+  const raw = [
+    { namespace: 'custom', key: 'bin_location', value: String(item.bin_location || '').trim(), type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'donor_vin', value: donorVin, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'packed_dimensions', value: dimsLabel, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'oem_mpn', value: tax.mpn, type: 'single_line_text_field' },
+    { namespace: 'custom', key: 'country_of_origin', value: tax.countryCodeOfOrigin || 'US', type: 'single_line_text_field' }
+  ];
   return raw.filter((m) => String(m.value || '').trim().length > 0);
 }
 
@@ -1308,6 +1330,62 @@ async function resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, setti
   return fallback;
 }
 
+async function fetchAllShopifyPublications({ domain, tokenRef, authMode, settings }) {
+  try {
+    const resp = await shopifyFetchWithRetry(
+      `https://${domain}/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `query GetPublications {
+            publications(first: 25) {
+              nodes { id name }
+            }
+          }`
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data?.data?.publications?.nodes || []).filter((n) => n && n.id);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function publishResourceToAllChannels({ domain, tokenRef, authMode, settings, resourceGid, publications = [] }) {
+  if (!resourceGid || !publications.length) return { published: 0 };
+  try {
+    const resp = await shopifyFetchWithRetry(
+      `https://${domain}/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `mutation PublishAll($id: ID!, $input: [PublicationInput!]!) {
+            publishablePublish(id: $id, input: $input) {
+              userErrors { field message }
+            }
+          }`,
+          variables: {
+            id: resourceGid,
+            input: publications.map((p) => ({ publicationId: p.id }))
+          }
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (!resp.ok) return { published: 0, warning: `publish HTTP ${resp.status}` };
+    const data = await resp.json();
+    const uerrs = data?.data?.publishablePublish?.userErrors || [];
+    return { published: publications.length, warning: uerrs.length ? JSON.stringify(uerrs).slice(0, 140) : '' };
+  } catch (err) {
+    return { published: 0, warning: err.message };
+  }
+}
+
 async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRef }) {
   let resp = await fetch(url, {
     ...options,
@@ -1344,19 +1422,33 @@ async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRe
   return resp;
 }
 
-async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, settings, productId, inventoryItemId, item, tax }) {
+async function syncShopifyProductGraphqlAndOrigin({
+  domain,
+  tokenRef,
+  authMode,
+  settings,
+  productId,
+  variantId = '',
+  inventoryItemId,
+  item,
+  tax,
+  publications = []
+}) {
   const countryCode = resolveCountryOfOrigin(item);
   const resolvedTaxGid = await resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, settings, tax });
   const results = {
     country_code_of_origin: countryCode,
     origin_updated: false,
     category_updated: false,
+    seo_updated: false,
     category_gid: resolvedTaxGid,
     metafields_count: 0,
+    variant_metafields_count: 0,
+    channels_published: 0,
     warnings: []
   };
 
-  // 1. Set Country of Origin on Shopify InventoryItem (REST)
+  // 1. Set Country of Origin (strictly decoded from Donor VIN WMI) on Shopify InventoryItem (REST)
   if (inventoryItemId) {
     try {
       const invResp = await shopifyFetchWithRetry(
@@ -1385,25 +1477,28 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
     }
   }
 
-  // 2. Assign Shopify Standard Product Taxonomy Category + Structured Metafields via GraphQL
+  // 2. Assign Shopify Standard Product Taxonomy Category + High-Intent SEO Title (<=70) & Meta Description (<=155) via GraphQL
   const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
   const productGid = `gid://shopify/Product/${productId}`;
-  const metafieldsList = buildShopifyProductMetafields(item, settings, { ...tax, shopifyTaxonomyId: resolvedTaxGid });
+  const seoPayload = {
+    title: String(tax.seoTitle || cleanListingTitle(item.title || '')).slice(0, 70),
+    description: String(tax.seoDescription || '').slice(0, 155)
+  };
 
-  const runCategoryMutation = async (catGid) => {
+  const runCategoryAndSeoMutation = async (catGid) => {
     const resp = await shopifyFetchWithRetry(
       graphqlUrl,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
-          query: `mutation SetCategory($product: ProductUpdateInput!) {
+          query: `mutation SetCategoryAndSeo($product: ProductUpdateInput!) {
             productUpdate(product: $product) {
-              product { id category { id fullName } }
+              product { id category { id fullName } seo { title description } }
               userErrors { field message }
             }
           }`,
-          variables: { product: { id: productGid, category: catGid } }
+          variables: { product: { id: productGid, category: catGid, seo: seoPayload } }
         })
       },
       { authMode, settings, tokenRef }
@@ -1418,107 +1513,236 @@ async function syncShopifyProductGraphqlAndOrigin({ domain, tokenRef, authMode, 
   };
 
   try {
-    let catRes = await runCategoryMutation(resolvedTaxGid);
+    let catRes = await runCategoryAndSeoMutation(resolvedTaxGid);
     if (!catRes.ok && resolvedTaxGid !== tax.shopifyTaxonomyId) {
-      catRes = await runCategoryMutation(tax.shopifyTaxonomyId);
+      catRes = await runCategoryAndSeoMutation(tax.shopifyTaxonomyId);
       if (catRes.ok) results.category_gid = tax.shopifyTaxonomyId;
     }
     if (!catRes.ok && tax.shopifyTaxonomyId !== 'gid://shopify/TaxonomyCategory/vp-1-4') {
-      catRes = await runCategoryMutation('gid://shopify/TaxonomyCategory/vp-1-4');
+      catRes = await runCategoryAndSeoMutation('gid://shopify/TaxonomyCategory/vp-1-4');
       if (catRes.ok) results.category_gid = 'gid://shopify/TaxonomyCategory/vp-1-4';
     }
     if (catRes.ok) {
       results.category_updated = true;
+      results.seo_updated = true;
     } else {
-      results.warnings.push(`category: ${catRes.err}`);
+      results.warnings.push(`category/seo: ${catRes.err}`);
     }
   } catch (err) {
-    results.warnings.push(`category err: ${err.message}`);
+    results.warnings.push(`category/seo err: ${err.message}`);
   }
 
-  try {
-    const mfInput = metafieldsList.map((m) => ({
-      ownerId: productGid,
-      namespace: m.namespace,
-      key: m.key,
-      type: m.type,
-      value: String(m.value)
-    }));
-    const mfResp = await shopifyFetchWithRetry(
-      graphqlUrl,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          query: `mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
-            metafieldsSet(metafields: $metafields) {
-              metafields { namespace key value }
-              userErrors { field message code }
-            }
-          }`,
-          variables: { metafields: mfInput }
-        })
-      },
-      { authMode, settings, tokenRef }
-    );
-    if (mfResp.ok) {
-      const mfData = await mfResp.json();
-      const uerrs = mfData?.data?.metafieldsSet?.userErrors || [];
-      const savedMfs = mfData?.data?.metafieldsSet?.metafields || [];
-      results.metafields_count = savedMfs.length;
-      if (mfData.errors?.length || uerrs.length) {
-        results.warnings.push(`metafields: ${JSON.stringify(mfData.errors || uerrs).slice(0, 160)}`);
-      }
-    } else {
-      results.warnings.push(`metafields HTTP ${mfResp.status}`);
-    }
-  } catch (err) {
-    results.warnings.push(`metafields err: ${err.message}`);
+  // 3. Write ALL Product, Category & Variant Metafields in <=25-entry batches via GraphQL metafieldsSet
+  const productMfList = buildShopifyProductMetafields(item, settings, { ...tax, shopifyTaxonomyId: results.category_gid }).map((m) => ({
+    ownerId: productGid,
+    namespace: m.namespace,
+    key: m.key,
+    type: m.type,
+    value: String(m.value)
+  }));
+  const variantMfList = variantId
+    ? buildShopifyVariantMetafields(item, tax).map((m) => ({
+        ownerId: `gid://shopify/ProductVariant/${variantId}`,
+        namespace: m.namespace,
+        key: m.key,
+        type: m.type,
+        value: String(m.value)
+      }))
+    : [];
+
+  const allMfChunks = [];
+  const combinedMf = [...productMfList, ...variantMfList];
+  for (let i = 0; i < combinedMf.length; i += 25) {
+    allMfChunks.push(combinedMf.slice(i, i + 25));
   }
 
-  // Purge any stale legacy/placeholder MPN metafields on Shopify when no verified stamped OEM MPN exists
-  if (!tax?.mpn) {
+  for (const chunk of allMfChunks) {
     try {
-      const delResp = await shopifyFetchWithRetry(
+      const mfResp = await shopifyFetchWithRetry(
         graphqlUrl,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({
-            query: `mutation DeleteStaleMpns($metafields: [MetafieldIdentifierInput!]!) {
-              metafieldsDelete(metafields: $metafields) {
-                deletedMetafields { key namespace ownerId }
-                userErrors { field message }
+            query: `mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
+              metafieldsSet(metafields: $metafields) {
+                metafields { ownerType namespace key value }
+                userErrors { field message code }
               }
             }`,
-            variables: {
-              metafields: [
-                { ownerId: productGid, namespace: 'mm-google-shopping', key: 'mpn' },
-                { ownerId: productGid, namespace: 'custom', key: 'oem_part_number' },
-                { ownerId: productGid, namespace: 'custom', key: 'oem_mpn' }
-              ]
-            }
+            variables: { metafields: chunk }
           })
         },
         { authMode, settings, tokenRef }
       );
-      if (delResp.ok) {
-        const delData = await delResp.json();
-        const delErrs = delData?.data?.metafieldsDelete?.userErrors || [];
-        if (delErrs.length) {
-          results.warnings.push(`metafieldsDelete: ${JSON.stringify(delErrs).slice(0, 140)}`);
+      if (mfResp.ok) {
+        const mfData = await mfResp.json();
+        const uerrs = mfData?.data?.metafieldsSet?.userErrors || [];
+        const savedMfs = mfData?.data?.metafieldsSet?.metafields || [];
+        for (const sm of savedMfs) {
+          if (String(sm.ownerType || '').toUpperCase().includes('VARIANT')) results.variant_metafields_count++;
+          else results.metafields_count++;
         }
+        if (mfData.errors?.length || uerrs.length) {
+          results.warnings.push(`metafields: ${JSON.stringify(mfData.errors || uerrs).slice(0, 160)}`);
+        }
+      } else {
+        results.warnings.push(`metafields HTTP ${mfResp.status}`);
       }
     } catch (err) {
-      results.warnings.push(`metafieldsDelete err: ${err.message}`);
+      results.warnings.push(`metafields err: ${err.message}`);
     }
+  }
+
+  // 4. Publish active product to ALL available Shopify Sales Channels (Online Store, POS, Google & YouTube, Facebook & Instagram, Shop)
+  if (publications.length > 0) {
+    const pubRes = await publishResourceToAllChannels({
+      domain,
+      tokenRef,
+      authMode,
+      settings,
+      resourceGid: productGid,
+      publications
+    });
+    results.channels_published = pubRes.published || 0;
+    if (pubRes.warning) results.warnings.push(`publish: ${pubRes.warning}`);
   }
 
   return results;
 }
 
+async function syncShopifyCollections({ domain, tokenRef, authMode, settings, collectionMap, publications = [] }) {
+  const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
+  const summary = { collections_checked: 0, collections_created: 0, products_assigned: 0, warnings: [] };
+  if (!collectionMap || collectionMap.size === 0) return summary;
+
+  // 1. Fetch existing Shopify custom/manual collections (first 250)
+  const existingByTitle = new Map();
+  try {
+    let cursor = null;
+    for (let page = 0; page < 4; page++) {
+      const resp = await shopifyFetchWithRetry(
+        graphqlUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `query ListCollections($after: String) {
+              collections(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { id title handle ruleSet { appliedDisjunctively } }
+              }
+            }`,
+            variables: { after: cursor }
+          })
+        },
+        { authMode, settings, tokenRef }
+      );
+      if (!resp.ok) break;
+      const data = await resp.json();
+      const nodes = data?.data?.collections?.nodes || [];
+      for (const c of nodes) {
+        if (c && c.title && !c.ruleSet) {
+          existingByTitle.set(String(c.title).trim().toLowerCase(), c.id);
+        }
+      }
+      if (!data?.data?.collections?.pageInfo?.hasNextPage) break;
+      cursor = data.data.collections.pageInfo.endCursor;
+    }
+  } catch (err) {
+    summary.warnings.push(`list collections: ${err.message}`);
+  }
+
+  // 2. Create missing Donor Vehicle & Part Category Collections + add products in chunks of 50
+  for (const [colTitle, productGidSet] of collectionMap.entries()) {
+    const cleanTitle = String(colTitle || '').trim();
+    const productIds = Array.from(productGidSet || []);
+    if (!cleanTitle || !productIds.length) continue;
+    summary.collections_checked++;
+
+    let colId = existingByTitle.get(cleanTitle.toLowerCase());
+    if (!colId) {
+      try {
+        const createResp = await shopifyFetchWithRetry(
+          graphqlUrl,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              query: `mutation CreateCollection($input: CollectionInput!) {
+                collectionCreate(input: $input) {
+                  collection { id title handle }
+                  userErrors { field message }
+                }
+              }`,
+              variables: {
+                input: {
+                  title: cleanTitle,
+                  descriptionHtml: `<p>Verified single-unit OEM auto parts in the <strong>${cleanTitle}</strong> collection.</p>`
+                }
+              }
+            })
+          },
+          { authMode, settings, tokenRef }
+        );
+        if (createResp.ok) {
+          const cData = await createResp.json();
+          const newCol = cData?.data?.collectionCreate?.collection;
+          if (newCol?.id) {
+            colId = newCol.id;
+            existingByTitle.set(cleanTitle.toLowerCase(), colId);
+            summary.collections_created++;
+            if (publications.length) {
+              await publishResourceToAllChannels({ domain, tokenRef, authMode, settings, resourceGid: colId, publications });
+            }
+          } else {
+            const uerrs = cData?.data?.collectionCreate?.userErrors || [];
+            summary.warnings.push(`create "${cleanTitle}": ${JSON.stringify(uerrs).slice(0, 120)}`);
+          }
+        }
+      } catch (err) {
+        summary.warnings.push(`create "${cleanTitle}": ${err.message}`);
+      }
+    }
+
+    if (!colId) continue;
+
+    for (let i = 0; i < productIds.length; i += 50) {
+      const batch = productIds.slice(i, i + 50);
+      try {
+        const addResp = await shopifyFetchWithRetry(
+          graphqlUrl,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              query: `mutation AddToCollection($id: ID!, $productIds: [ID!]!) {
+                collectionAddProducts(id: $id, productIds: $productIds) {
+                  collection { id }
+                  userErrors { field message }
+                }
+              }`,
+              variables: { id: colId, productIds: batch }
+            })
+          },
+          { authMode, settings, tokenRef }
+        );
+        if (addResp.ok) {
+          summary.products_assigned += batch.length;
+        }
+      } catch (err) {
+        summary.warnings.push(`add "${cleanTitle}": ${err.message}`);
+      }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  return summary;
+}
+
 async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
-  // PERMANENT PRE-SYNC DEDUPLICATION GATE: Archive any duplicate physical parts & merge photos before touching Shopify
+  // 0. PERMANENT PRE-SYNC GHOST PURGE & DEDUPLICATION GATE
+  const ghostPurgeSummary = purgeGhostAndBlockedInventory({ actor: 'shopify_sync_pre_gate' });
   let dedupeSummary = null;
   try {
     const { deduplicateCatalog } = require('./catalog-enrichment');
@@ -1531,21 +1755,28 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   const blockedSkusSet = new Set([
     ...PROHIBITED_CAT_SKUS,
     ...PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS,
+    ...PERMANENTLY_BANNED_SOLD_SKUS,
     ...allDbItems
       .filter((r) => r.status === 'compliance_blocked' || !validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
       .map((r) => String(r.sku || '').trim().toUpperCase())
   ]);
+  const ghostDeleteSkusSet = new Set(
+    allDbItems
+      .filter((r) => isGhostOrBannedInventoryItem(r).blocked)
+      .map((r) => String(r.sku || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
   const duplicateArchivedSkusSet = new Set(
     allDbItems
       .filter((r) => r.status === 'duplicate_archived' || r.status === 'sold' || r.status === 'archived')
       .map((r) => String(r.sku || '').trim().toUpperCase())
-      .filter((s) => s && !blockedSkusSet.has(s))
+      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s))
   );
   const pendingVerificationSkusSet = new Set(
     allDbItems
       .filter((r) => r.status === 'pending_verification' || (r.status === 'active' && !validateInventoryItemForPublish(r).valid))
       .map((r) => String(r.sku || '').trim().toUpperCase())
-      .filter((s) => s && !blockedSkusSet.has(s) && !duplicateArchivedSkusSet.has(s))
+      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s) && !duplicateArchivedSkusSet.has(s))
   );
 
   const auth = await resolveShopifyAccessToken(settings, { forceRefresh: Boolean(updateExisting) });
@@ -1562,7 +1793,8 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       mode: 'staged_ready',
       auth_mode: auth.authMode,
       synced_count: items.length,
-      message: 'Shopify Single-Variant payload staged (Photos Required + Shop Install in Description HTML). Configure SHOPIFY_ADMIN_TOKEN (or SHOPIFY_CLIENT_ID + shpss_) to activate live API push.'
+      ghost_purge: ghostPurgeSummary,
+      message: 'Shopify Single-Variant payload staged. Configure SHOPIFY_ADMIN_TOKEN (or SHOPIFY_CLIENT_ID + shpss_) to activate live API push.'
     };
   }
   if (auth.authMode === 'shpss_missing_client_id') {
@@ -1571,9 +1803,13 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
 
   const domain = auth.shopDomain;
   const tokenRef = { token: auth.token };
+  const publications = await fetchAllShopifyPublications({ domain, tokenRef, authMode: auth.authMode, settings });
+
   const existingHandles = new Set();
   const existingSkus = new Map();
-  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,status,variants,images`;
+  const liveGhostProductsToDelete = new Map(); // productId -> { title, sku }
+
+  let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,title,vendor,tags,status,variants,images`;
   while (nextUrl) {
     const preResp = await shopifyFetchWithRetry(
       nextUrl,
@@ -1586,20 +1822,43 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     const preData = await preResp.json();
     for (const p of preData.products || []) {
       existingHandles.add(String(p.handle || '').toLowerCase());
+      const pBlob = `${p.title || ''} ${p.vendor || ''} ${p.tags || ''} ${p.handle || ''}`;
+      const isLiveGhostLaCrosse = /\b(1G4GA5GR2FF246661|LACROSSE-15-BAYB|buick[\s_-]+lacrosse)\b/i.test(pBlob);
       const cleanCdnImages = (p.images || [])
-        .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+        .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr|security tag/i.test(String(img.alt || '')))
         .map((img) => img.src);
+
+      if (isLiveGhostLaCrosse && p.id) {
+        liveGhostProductsToDelete.set(String(p.id), {
+          product_id: String(p.id),
+          title: String(p.title || ''),
+          sku: String(p.variants?.[0]?.sku || ''),
+          inventory_item_id: String(p.variants?.[0]?.inventory_item_id || '')
+        });
+      }
+
       for (const v of p.variants || []) {
         if (v.sku) {
-          existingSkus.set(String(v.sku).trim().toUpperCase(), {
+          const skuUpper = String(v.sku).trim().toUpperCase();
+          existingSkus.set(skuUpper, {
             product_id: String(p.id || ''),
             handle: String(p.handle || ''),
+            title: String(p.title || ''),
             status: String(p.status || 'active'),
             variant_id: String(v.id || ''),
             inventory_item_id: String(v.inventory_item_id || ''),
             inventory_quantity: Number(v.inventory_quantity || 0),
-            clean_cdn_images: cleanCdnImages
+            clean_cdn_images: cleanCdnImages,
+            raw_images: Array.isArray(p.images) ? p.images : []
           });
+          if (ghostDeleteSkusSet.has(skuUpper) && p.id) {
+            liveGhostProductsToDelete.set(String(p.id), {
+              product_id: String(p.id),
+              title: String(p.title || ''),
+              sku: skuUpper,
+              inventory_item_id: String(v.inventory_item_id || '')
+            });
+          }
         }
       }
     }
@@ -1641,6 +1900,8 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
 
   let pushed = 0;
   let updatedCount = 0;
+  let deletedGhostLaCrosse = 0;
+  let deletedQrImages = 0;
   let draftedBlocked = 0;
   let archivedPending = 0;
   let archivedDuplicates = 0;
@@ -1648,15 +1909,46 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   let updatedImageAlts = 0;
   const errors = [];
 
-  // 1. COMPLIANCE ENFORCEMENT: Immediately draft & zero any prohibited SRS/airbag/catalytic SKUs on Shopify!
+  // 0. PERMANENT GHOST VEHICLE PURGE ON SHOPIFY: DELETE every 2015 Buick LaCrosse (1G4GA5GR2FF246661 / LACROSSE-15-BAYB) product!
+  for (const ghost of liveGhostProductsToDelete.values()) {
+    try {
+      const delResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/products/${ghost.product_id}.json`,
+        { method: 'DELETE', headers: { Accept: 'application/json' } },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (delResp.ok) {
+        deletedGhostLaCrosse++;
+        logSync('outbound', 'shopify_co_master', 'delete_ghost_lacrosse', ghost.sku || ghost.product_id, 'success', `Permanently DELETED ghost 2015 Buick LaCrosse product "${ghost.title}" (ID ${ghost.product_id}) from ${domain}.`);
+      } else {
+        // Fallback: archive & zero inventory if delete rejected
+        await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${ghost.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ product: { id: Number(ghost.product_id), status: 'archived', tags: 'GHOST-VEHICLE-PURGED' } })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        await zeroShopifyInventoryItem(ghost.inventory_item_id);
+        deletedGhostLaCrosse++;
+      }
+      await new Promise((r) => setTimeout(r, 220));
+    } catch (err) {
+      errors.push(`delete-ghost ${ghost.sku || ghost.product_id}: ${err.message}`);
+    }
+  }
+
+  // 1. COMPLIANCE & SOLD TRANSMISSION ENFORCEMENT: Archive & zero prohibited/sold SKUs on Shopify!
   for (const blockedSku of blockedSkusSet) {
     const liveBlocked = existingSkus.get(blockedSku);
-    if (!liveBlocked) continue;
-    const needsDraft = liveBlocked.status !== 'draft' && liveBlocked.status !== 'archived';
+    if (!liveBlocked || liveGhostProductsToDelete.has(liveBlocked.product_id)) continue;
+    const needsArchive = liveBlocked.status !== 'archived';
     const needsZero = Number(liveBlocked.inventory_quantity || 0) > 0;
-    if (!needsDraft && !needsZero) continue;
+    if (!needsArchive && !needsZero) continue;
     try {
-      if (needsDraft) {
+      if (needsArchive) {
         const draftResp = await shopifyFetchWithRetry(
           `https://${domain}/admin/api/2025-01/products/${liveBlocked.product_id}.json`,
           {
@@ -1665,8 +1957,8 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
             body: JSON.stringify({
               product: {
                 id: Number(liveBlocked.product_id),
-                status: 'draft',
-                tags: 'COMPLIANCE-BLOCKED, SRS-PROHIBITED-DO-NOT-PUBLISH'
+                status: 'archived',
+                tags: 'BLOCKED-OR-SOLD-ARCHIVED'
               }
             })
           },
@@ -1674,24 +1966,24 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
         );
         if (draftResp.ok) {
           draftedBlocked++;
-          logSync('outbound', 'shopify_co_master', 'compliance_draft_blocked', blockedSku, 'success', `Drafted prohibited SRS/compliance SKU ${blockedSku} on ${domain} (Product ID ${liveBlocked.product_id}).`);
+          logSync('outbound', 'shopify_co_master', 'compliance_archive_blocked', blockedSku, 'success', `Archived blocked/sold SKU ${blockedSku} on ${domain} (Product ID ${liveBlocked.product_id}).`);
         } else {
-          errors.push(`draft-blocked ${blockedSku}: HTTP ${draftResp.status}`);
+          errors.push(`archive-blocked ${blockedSku}: HTTP ${draftResp.status}`);
         }
       }
       if (needsZero) {
         await zeroShopifyInventoryItem(liveBlocked.inventory_item_id);
       }
-      await new Promise((r) => setTimeout(r, 260));
+      await new Promise((r) => setTimeout(r, 220));
     } catch (err) {
-      errors.push(`draft-blocked ${blockedSku}: ${err.message}`);
+      errors.push(`archive-blocked ${blockedSku}: ${err.message}`);
     }
   }
 
-  // 1b. ZERO-PLACEHOLDER & DUPLICATE QUARANTINE: Archive & zero any pending_verification SKU currently on Shopify!
+  // 1b. ZERO-PLACEHOLDER & UNVERIFIED-VIN QUARANTINE: Archive & zero any pending_verification SKU on Shopify
   for (const pendSku of pendingVerificationSkusSet) {
     const livePend = existingSkus.get(pendSku);
-    if (!livePend) continue;
+    if (!livePend || liveGhostProductsToDelete.has(livePend.product_id)) continue;
     const needsArchive = livePend.status !== 'archived';
     const needsZero = Number(livePend.inventory_quantity || 0) > 0;
     if (!needsArchive && !needsZero) continue;
@@ -1706,32 +1998,26 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
               product: {
                 id: Number(livePend.product_id),
                 status: 'archived',
-                tags: 'PENDING-VERIFICATION, AWAITING-YMM-REVIEW'
+                tags: 'PENDING-VERIFICATION'
               }
             })
           },
           { authMode: auth.authMode, settings, tokenRef }
         );
-        if (archResp.ok) {
-          archivedPending++;
-          logSync('outbound', 'shopify_co_master', 'archive_pending_verification', pendSku, 'success', `Archived pending_verification SKU ${pendSku} on ${domain} (Product ID ${livePend.product_id}) until verified YMM/part details are completed.`);
-        } else {
-          errors.push(`archive-pending ${pendSku}: HTTP ${archResp.status}`);
-        }
+        if (archResp.ok) archivedPending++;
+        else errors.push(`archive-pending ${pendSku}: HTTP ${archResp.status}`);
       }
-      if (needsZero) {
-        await zeroShopifyInventoryItem(livePend.inventory_item_id);
-      }
-      await new Promise((r) => setTimeout(r, 260));
+      if (needsZero) await zeroShopifyInventoryItem(livePend.inventory_item_id);
+      await new Promise((r) => setTimeout(r, 220));
     } catch (err) {
       errors.push(`archive-pending ${pendSku}: ${err.message}`);
     }
   }
 
-  // 1c. PERMANENT DUPLICATE ARCHIVAL: Archive & zero every duplicate_archived SKU currently on Shopify!
+  // 1c. PERMANENT DUPLICATE / SOLD ARCHIVAL
   for (const dupSku of duplicateArchivedSkusSet) {
     const liveDup = existingSkus.get(dupSku);
-    if (!liveDup) continue;
+    if (!liveDup || liveGhostProductsToDelete.has(liveDup.product_id)) continue;
     const needsArchive = liveDup.status !== 'archived';
     const needsZero = Number(liveDup.inventory_quantity || 0) > 0;
     if (!needsArchive && !needsZero) continue;
@@ -1746,37 +2032,61 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
               product: {
                 id: Number(liveDup.product_id),
                 status: 'archived',
-                tags: 'DUPLICATE-ARCHIVED, MERGED-INTO-CANONICAL-SKU'
+                tags: 'DUPLICATE-OR-SOLD-ARCHIVED'
               }
             })
           },
           { authMode: auth.authMode, settings, tokenRef }
         );
-        if (archResp.ok) {
-          archivedDuplicates++;
-          logSync('outbound', 'shopify_co_master', 'archive_duplicate_sku', dupSku, 'success', `Archived duplicate_archived SKU ${dupSku} on ${domain} (Product ID ${liveDup.product_id}) — merged into canonical single-unit listing.`);
-        } else {
-          errors.push(`archive-duplicate ${dupSku}: HTTP ${archResp.status}`);
-        }
+        if (archResp.ok) archivedDuplicates++;
+        else errors.push(`archive-duplicate ${dupSku}: HTTP ${archResp.status}`);
       }
-      if (needsZero) {
-        await zeroShopifyInventoryItem(liveDup.inventory_item_id);
-      }
-      await new Promise((r) => setTimeout(r, 260));
+      if (needsZero) await zeroShopifyInventoryItem(liveDup.inventory_item_id);
+      await new Promise((r) => setTimeout(r, 220));
     } catch (err) {
       errors.push(`archive-duplicate ${dupSku}: ${err.message}`);
     }
   }
 
-  // 2. Push new active SKUs (and when updateExisting=true, PUT-enrich ALL existing active Shopify products!)
-  for (const item of items) {
+  // Track active product GIDs for Automated Donor Vehicle Collections + Part Category Collections
+  const collectionMap = new Map();
+  const trackForCollections = (productId, tax) => {
+    if (!productId) return;
+    const gid = `gid://shopify/Product/${productId}`;
+    if (tax?.donorCollectionTitle) {
+      if (!collectionMap.has(tax.donorCollectionTitle)) collectionMap.set(tax.donorCollectionTitle, new Set());
+      collectionMap.get(tax.donorCollectionTitle).add(gid);
+    }
+    if (tax?.categoryCollectionTitle) {
+      if (!collectionMap.has(tax.categoryCollectionTitle)) collectionMap.set(tax.categoryCollectionTitle, new Set());
+      collectionMap.get(tax.categoryCollectionTitle).add(gid);
+    }
+  };
+
+  // 2. Push new active SKUs (and when updateExisting=true, FULL v31.0 enrichment PUT + QR purge + GraphQL taxonomy/metafields/SEO/channels!)
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
+    if (global.__aldridgeShopifySyncJob && global.__aldridgeShopifySyncJob.status === 'running') {
+      global.__aldridgeShopifySyncJob.progress = {
+        processed: idx,
+        total: items.length,
+        created: pushed,
+        updated: updatedCount,
+        deleted_ghost_lacrosse: deletedGhostLaCrosse,
+        deleted_qr_images: deletedQrImages,
+        errors_count: errors.length
+      };
+    }
+
     try {
+      const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+      const dims = resolveExportDims(item);
       const handle = item.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const skuUpper = String(item.sku || '').toUpperCase();
       const matchedExisting = existingSkus.get(skuUpper);
-      const tax = resolvePartTaxonomyAndMetafields(item, settings);
+      const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
       const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
-      const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
+      const dimsLabel = `${dims.length_in}x${dims.width_in}x${dims.height_in}`;
       const tags = [...tax.seoTags, `Dims:${dimsLabel}`].join(', ');
 
       if (matchedExisting) {
@@ -1799,18 +2109,20 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           );
         }
 
+        trackForCollections(matchedExisting.product_id, tax);
+
         if (!updateExisting) {
           skippedProtected++;
           continue;
         }
 
-        // FULL ENRICHMENT PUT UPDATE (intentionally omits `images` so <SKU>.qr.png stays untouched in final gallery slot!)
+        // FULL v31.0 ENRICHMENT PUT UPDATE (<=80 clean title, clean HTML, accurate weight/dims, Qty 1)
         const updatePayload = {
           product: {
             id: Number(matchedExisting.product_id),
-            title: item.title,
-            body_html: renderShopifyHtml(item, settings),
-            vendor: tax.brand || settings.business_name,
+            title: title80,
+            body_html: renderShopifyHtml({ ...item, title: title80 }, settings),
+            vendor: tax.brand || item.fitment_make || 'OEM',
             product_type: tax.partType,
             tags,
             status: 'active',
@@ -1821,7 +2133,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
                 price: Number(item.price_we_pull || 0).toFixed(2),
                 inventory_management: 'shopify',
                 inventory_policy: 'deny',
-                weight: Number(item.weight_lbs || 8),
+                weight: Number(dims.weight_lbs),
                 weight_unit: 'lb',
                 requires_shipping: !heavyPickupOnly
               }
@@ -1843,18 +2155,26 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           throw new Error(`Shopify PUT HTTP ${putResp.status}: ${errTxt.slice(0, 140)}`);
         }
 
-        // Sanitize ALL existing Shopify image alt-texts to strictly match clean verified OEM title (or final QR tag alt)
+        // PURGE any legacy *.qr.png / "Scan QR" image from Shopify AND sanitize clean image alt-texts!
         try {
           const putData = await putResp.json();
           const liveImages = Array.isArray(putData?.product?.images) ? putData.product.images : [];
-          for (let imgIdx = 0; imgIdx < liveImages.length; imgIdx++) {
-            const img = liveImages[imgIdx];
+          for (const img of liveImages) {
             if (!img?.id) continue;
             const isQrImg =
               isQrCardUrl(img.src) ||
-              /scan qr|security tag/i.test(String(img.alt || '')) ||
-              (liveImages.length > 1 && imgIdx === liveImages.length - 1 && /\.qr\.png/i.test(String(img.src || '')));
-            const expectedAlt = buildExpectedShopifyImageAlt(item, isQrImg);
+              /\.qr\.png/i.test(String(img.src || '')) ||
+              /scan qr|security tag/i.test(String(img.alt || ''));
+            if (isQrImg) {
+              const delImgResp = await shopifyFetchWithRetry(
+                `https://${domain}/admin/api/2025-01/products/${matchedExisting.product_id}/images/${img.id}.json`,
+                { method: 'DELETE', headers: { Accept: 'application/json' } },
+                { authMode: auth.authMode, settings, tokenRef }
+              );
+              if (delImgResp.ok) deletedQrImages++;
+              continue;
+            }
+            const expectedAlt = buildExpectedShopifyImageAlt({ ...item, title: title80 });
             if (String(img.alt || '').trim() !== expectedAlt) {
               const imgResp = await shopifyFetchWithRetry(
                 `https://${domain}/admin/api/2025-01/products/${matchedExisting.product_id}/images/${img.id}.json`,
@@ -1876,13 +2196,15 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           authMode: auth.authMode,
           settings,
           productId: matchedExisting.product_id,
+          variantId: matchedExisting.variant_id,
           inventoryItemId: matchedExisting.inventory_item_id,
-          item,
-          tax
+          item: { ...item, title: title80 },
+          tax,
+          publications
         });
 
         updatedCount++;
-        await new Promise((r) => setTimeout(r, 340));
+        await new Promise((r) => setTimeout(r, 260));
         continue;
       }
 
@@ -1891,34 +2213,32 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
         continue;
       }
 
-      // STRICT SINGLE VARIANT ONLY (Default Title, 1 in stock)
+      // STRICT SINGLE VARIANT ONLY (Default Title, Qty 1, exact physical weight_lbs)
       const variants = [
         {
           sku: item.sku,
           price: Number(item.price_we_pull || 0).toFixed(2),
           inventory_management: 'shopify',
-          inventory_quantity: item.status === 'active' ? Math.max(1, Number(item.quantity || 1)) : 0,
+          inventory_quantity: 1,
           inventory_policy: 'deny',
-          weight: Number(item.weight_lbs || 8),
+          weight: Number(dims.weight_lbs),
           weight_unit: 'lb',
           requires_shipping: !heavyPickupOnly
         }
       ];
 
-      const metafields = buildShopifyProductMetafields(item, settings, tax);
-
       const uploadsDir = path.join(DATA_DIR, 'uploads');
       const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
-      const rawPhotos = getShopifyGalleryPhotos(item, settings, uploadsDir);
-      const images = rawPhotos.map((u, idx) => {
-        const altText = buildExpectedShopifyImageAlt(item, isQrCardUrl(u));
+      const rawPhotos = getShopifyGalleryPhotos(item); // ZERO *.qr.png!
+      const altText = buildExpectedShopifyImageAlt({ ...item, title: title80 });
+      const images = rawPhotos.map((u, photoIdx) => {
         if (u.startsWith('/uploads/')) {
           const localFile = path.join(uploadsDir, path.basename(u));
           if (fs.existsSync(localFile)) {
             return {
               attachment: fs.readFileSync(localFile).toString('base64'),
               filename: path.basename(localFile),
-              position: idx + 1,
+              position: photoIdx + 1,
               alt: altText
             };
           }
@@ -1928,31 +2248,30 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           if (fs.existsSync(localThumb)) {
             return {
               attachment: fs.readFileSync(localThumb).toString('base64'),
-              filename: `${item.sku}.${idx + 1}.jpg`,
-              position: idx + 1,
+              filename: `${item.sku}.${photoIdx + 1}.jpg`,
+              position: photoIdx + 1,
               alt: altText
             };
           }
         }
         return {
           src: resolveExportPhotoUrl(u, `https://${domain}`, settings),
-          position: idx + 1,
+          position: photoIdx + 1,
           alt: altText
         };
       });
 
       const payload = {
         product: {
-          title: item.title,
+          title: title80,
           handle,
-          body_html: renderShopifyHtml(item, settings),
-          vendor: tax.brand || settings.business_name,
+          body_html: renderShopifyHtml({ ...item, title: title80 }, settings),
+          vendor: tax.brand || item.fitment_make || 'OEM',
           product_type: tax.partType,
           tags,
-          status: item.quantity > 0 && item.status === 'active' ? 'active' : 'draft',
+          status: 'active',
           variants,
-          images,
-          metafields
+          images
         }
       };
 
@@ -1973,11 +2292,8 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       const data = await resp.json();
       if (data.product && data.product.id) {
         const primaryVar = data.product.variants?.[0] || {};
-        // Multi-channel photo isolation: store ONLY clean part photo CDN URLs (never <SKU>.qr.png)
-        // in inventory_items.photos_json so Crosslist, eBay aabcas, Google Merchant XML, Meta CSV,
-        // and Craigslist stay 100% QR-free.
         const cleanCdnImages = (data.product.images || [])
-          .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+          .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr|security tag/i.test(String(img.alt || '')))
           .map((img) => img.src);
         const nextPhotosJson = cleanCdnImages.length > 0 ? JSON.stringify(cleanCdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
         db.prepare(`
@@ -1999,26 +2315,40 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
           authMode: auth.authMode,
           settings,
           productId: String(data.product.id),
+          variantId: String(primaryVar.id || ''),
           inventoryItemId: String(primaryVar.inventory_item_id || ''),
-          item,
-          tax
+          item: { ...item, title: title80 },
+          tax,
+          publications
         });
+
+        trackForCollections(String(data.product.id), tax);
       }
       pushed++;
-      await new Promise((r) => setTimeout(r, 420));
+      await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
       errors.push(`${item.sku}: ${err.message}`);
     }
   }
 
+  // 3. Automated Donor Vehicle Collections + Part Category Collections on Shopify
+  const collectionsSummary = await syncShopifyCollections({
+    domain,
+    tokenRef,
+    authMode: auth.authMode,
+    settings,
+    collectionMap,
+    publications
+  });
+
   const finalActiveCount = items.length;
   logSync(
     'outbound',
     'shopify_co_master',
-    updateExisting ? 'live_api_full_enrichment_sync' : 'live_api_push',
+    updateExisting ? 'live_api_v31_full_sync' : 'live_api_push',
     'ALL',
     errors.length ? 'partial' : 'success',
-    `Shopify sync on ${domain} via ${auth.authMode}: created=${pushed}, updated_enriched=${updatedCount}, drafted_blocked_srs=${draftedBlocked}, archived_pending=${archivedPending}, archived_duplicates=${archivedDuplicates}, skipped=${skippedProtected}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
+    `Shopify v31 sync on ${domain} via ${auth.authMode}: created=${pushed}, updated=${updatedCount}, deleted_ghost_lacrosse=${deletedGhostLaCrosse}, deleted_qr_images=${deletedQrImages}, archived_blocked=${draftedBlocked}, archived_pending=${archivedPending}, archived_dupes=${archivedDuplicates}, publications=${publications.length}, collections_created=${collectionsSummary.collections_created}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
   );
   return {
     mode: 'live_api',
@@ -2026,11 +2356,18 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     update_existing: Boolean(updateExisting),
     synced_count: pushed,
     updated_count: updatedCount,
+    deleted_ghost_lacrosse_count: deletedGhostLaCrosse,
+    deleted_qr_images_count: deletedQrImages,
+    updated_image_alts_count: updatedImageAlts,
     drafted_blocked_count: draftedBlocked,
     archived_pending_count: archivedPending,
     archived_duplicates_count: archivedDuplicates,
     skipped_protected: skippedProtected,
+    sales_channels_available: publications.map((p) => p.name),
+    collections: collectionsSummary,
+    default_package_note: 'Shopify Admin API restricts saved store default package deletion to Shopify Admin -> Settings -> Shipping and delivery -> Saved packages (remove Uhaul Medium Box there; all per-SKU weights & custom.packed_dimensions are synced via API).',
     total_active_catalog_skus: finalActiveCount,
+    ghost_purge: ghostPurgeSummary,
     deduplication: dedupeSummary,
     errors
   };
@@ -2222,11 +2559,11 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   const auth = await resolveShopifyAccessToken(cfg);
   const domain = auth.shopDomain;
 
-  if (!hasRealPhotos(item)) {
+  if (!isMarketplaceSafeItem(item)) {
     return {
       pushed: false,
       shopify_domain: domain,
-      reason: 'Blocked: Real part photos are required before publishing to Shopify or eBay.'
+      reason: 'Blocked: Item failed strict v31.0 17-char verified donor VIN, compliance, ghost-vehicle, or real-photo publish gate.'
     };
   }
 
@@ -2242,38 +2579,35 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
     };
   }
 
+  const title80 = cleanListingTitle(item.title || '').slice(0, 80);
+  const dims = resolveExportDims(item);
   const handle = String(item.sku || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const tax = resolvePartTaxonomyAndMetafields(item, cfg);
+  const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, cfg);
   const heavyPickupOnly = isHeavyLocalPickupItem(item, cfg);
-  const dimsLabel = `${Math.round(Number(item.length_in || 14))}x${Math.round(Number(item.width_in || 10))}x${Math.round(Number(item.height_in || 8))} in`;
-  const tags = [...tax.seoTags, `Dims:${dimsLabel}`, 'eBay-US-Ready-Queue'].join(', ');
+  const dimsLabel = `${dims.length_in}x${dims.width_in}x${dims.height_in}`;
+  const tags = [...tax.seoTags, `Dims:${dimsLabel}`].join(', ');
 
-  // STRICT SINGLE VARIANT ONLY (Default Title, 1 in stock — zero double-booking, Crosslist auto-delist ready)
+  // STRICT SINGLE VARIANT ONLY (Default Title, Qty 1, exact physical weight_lbs)
   const variants = [
     {
       sku: item.sku,
       price: Number(item.price_we_pull || 0).toFixed(2),
       inventory_management: 'shopify',
-      inventory_quantity: item.status === 'active' ? Math.max(1, Number(item.quantity || 1)) : 0,
+      inventory_quantity: 1,
       inventory_policy: 'deny',
-      weight: Number(item.weight_lbs || 8),
+      weight: Number(dims.weight_lbs),
       weight_unit: 'lb',
       requires_shipping: !heavyPickupOnly
     }
   ];
 
-  const metafields = buildShopifyProductMetafields(item, cfg, tax);
-
   const targetDir = uploadsDir || path.join(DATA_DIR, 'uploads');
   const reviewThumbsDir = path.join(__dirname, '..', 'public', 'review-thumbs');
-  const rawPhotos = getShopifyGalleryPhotos(item, cfg, targetDir);
+  const rawPhotos = getShopifyGalleryPhotos(item); // ZERO *.qr.png!
+  const altText = buildExpectedShopifyImageAlt({ ...item, title: title80 });
   const images = [];
   let pos = 1;
   for (const str of rawPhotos) {
-    const altText = buildExpectedShopifyImageAlt(item, isQrCardUrl(str));
     if (str.startsWith('data:image/')) {
       const m = str.match(/^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/);
       if (m) {
@@ -2315,16 +2649,15 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
 
   const payload = {
     product: {
-      title: item.title,
+      title: title80,
       handle,
-      body_html: renderShopifyHtml(item, cfg),
-      vendor: tax.brand || cfg.business_name || "Aldridge Auto's",
+      body_html: renderShopifyHtml({ ...item, title: title80 }, cfg),
+      vendor: tax.brand || item.fitment_make || 'OEM',
       product_type: tax.partType,
       tags,
-      status: Number(item.quantity || 1) > 0 && item.status === 'active' ? 'active' : 'draft',
+      status: 'active',
       variants,
-      images,
-      metafields
+      images
     }
   };
 
@@ -2356,7 +2689,7 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   if (data.product && data.product.id) {
     const primaryVar = data.product.variants?.[0] || {};
     const cleanCdnImages = (data.product.images || [])
-      .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr/i.test(String(img.alt || '')))
+      .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr|security tag/i.test(String(img.alt || '')))
       .map((img) => img.src);
     const nextPhotosJson = cleanCdnImages.length > 0 ? JSON.stringify(cleanCdnImages) : (item.photos_json || JSON.stringify(getValidPhotos(item)));
     db.prepare(`
@@ -2371,17 +2704,26 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
       new Date().toISOString(),
       item.id
     );
+    const publications = await fetchAllShopifyPublications({ domain, tokenRef, authMode: auth.authMode, settings: cfg });
     await syncShopifyProductGraphqlAndOrigin({
       domain,
       tokenRef,
       authMode: auth.authMode,
       settings: cfg,
       productId: String(data.product.id),
+      variantId: String(primaryVar.id || ''),
       inventoryItemId: String(primaryVar.inventory_item_id || ''),
-      item,
-      tax
+      item: { ...item, title: title80 },
+      tax,
+      publications
     });
-    logSync('outbound', 'shopify_direct_camera', 'auto_publish_live', item.sku, 'success', `Published single-variant ${item.sku} directly to https://${domain}/products/${data.product.handle} (Product ID ${data.product.id}, ${cleanCdnImages.length} clean CDN images; QR card isolated to Shopify only).`);
+    const colMap = new Map();
+    const pGid = `gid://shopify/Product/${data.product.id}`;
+    if (tax.donorCollectionTitle) colMap.set(tax.donorCollectionTitle, new Set([pGid]));
+    if (tax.categoryCollectionTitle) colMap.set(tax.categoryCollectionTitle, new Set([pGid]));
+    await syncShopifyCollections({ domain, tokenRef, authMode: auth.authMode, settings: cfg, collectionMap: colMap, publications });
+
+    logSync('outbound', 'shopify_direct_camera', 'auto_publish_live', item.sku, 'success', `Published single-variant ${item.sku} directly to https://${domain}/products/${data.product.handle} (Product ID ${data.product.id}, ${cleanCdnImages.length} clean CDN images, 0 QR images).`);
     return {
       pushed: true,
       shopify_domain: domain,

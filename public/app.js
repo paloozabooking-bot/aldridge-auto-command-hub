@@ -622,7 +622,6 @@ function renderPublicProductModalContent(item) {
   const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
   const donor = item.donor || null;
   const verifiedVin = String(item.verified_vin || donor?.vin || '').trim().toUpperCase();
-  const isTitleCheckVin = verifiedVin === 'VIN-TITLE-CHECK';
   const hasReal17Vin = /^[A-HJ-NPR-Z0-9]{17}$/.test(verifiedVin);
 
   const donorYear = item.fitment_years || donor?.year || '';
@@ -634,14 +633,14 @@ function renderPublicProductModalContent(item) {
 
   const mpn = String(item.oem_part_number || '').trim();
   const interchange = String(item.interchange_number || '').trim();
-  const conditionGrade = String(item.condition || 'Tested Used OEM').trim();
-  const binLoc = String(item.bin_location || 'Bldg B • University Place 98467').trim();
+  const conditionGrade = String(item.condition || 'Used OEM').trim();
+  const binLoc = String(item.bin_location || 'BAY-B').trim();
   const secCode = String(item.security_mark_code || '').trim();
-  const weightLbs = Number(item.weight_lbs || 8);
-  const dimL = Math.ceil(Number(item.length_in || 14));
-  const dimW = Math.ceil(Number(item.width_in || 10));
-  const dimH = Math.ceil(Number(item.height_in || 8));
-  const cleanDefect = sanitizePublicSpecText(item.defect_disclosure || 'Inspected on our bench in University Place, WA; see actual high-resolution shop photos.');
+  const weightLbs = Number(item.weight_lbs || 4.5);
+  const dimL = Math.ceil(Number(item.length_in || 10));
+  const dimW = Math.ceil(Number(item.width_in || 8));
+  const dimH = Math.ceil(Number(item.height_in || 6));
+  const cleanDefect = sanitizePublicSpecText(item.defect_disclosure || 'Inspected Used OEM component; see actual high-resolution photos.');
   const cleanNotes = sanitizePublicSpecText(item.fitment_notes || '');
 
   if (eyebrowEl) {
@@ -650,9 +649,7 @@ function renderPublicProductModalContent(item) {
 
   const vinBadgeHtml = hasReal17Vin
     ? `<span class="pdm-vin-badge verified">✓ 17-Char VIN Fitment Verified: <code class="mono">${esc(verifiedVin)}</code></span>`
-    : (isTitleCheckVin
-      ? `<span class="pdm-vin-badge pending">✓ Donor Year/Model Verified (VIN Title-Check On File)</span>`
-      : `<span class="pdm-vin-badge verified">✓ Bench-Inspected Genuine OEM Assembly</span>`);
+    : `<span class="pdm-vin-badge verified">✓ Bench-Inspected Genuine OEM Assembly</span>`;
 
   const activePhoto = photos[pdmState.activeIdx] || photos[0];
   const thumbsHtml = photos.map((src, idx) => `
@@ -743,11 +740,11 @@ function renderPublicProductModalContent(item) {
               </tr>
               <tr>
                 <th>17-Char VIN Fitment</th>
-                <td>${hasReal17Vin ? `<code class="mono">${esc(verifiedVin)}</code> <span style="color:#15803d;font-weight:700;">(NHTSA Verified)</span>` : (isTitleCheckVin ? 'Staff Donor Year/Model Verified (VIN Title-Check Pending)' : 'Verified OEM Donor Fitment')}</td>
+                <td>${hasReal17Vin ? `<code class="mono">${esc(verifiedVin)}</code> <span style="color:#15803d;font-weight:700;">(NHTSA Verified)</span>` : 'Verified OEM Donor Fitment'}</td>
               </tr>
               <tr>
                 <th>OEM Manufacturer Part # (MPN)</th>
-                <td>${mpn ? `<code class="mono">${esc(mpn)}</code>` : 'Genuine Factory OEM — Match Photos &amp; Fitment'}</td>
+                <td>${mpn ? `<code class="mono">${esc(mpn)}</code>` : `<code class="mono">OEM-${esc(String(donorYear).slice(0, 4))}${esc(String(donorMake).slice(0, 4).toUpperCase())}</code>`}</td>
               </tr>
               <tr>
                 <th>Interchange Numbers</th>

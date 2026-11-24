@@ -17,6 +17,7 @@ const {
   generateSecurityCode,
   computeShippingClass,
   validateVinStrict,
+  purgeGhostAndBlockedInventory,
   validatePartCompliance,
   validateInventoryItemForPublish,
   upsertCustomer,
@@ -720,7 +721,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v30.0',
+        sw_version: 'v31.0',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -1062,7 +1063,8 @@ const server = http.createServer(async (req, res) => {
         const isValidLockedSession =
           Boolean(lockedSession) &&
           lockedSession.status === 'active' &&
-          (validateVinStrict(lockedSession.vin).valid || isTitleCheckSessionVin(lockedSession.vin));
+          String(lockedSession.vin || '').trim().length === 17 &&
+          validateVinStrict(lockedSession.vin).valid;
         if (!isValidLockedSession) {
           return sendJson(res, 422, {
             ok: false,
@@ -3644,6 +3646,14 @@ async function autoSyncKeepItemsOnStartup() {
   try {
     const cfg = getSettings();
     const baseUrl = cfg.canonical_domain || cfg.public_pwa_url || `http://localhost:${PORT}`;
+
+    // 0. PERMANENT v31.0 GHOST VEHICLE & STRICT 17-CHAR VIN PURGE ON BOOT
+    const v31Purge = purgeGhostAndBlockedInventory({ actor: 'startup_v31_ghost_purge' });
+    if (v31Purge.purged_ghost_lacrosse || v31Purge.purged_sold_subaru_trans || v31Purge.purged_no_real_vin || v31Purge.deleted_donor_vehicles) {
+      console.log(
+        `[Startup v31.0 Ghost & Strict VIN Purge] ghost_lacrosse=${v31Purge.purged_ghost_lacrosse} | sold_subaru_trans=${v31Purge.purged_sold_subaru_trans} | no_real_vin=${v31Purge.purged_no_real_vin} | deleted_donors=${v31Purge.deleted_donor_vehicles}`
+      );
+    }
 
     // 1. MANDATORY CLEAN-SLATE VIN INVARIANT (PROTECTED): NEVER clear or overwrite verified VIN-intake active SKUs on restart/redeploy.
     // Only purge unverified legacy/non-VIN items if any exist.

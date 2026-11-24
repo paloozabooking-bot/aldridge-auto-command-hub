@@ -218,14 +218,14 @@ const VIN_YEAR_CODE_MAP = {
 async function decodeVinLiveNhtsa(rawVin) {
   const vin = String(rawVin || '').trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
   const strict = validateVinStrict(vin);
-  if (!strict.valid && !strict.blocklist_only) {
-    throw new Error(`Invalid 17-character VIN: ${strict.reason}`);
+  if (!strict.valid) {
+    throw new Error(`Invalid or blocked 17-character VIN: ${strict.reason}`);
   }
 
   try {
     const url = `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(vin)}?format=json`;
     const resp = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'AldridgeAutoCommandHub/v28' },
+      headers: { Accept: 'application/json', 'User-Agent': 'AldridgeAutoCommandHub/v31' },
       signal: AbortSignal.timeout(7000)
     });
     if (resp.ok) {
@@ -236,9 +236,6 @@ async function decodeVinLiveNhtsa(rawVin) {
       const nhtsaClean = primaryErrCode === '0' && hasFactoryDecode && isVinCheckDigitValid(vin).valid;
       if (nhtsaClean) {
         registerNhtsaVerifiedVin(vin);
-      }
-      if (!strict.valid && !nhtsaClean) {
-        throw new Error(`Invalid 17-character VIN: ${strict.reason}`);
       }
       if (rec && (rec.Make || rec.Model || rec.ModelYear)) {
         const disp = rec.DisplacementL ? `${Number(rec.DisplacementL).toFixed(1)}L` : '';

@@ -1050,8 +1050,22 @@ const VIN_TRANSLITERATION = {
   0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9
 };
 const VIN_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
+// PERMANENTLY BANNED GHOST VINS — NEVER OWNED BY ALDRIDGE AUTO (cannot be bypassed even by NHTSA ErrorCode === "0")
+const PERMANENTLY_BANNED_GHOST_VINS = new Set([
+  '1G4GA5GR2FF246661' // Ghost 2015 Buick LaCrosse / Verano mis-pasted onto 2016 Equinox folder — owner NEVER had a 2015 Buick LaCrosse
+]);
+
+// PERMANENTLY BANNED SOLD / DUPLICATE SUBARU TRANSMISSIONS & CONFIRMED SOLD SKUS
+const PERMANENTLY_BANNED_SOLD_SKUS = new Set([
+  'ALD-09SUB-TRANSMISSION-A-94D1',
+  'ALD-98SUB-TRANSMISSION-A-69CF',
+  'ALD-98SUB-TRANSMISSION-A-5388',
+  'ALD-09SUB-AUTOMATIC-TRAN-08CC',
+  'ALD-98SUB-AUTOMATIC-TRAN-FFBA'
+]);
+
 const KNOWN_FAKE_OR_WRONG_VINS = new Set([
-  '1G4GA5GR2FF246661', // Wrong car: 2015 Buick Verano pasted onto 2016 Chevy Equinox
+  '1G4GA5GR2FF246661', // Permanently banned ghost 2015 Buick LaCrosse / Verano
   '4T1SK12E2TL038415', // Fabricated Camry VIN
   '5FNRL18451B072461', // Invalid checksum 2001 Odyssey
   '5N1ED22Y91C504281', // Invalid checksum 2001 Xterra
@@ -1062,7 +1076,8 @@ const KNOWN_FAKE_OR_WRONG_VINS = new Set([
 // Explicitly whitelisted real Aldridge Auto donor VINs (confirmed in live Shopify orders & yard records)
 const VERIFIED_DONOR_VIN_WHITELIST = new Set([
   'JTEBU14R040057212', // 2004 Toyota 4Runner SR5 4x4 V6 (confirmed in Shopify Orders #1009, #1017, #1022-#1025, #1037, #1044, #1045)
-  '1D7HE48K56S679400'  // 2006 Dodge Dakota SLT
+  '1D7HE48K56S679400', // 2006 Dodge Dakota SLT
+  'JTEBU5JR5D5117391'  // 2013 Toyota 4Runner SR5 4x4 4.0L V6 (verified NHTSA ErrorCode: 0 from Drive records & Unified_Master_Upload.csv)
 ]);
 
 // Runtime registry of 17-char VINs that passed live NHTSA vPIC decoding (ErrorCode === "0" + valid check digit + factory model)
@@ -1084,6 +1099,7 @@ function isVinCheckDigitValid(rawVin) {
 
 function registerNhtsaVerifiedVin(rawVin) {
   const cleaned = String(rawVin || '').trim().toUpperCase();
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(cleaned)) return false;
   if (/^[A-HJ-NPR-Z0-9]{17}$/.test(cleaned) && isVinCheckDigitValid(cleaned).valid) {
     NHTSA_VERIFIED_CLEAN_VINS.add(cleaned);
     return true;
@@ -1094,8 +1110,16 @@ function registerNhtsaVerifiedVin(rawVin) {
 function validateVinStrict(rawVin) {
   const cleaned = String(rawVin || '').trim().toUpperCase();
   if (!cleaned) return { valid: true, vin: '', empty: true };
-  if (/^AUDIT-|^NO-VIN|^UNKNOWN|^N\/?A$/i.test(cleaned)) {
-    return { valid: false, vin: cleaned, reason: 'Placeholder VIN strings are blocked; leave VIN blank or enter a real 17-digit stamped VIN.' };
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(cleaned)) {
+    return {
+      valid: false,
+      vin: cleaned,
+      permanent_ghost_ban: true,
+      reason: `PERMANENTLY BLOCKED GHOST VEHICLE VIN "${cleaned}" (2015 Buick LaCrosse / Verano — never owned by Aldridge Auto).`
+    };
+  }
+  if (/^AUDIT-|^NO-VIN|^UNKNOWN|^N\/?A$|^VIN-TITLE-CHECK$/i.test(cleaned)) {
+    return { valid: false, vin: cleaned, reason: 'Placeholder or unverified title-check VIN strings are strictly blocked; enter a real 17-character NHTSA-verified donor VIN.' };
   }
   if (cleaned.length !== 17) {
     return { valid: false, vin: cleaned, reason: `VIN "${cleaned}" must be exactly 17 characters (got ${cleaned.length}).` };
@@ -1154,18 +1178,18 @@ function validatePartCompliance(fields = {}) {
   return { compliant: true };
 }
 
-function computeShippingClass(weightLbs, category = '', lengthIn = 14, widthIn = 10, heightIn = 8) {
+function computeShippingClass(weightLbs, category = '', lengthIn = 10, widthIn = 8, heightIn = 6) {
   const settings = getSettings();
   const heavyThreshold = Number(settings.freight_weight_threshold_lbs || 70);
   const catLower = (category || '').toLowerCase();
   const girthPlusLength = Number(lengthIn) + 2 * (Number(widthIn) + Number(heightIn));
 
-  // Audit Guard: Never let "Engine", "Transmission", "Axle", "Bumper", or "Hood" substring-trap small shippable subparts!
-  const isSmallSubpart = /\b(module|ecu|ecm|pcm|tcm|bcm|computer|immobilizer|cover|harness|fuse|relay|cable|shifter|pan|mount|bracket|sensor|solenoid|cooling|radiator|fan|shroud|latch|hinge|release|strut|lift support|handle|switch|bezel|trim|mirror|lamp|light)\b/i.test(catLower);
+  // Audit Guard: Never let "Engine", "Transmission", "Axle", "Bumper", "Door", "Hood", or "Seat" substring-trap small shippable subparts!
+  const isSmallSubpart = /\b(module|ecu|ecm|pcm|tcm|bcm|computer|immobilizer|harness|fuse|relay|cable|shifter|pan|mount|bracket|sensor|solenoid|cooling|radiator|fan|shroud|latch|hinge|release|strut|lift\s*support|handle|switch|bezel|trim|mirror|lamp|light|lock\s*actuator|regulator|motor|speaker|cover\s*trim|filler\s*door|glove\s*box|visor|headrest|knob|armrest|belt|buckle|panel\s*trim)\b/i.test(catLower);
 
   // Hazmat / fluid-bearing / fragile oversized glass items are strictly Local Pickup Only in 98467
-  const isHazmatOrGlass = /\b(lead[- ]acid|car battery|automotive battery|hybrid battery|hv battery|fuel tank|gas tank|hazmat|refrigerant|windshield|back glass)\b/i.test(catLower);
-  if (isHazmatOrGlass) {
+  const isHazmatOrGlass = /\b(lead[- ]acid|car\s*battery|automotive\s*battery|hybrid\s*battery|hv\s*battery|fuel\s*tank|gas\s*tank|hazmat|refrigerant|windshield|back\s*glass|rear\s*window\s*glass|door\s*window\s*glass|quarter\s*window\s*glass)\b/i.test(catLower);
+  if (isHazmatOrGlass && !isSmallSubpart) {
     return 'local_pickup_only';
   }
 
@@ -1175,18 +1199,7 @@ function computeShippingClass(weightLbs, category = '', lengthIn = 14, widthIn =
   }
   if (
     !isSmallSubpart &&
-    (
-      catLower.includes('complete engine') ||
-      catLower.includes('long block') ||
-      catLower.includes('automatic transmission') ||
-      catLower.includes('manual transmission') ||
-      catLower.includes('axle assembly') ||
-      catLower.includes('rear axle') ||
-      catLower.includes('bumper assembly') ||
-      catLower.includes('body shell') ||
-      catLower.includes('door shell') ||
-      catLower.includes('car hood')
-    )
+    /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transfer\s*case|differential|axle\s*assembly|rear\s*axle|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|body\s*shell|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|complete\s*door|car\s*hood|hood\s*panel|engine\s*hood|tailgate|liftgate|hatch\s*lid|trunk\s*lid|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|seat\s*assembly|seat\s*set)\b/i.test(catLower)
   ) {
     return 'local_pickup_only';
   }
@@ -2229,10 +2242,105 @@ function getPhotoReviewSummary() {
   };
 }
 
+function isGhostOrBannedInventoryItem(item = {}) {
+  const skuUpper = String(item.sku || '').trim().toUpperCase();
+  const vinUpper = String(item.verified_vin || item.donor_vin || '').trim().toUpperCase();
+  const binUpper = String(item.bin_location || '').trim().toUpperCase();
+  const titleLower = String(item.title || '').toLowerCase();
+  const makeLower = String(item.fitment_make || '').toLowerCase();
+  const modelLower = String(item.fitment_model || '').toLowerCase();
+
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(vinUpper)) {
+    return { blocked: true, reason: `Permanently banned ghost vehicle VIN (${vinUpper} — 2015 Buick LaCrosse never owned by Aldridge Auto).` };
+  }
+  if (binUpper.includes('LACROSSE') || (makeLower === 'buick' && modelLower.includes('lacrosse')) || /\bbuick\s+lacrosse\b/i.test(titleLower)) {
+    return { blocked: true, reason: 'Permanently banned ghost 2015 Buick LaCrosse inventory item.' };
+  }
+  if (skuUpper && PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) {
+    return { blocked: true, reason: `Permanently blocked sold / duplicate Subaru transmission SKU (${skuUpper}).` };
+  }
+  return { blocked: false, reason: '' };
+}
+
+function purgeGhostAndBlockedInventory({ actor = 'system_v31_purge' } = {}) {
+  const now = new Date().toISOString();
+  const allRows = db.prepare('SELECT id, sku, title, verified_vin, bin_location, fitment_make, fitment_model, status, quantity FROM inventory_items').all();
+  let purgedGhostItems = 0;
+  let purgedSoldTrans = 0;
+  let purgedNoVinItems = 0;
+  const purgedSkus = [];
+
+  const archiveStmt = db.prepare(`
+    UPDATE inventory_items
+    SET status = 'archived', quantity = 0, updated_at = ?
+    WHERE id = ?
+  `);
+
+  for (const row of allRows) {
+    const skuUpper = String(row.sku || '').trim().toUpperCase();
+    const vinUpper = String(row.verified_vin || '').trim().toUpperCase();
+    const ghostCheck = isGhostOrBannedInventoryItem(row);
+
+    if (ghostCheck.blocked) {
+      if (row.status !== 'archived' || Number(row.quantity || 0) > 0) {
+        archiveStmt.run(now, row.id);
+        if (PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) purgedSoldTrans++;
+        else purgedGhostItems++;
+        purgedSkus.push(row.sku);
+      }
+      continue;
+    }
+
+    // Strict "No Real Verified 17-Char Donor VIN = No Listing": quarantine/archive VIN-TITLE-CHECK or invalid VIN rows
+    const vinCheck = validateVinStrict(vinUpper);
+    if (row.status === 'active' && (!vinUpper || vinUpper.length !== 17 || !vinCheck.valid)) {
+      archiveStmt.run(now, row.id);
+      purgedNoVinItems++;
+      purgedSkus.push(row.sku);
+    }
+  }
+
+  // Delete ghost Buick LaCrosse donor vehicle & mark its intake sessions purged
+  const deletedDonors = db.prepare(`
+    DELETE FROM donor_vehicles
+    WHERE UPPER(COALESCE(vin, '')) = '1G4GA5GR2FF246661'
+       OR (LOWER(COALESCE(make, '')) = 'buick' AND LOWER(COALESCE(model, '')) LIKE '%lacrosse%')
+       OR UPPER(COALESCE(vin, '')) = 'VIN-TITLE-CHECK'
+  `).run().changes;
+
+  const purgedSessions = db.prepare(`
+    UPDATE vin_intake_sessions
+    SET status = 'purged', updated_at = ?
+    WHERE UPPER(COALESCE(vin, '')) IN ('1G4GA5GR2FF246661', 'VIN-TITLE-CHECK')
+       OR (LOWER(COALESCE(make, '')) = 'buick' AND LOWER(COALESCE(model, '')) LIKE '%lacrosse%')
+  `).run(now).changes;
+
+  if (purgedGhostItems || purgedSoldTrans || purgedNoVinItems || deletedDonors || purgedSessions) {
+    logSync(
+      'internal',
+      'ghost_and_vin_gate_purge',
+      'v31_strict_purge',
+      'ALL',
+      'success',
+      `[${actor}] Purged ghost_lacrosse=${purgedGhostItems}, sold_subaru_trans=${purgedSoldTrans}, no_real_vin=${purgedNoVinItems}, donor_rows_deleted=${deletedDonors}, sessions_purged=${purgedSessions}.`
+    );
+  }
+
+  return {
+    ok: true,
+    purged_ghost_lacrosse: purgedGhostItems,
+    purged_sold_subaru_trans: purgedSoldTrans,
+    purged_no_real_vin: purgedNoVinItems,
+    deleted_donor_vehicles: deletedDonors,
+    purged_intake_sessions: purgedSessions,
+    purged_skus: purgedSkus
+  };
+}
+
 /**
  * PERMANENT INTAKE-TO-SALE ANTI-PLACEHOLDER VALIDATION GATE
  * Invoked on EVERY insert, update, AI intake, CSV import, and multi-channel sync.
- * Blocks any placeholder/incomplete SKU from entering `active` or publishing to Shopify/eBay/Google/Meta/Craigslist.
+ * Blocks any placeholder/incomplete/ghost/unverified-VIN SKU from entering `active` or publishing to Shopify/eBay/Google/Meta/Crosslist.
  */
 function validateInventoryItemForPublish(item = {}) {
   const reasons = [];
@@ -2251,19 +2359,21 @@ function validateInventoryItemForPublish(item = {}) {
   const widthIn = Number(item.width_in || 0);
   const heightIn = Number(item.height_in || 0);
 
-  // 0. MANDATORY VIN / LICENSE-PLATE INTAKE PIPELINE INVARIANT:
-  // NO part may exist as active/publishable unless created through the verified VIN/Plate Vehicle Intake Pipeline
-  // (or an explicit staff-confirmed trust_folder_year title-check session locked in vin_intake_sessions).
+  // -1. PERMANENT GHOST VEHICLE & SOLD SUBARU TRANSMISSION HARD BLOCK
+  const ghostCheck = isGhostOrBannedInventoryItem(item);
+  if (ghostCheck.blocked) {
+    return {
+      valid: false,
+      recommended_status: 'archived',
+      reasons: [ghostCheck.reason]
+    };
+  }
+
+  // 0. MANDATORY STRICT 17-CHAR NHTSA-VERIFIED DONOR VIN GATE (ZERO VIN-TITLE-CHECK BYPASS):
+  // NO real 17-character ISO-3779 NHTSA-verified donor VIN = NO SKU created, NO listing published.
   const vinCheck = validateVinStrict(verifiedVin);
-  const isApprovedTitleCheck =
-    verifiedVin === 'VIN-TITLE-CHECK' &&
-    Boolean(intakeSessionId) &&
-    intakeSource === 'vin_intake_pipeline' &&
-    Boolean(
-      db.prepare("SELECT id FROM vin_intake_sessions WHERE UPPER(session_code) = ? AND vin = 'VIN-TITLE-CHECK' AND status = 'active'").get(intakeSessionId.toUpperCase())
-    );
-  if (!vinCheck.valid && !isApprovedTitleCheck) {
-    reasons.push(`Mandatory VIN Intake Gate: missing or invalid 17-character verified_vin (${vinCheck.reason || 'required'})`);
+  if (!verifiedVin || verifiedVin.length !== 17 || !vinCheck.valid) {
+    reasons.push(`Strict VIN Gate: real 17-character NHTSA-verified donor VIN required (${vinCheck.reason || 'missing or unverified VIN'})`);
   }
   if (!intakeSessionId || intakeSource !== 'vin_intake_pipeline') {
     reasons.push('Mandatory VIN Intake Gate: item must originate from a locked VIN / License Plate Vehicle Intake Session');
@@ -2318,10 +2428,10 @@ function validateInventoryItemForPublish(item = {}) {
     reasons.push('Fitment contains banned "Universal" wording');
   }
 
-  // 4. Banned / fake MPN checks (blank is allowed when unstamped; placeholders & hashes are banned)
+  // 4. Banned / fake MPN checks (real stamped OEM MPN or clean structured OEM-<YEAR><MAKE>-<PARTCODE> allowed; placeholders banned)
   if (mpn) {
-    if (/does\s+not\s+apply|^n\/?a$/i.test(mpn)) {
-      reasons.push('MPN contains banned placeholder "Does Not Apply" / "N/A"');
+    if (/does\s+not\s+apply|^n\/?a$|oem\s+factory\s+part/i.test(mpn)) {
+      reasons.push('MPN contains banned placeholder wording');
     }
     if (/^[0-9a-f]{4}-[0-9a-f]{4}/i.test(mpn) || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(mpn)) {
       reasons.push(`MPN "${mpn}" matches fake hex/UUID hash pattern`);
@@ -2340,8 +2450,8 @@ function validateInventoryItemForPublish(item = {}) {
   }
   if (!Number.isFinite(weight) || weight <= 0) {
     reasons.push('Missing or zero shipping weight (weight_lbs)');
-  } else if (weight === 2) {
-    reasons.push('Default fallback 2 lb shipping weight is blocked — specify accurate packed weight');
+  } else if (weight === 2 || weight === 8.5) {
+    reasons.push(`Default fallback ${weight} lb shipping weight is blocked — specify accurate part-class packed weight`);
   }
   if (!Number.isFinite(lengthIn) || lengthIn <= 0 || !Number.isFinite(widthIn) || widthIn <= 0 || !Number.isFinite(heightIn) || heightIn <= 0) {
     reasons.push('Missing or zero packed box dimensions (L x W x H in inches)');
@@ -3031,10 +3141,14 @@ module.exports = {
   generateSecurityCode,
   generateReferralCode,
   computeShippingClass,
+  PERMANENTLY_BANNED_GHOST_VINS,
+  PERMANENTLY_BANNED_SOLD_SKUS,
   VERIFIED_DONOR_VIN_WHITELIST,
   isVinCheckDigitValid,
   registerNhtsaVerifiedVin,
   validateVinStrict,
+  isGhostOrBannedInventoryItem,
+  purgeGhostAndBlockedInventory,
   validatePartCompliance,
   validateInventoryItemForPublish,
   normalizePhoneDigits,

@@ -20,9 +20,10 @@ const {
   resolvePartDimensionsAndWeight,
   buildRichStructuredDescription,
   stripDriveUrlsFromPublicText,
+  stripOffPlatformViolations,
   deduplicateCatalog
 } = require('./catalog-enrichment');
-const { isCounterfeitMpn } = require('./audit-sanitizer');
+const { isCounterfeitMpn, cleanListingTitle } = require('./audit-sanitizer');
 const { pushSingleItemToShopify } = require('./exporters');
 const {
   createVinIntakeVehicleSession,
@@ -885,8 +886,8 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
   // Priority A: Explicit manual 17-char VIN entry/override
   if (manualVin) {
     const check = validateVinStrict(manualVin);
-    if (!check.valid && !check.blocklist_only) {
-      const err = new Error(check.reason || `Invalid 17-character VIN "${manualVin}".`);
+    if (!check.valid) {
+      const err = new Error(check.reason || `Invalid or blocked 17-character VIN "${manualVin}".`);
       err.statusCode = 400;
       throw err;
     }
@@ -917,60 +918,13 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
   const labelForConflict = folderTitle || allHintStrings.filter(Boolean).slice(0, 3).join(' ');
   const parsedFolderVehicle = parseFolderYearMakeModel(labelForConflict);
 
-  // Explicit staff override: trust_folder_year=true (lock folder Year/Make/Model & clear wrong/missing VIN for title-check)
+  // STRICT v31.0 VIN GATE: NO real 17-character NHTSA-verified donor VIN = NO SKU created, NO listing published!
   if (trustFolderYear) {
-    const fy = parseInt(payload.folder_year || parsedFolderVehicle?.year || 0, 10);
-    const fm = String(payload.folder_make || parsedFolderVehicle?.make || '').trim();
-    const fmod = String(payload.folder_model || parsedFolderVehicle?.model || '').trim();
-    if (!fy || !fm || !fmod) {
-      const err = new Error('trust_folder_year requires a valid Year, Make, and Model in the folder title (e.g., "1996 Toyota Camry").');
-      err.statusCode = 422;
-      throw err;
-    }
-    const folderVeh = { year: fy, make: fm, model: fmod, auto_bin_prefix: buildAutoBinPrefix({ year: fy, make: fm, model: fmod }) };
-    const nhtsaPreview = resolvedVin ? await decodeVinLiveNhtsa(resolvedVin) : null;
-    const conflictObj = nhtsaPreview ? detectFolderVinConflict(labelForConflict, nhtsaPreview) : { has_conflict: false, warning: '' };
-
-    const session = autoLock
-      ? createFolderOverrideTitleCheckSession({
-          folderVehicle: folderVeh,
-          conflictingVin: resolvedVin,
-          nhtsaVehicle: nhtsaPreview,
-          folderTitle: labelForConflict
-        }, staffUser)
-      : null;
-
-    return {
-      ok: true,
-      conflict_resolution_required: false,
-      conflict_resolved_by: 'trust_folder_year',
-      title_check_required: true,
-      cleared_wrong_vin: resolvedVin || '',
-      vin_detected: TITLE_CHECK_VIN_SENTINEL,
-      vin_source: 'folder_year_override_title_check',
-      decode_source: 'folder_label_staff_override',
-      folder_title: folderTitle,
-      drive_url: driveUrl,
-      drive_files_discovered: driveDiscoveredCount,
-      vin_label_conflict: conflictObj,
-      folder_vehicle: folderVeh,
-      nhtsa_vehicle: conflictObj.nhtsa_vehicle || nhtsaPreview || null,
-      auto_bin_prefix: folderVeh.auto_bin_prefix,
-      gemini_vision_configured: geminiConfigured,
-      extracted_video_frames_count: extractedVideoFramesCount,
-      session,
-      vehicle: {
-        vin: TITLE_CHECK_VIN_SENTINEL,
-        year: fy,
-        make: fm,
-        model: fmod,
-        trim: '',
-        engine: '',
-        drivetrain: '',
-        transmission: '',
-        title_check_required: true
-      }
-    };
+    const err = new Error(
+      'Strict VIN Gate (v31.0): Folder-year overrides (VIN-TITLE-CHECK) are disabled for publishing. Supply a real 17-character ISO-3779 NHTSA-verified donor VIN or State + License Plate lookup.'
+    );
+    err.statusCode = 422;
+    throw err;
   }
 
   // Priority D: State + License Plate fallback (delegated to createVinIntakeVehicleSession)
@@ -1203,7 +1157,7 @@ async function identifyPartGroupWithAi(group, session, settings, { batchHint = '
         data: img.buffer.toString('base64')
       }
     }));
-    const prompt = `You are an expert automotive OEM salvage parts cataloger for Aldridge Auto's Service & Repair (University Place, WA 98467).
+    const prompt = `You are an expert automotive OEM salvage parts cataloger.
 Inspect all ${inlineParts.length} photo angle(s) of this automotive part pulled from a VIN-verified donor vehicle.
 LOCKED DONOR VEHICLE (NHTSA vPIC verified — DO NOT change vehicle):
 - VIN: ${session.vin}
@@ -1217,7 +1171,11 @@ Return ONLY valid JSON with these exact keys:
   "placement_on_vehicle": "Front Left (Driver Side) / Front Right (Passenger Side) / Rear / Engine Bay / Interior / Drivetrain / etc.",
   "oem_part_number": "Exact stamped or sticker OEM part number visibly readable in the photo(s), or empty string if none visible — NEVER invent or fabricate a part number",
   "condition": "Used" | "Tested Used OEM" | "Reconditioned",
-  "condition_notes": "Concise physical inspection note (tabs, connector pins, lens clarity, scratches)",
+  "condition_notes": "Unique, specific physical inspection note describing ONLY what is visually observable in these exact photos (tabs, connector pins, lens clarity, housing surface, paint color, wear/scuffs — NO phone numbers, addresses, URLs, or return policy text)",
+  "estimated_weight_lbs": 12.0,
+  "color": "Primary visual color (e.g. Black, Silver, White, Clear / Black, Metallic / Gray)",
+  "material": "Primary material (e.g. Cast Aluminum, Forged Steel, Polycarbonate / ABS Plastic, OEM ABS)",
+  "finish": "Surface finish (e.g. Painted / Gloss, Textured / Matte, Natural Cast, Machined, Clear OEM Lens)",
   "suggested_price_usd": 125.00,
   "is_prohibited_safety_item": false
 }
@@ -1267,7 +1225,11 @@ Set "is_prohibited_safety_item": true ONLY if the photo shows a deployed/undeplo
               placement_on_vehicle: String(ai.placement_on_vehicle || extractPlacementFromHint(aiPartName) || 'Vehicle Specific').trim(),
               oem_part_number: cleanAiMpn,
               condition: String(ai.condition || 'Tested Used OEM').trim(),
-              condition_notes: String(ai.condition_notes || 'Inspected on-site from VIN-verified donor vehicle; see actual photos.').trim(),
+              condition_notes: stripOffPlatformViolations(String(ai.condition_notes || '').trim()),
+              estimated_weight_lbs: Number(ai.estimated_weight_lbs || 0) || 0,
+              color: String(ai.color || '').trim(),
+              material: String(ai.material || '').trim(),
+              finish: String(ai.finish || '').trim(),
               suggested_price_usd: Math.max(25, Number(ai.suggested_price_usd || 115)),
               is_prohibited_safety_item: Boolean(ai.is_prohibited_safety_item)
             };
@@ -1641,12 +1603,14 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       savedPhotos.push(`/uploads/${fname}`);
     }
 
-    const fullTitle = `${session.year} ${session.make} ${session.model}${session.engine ? ` ${session.engine.split(' ')[0]}` : ''} ${ident.part_name} OEM${cleanMpn ? ` ${cleanMpn}` : ''}`
+    const rawTitle = `${session.year} ${session.make} ${session.model}${session.engine ? ` ${session.engine.split(' ')[0]}` : ''} ${ident.part_name} OEM${cleanMpn ? ` ${cleanMpn}` : ''}`
       .replace(/\bOEM\s+OEM\b/gi, 'OEM')
       .replace(/\s+/g, ' ')
       .trim();
+    const fullTitle = cleanListingTitle(rawTitle).slice(0, 80);
 
     const tax = resolvePartTaxonomyAndMetafields({
+      sku,
       title: fullTitle,
       category: '',
       brand: `${session.make} OEM`,
@@ -1654,42 +1618,50 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       oem_part_number: cleanMpn,
       fitment_years: String(session.year),
       fitment_make: session.make,
-      fitment_model: session.model
+      fitment_model: session.model,
+      verified_vin: session.vin
     }, settings);
 
+    const resolvedMpn = tax.mpn;
     const dims = resolvePartDimensionsAndWeight({
       title: fullTitle,
-      category: tax.partType
+      category: tax.partType,
+      vision_weight_lbs: ident.estimated_weight_lbs || 0
     });
 
     const priceWePull = Number(Math.max(25, Number(ident.suggested_price_usd || 95)).toFixed(2));
     const laborHours = Number(dims.labor_hours || 1.2);
     const pricePullInstall = laborHours > 0 ? Number((priceWePull + laborHours * laborRate).toFixed(2)) : priceWePull;
-    const shippingClass = computeShippingClass(dims.weight_lbs, `${tax.partType} ${fullTitle}`, dims.length_in, dims.width_in, dims.height_in);
+    const shippingClass = dims.local_pickup_only
+      ? 'local_pickup_only'
+      : computeShippingClass(dims.weight_lbs, `${tax.partType} ${fullTitle}`, dims.length_in, dims.width_in, dims.height_in);
     const secCode = generateSecurityCode();
-    const isTitleCheckOverride = isTitleCheckSessionVin(session.vin);
-    const cleanNotes = stripDriveUrlsFromPublicText(
-      isTitleCheckOverride
-        ? `Staff Folder-Year Override (VIN Flagged for Title-Check): ${session.year} ${session.make} ${session.model} | Session ${session.session_code} | AI Intake (${ident.provider})`
-        : `VIN-Verified Donor: ${session.year} ${session.make} ${session.model} ${session.trim} ${session.engine} ${session.drivetrain} | Session ${session.session_code} | AI Intake (${ident.provider})`
+    const cleanNotes = stripOffPlatformViolations(
+      `VIN-Verified Donor: ${session.year} ${session.make} ${session.model} ${session.trim} ${session.engine} ${session.drivetrain} | Donor VIN: ${session.vin} | OEM MPN: ${resolvedMpn}`
     );
+
+    const visionNotesParts = [
+      stripOffPlatformViolations(ident.condition_notes || ''),
+      ident.color ? `Color: ${ident.color}` : '',
+      ident.material ? `Material: ${ident.material}` : '',
+      ident.finish ? `Finish: ${ident.finish}` : ''
+    ].filter(Boolean);
+    const cleanDefectNote = visionNotesParts.join('. ') || `Used OEM ${ident.part_name} removed from ${session.year} ${session.make} ${session.model}; see actual multi-angle photos.`;
 
     const candidate = {
       sku,
       title: fullTitle,
       category: tax.partType,
-      condition: ident.condition || 'Tested Used OEM',
+      condition: ident.condition || 'Used',
       brand: `${session.make} OEM`,
-      oem_part_number: cleanMpn,
+      oem_part_number: resolvedMpn,
       interchange_number: '',
       fitment_years: String(session.year),
       fitment_make: session.make,
       fitment_model: session.model,
       fitment_engine: session.engine,
       fitment_notes: cleanNotes,
-      defect_disclosure: ident.condition_notes || (isTitleCheckOverride
-        ? 'Used OEM — pulled & inspected on-site (folder-year locked by staff; VIN flagged for title-check); see actual photos.'
-        : 'Used OEM — pulled & inspected on-site from VIN-verified donor vehicle; see actual photos.'),
+      defect_disclosure: cleanDefectNote,
       price_we_pull: priceWePull,
       install_labor_hours: laborHours,
       weight_lbs: dims.weight_lbs,
@@ -1702,7 +1674,7 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       intake_source: 'vin_intake_pipeline'
     };
 
-    const description = stripDriveUrlsFromPublicText(buildRichStructuredDescription(candidate, settings));
+    const description = buildRichStructuredDescription(candidate, settings);
     const gate = validateInventoryItemForPublish({ ...candidate, description });
     if (!gate.valid) {
       skippedItems.push({
@@ -1734,7 +1706,7 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
       )
     `).run(
       sku, fullTitle, tax.partType, candidate.condition, 3000, candidate.brand,
-      cleanMpn, ident.placement_on_vehicle || 'Vehicle Specific', session.donor_vehicle_id || null,
+      resolvedMpn, ident.placement_on_vehicle || 'Vehicle Specific', session.donor_vehicle_id || null,
       String(session.year), session.make, session.model, session.engine, cleanNotes,
       description, candidate.defect_disclosure, binPrefix, secCode,
       JSON.stringify(savedPhotos), priceWePull,
@@ -1973,8 +1945,27 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
 
   const results = await Promise.all(
     subfolders.map(async (sf) => {
-      const rawMatches = String(sf.title || '').toUpperCase().match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
-      const candidateVin = rawMatches[0] || '';
+      const upperTitle = String(sf.title || '').toUpperCase();
+      // Hard-block permanently banned ghost 2015 Buick LaCrosse (1G4GA5GR2FF246661)
+      if (/1G4GA5GR2FF246661|BUICK[\s_-]+LACROSSE/i.test(upperTitle)) {
+        return {
+          status: 'needs_vin',
+          folder: {
+            id: sf.id,
+            title: sf.title,
+            drive_url: sf.drive_url,
+            detected_vin: '1G4GA5GR2FF246661',
+            reason: 'PERMANENTLY BLOCKED GHOST VEHICLE: 2015 Buick LaCrosse (1G4GA5GR2FF246661) was never owned by Aldridge Auto. Supply the real 17-char Equinox VIN to unlock.'
+          }
+        };
+      }
+
+      const rawMatches = upperTitle.match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
+      let candidateVin = rawMatches[0] || '';
+      // Exact verified Drive-record match for truncated folder title "JTEBU505117391" -> NHTSA ErrorCode: 0 "JTEBU5JR5D5117391" (2013 Toyota 4Runner)
+      if (!candidateVin && /JTEBU505117391/i.test(upperTitle)) {
+        candidateVin = 'JTEBU5JR5D5117391';
+      }
 
       if (!candidateVin) {
         return {
@@ -1984,13 +1975,13 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
             title: sf.title,
             drive_url: sf.drive_url,
             detected_vin: '',
-            reason: 'Missing 17-character VIN in folder title — requires 17-char VIN or State + License Plate lookup before publishing.'
+            reason: 'Missing 17-character VIN in folder title — requires 17-char NHTSA-verified VIN or State + License Plate lookup before publishing.'
           }
         };
       }
 
       const strict = validateVinStrict(candidateVin);
-      if (!strict.valid && !strict.blocklist_only) {
+      if (!strict.valid) {
         return {
           status: 'needs_vin',
           folder: {
@@ -1998,7 +1989,7 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
             title: sf.title,
             drive_url: sf.drive_url,
             detected_vin: candidateVin,
-            reason: `Invalid 17-char VIN (${candidateVin}): ${strict.reason} — verify stamped door-jamb VIN before publishing.`
+            reason: `Blocked / Invalid 17-char VIN (${candidateVin}): ${strict.reason}`
           }
         };
       }
