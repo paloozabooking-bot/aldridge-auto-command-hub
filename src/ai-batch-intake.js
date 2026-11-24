@@ -18,13 +18,14 @@ const {
 } = require('./db');
 const { resolvePartTaxonomyAndMetafields, sanitizeVerifiedMpn } = require('./taxonomy');
 const {
+  resolveCategoryBookTimeLabor,
   resolvePartDimensionsAndWeight,
   buildRichStructuredDescription,
   stripDriveUrlsFromPublicText,
   stripOffPlatformViolations,
   deduplicateCatalog
 } = require('./catalog-enrichment');
-const { isCounterfeitMpn, cleanListingTitle } = require('./audit-sanitizer');
+const { isCounterfeitMpn, cleanListingTitle, isNonPartReferenceListing } = require('./audit-sanitizer');
 const { pushSingleItemToShopify } = require('./exporters');
 const {
   createVinIntakeVehicleSession,
@@ -1565,6 +1566,16 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
         description: ident.condition_notes
       });
 
+      const nonPartCheck = isNonPartReferenceListing({
+        filename: fileLabel,
+        title: ident.part_name,
+        description: ident.condition_notes
+      });
+      if (nonPartCheck.blocked) {
+        skippedItems.push({ filename: fileLabel, reason: nonPartCheck.reason, category: 'non_part_reference' });
+        continue;
+      }
+
       if (ident.is_prohibited_safety_item || postBlock.blocked) {
         const reason = ident.compliance_reason || postBlock.reason || 'Blocked prohibited SRS/airbag/seatbelt/catalytic or sold item.';
         const rec = { filename: fileLabel, reason, category: ident.block_category || postBlock.category || 'blocked' };
@@ -1639,8 +1650,9 @@ async function runAiMultiInputBatchIntake(payload = {}, staffUser = 'Shop Staff'
     });
 
     const priceWePull = Number(Math.max(25, Number(ident.suggested_price_usd || 95)).toFixed(2));
-    const laborHours = Number(dims.labor_hours || 1.2);
-    const pricePullInstall = laborHours > 0 ? Number((priceWePull + laborHours * laborRate).toFixed(2)) : priceWePull;
+    const bookTime = resolveCategoryBookTimeLabor({ title: fullTitle, category: tax.partType }, laborRate);
+    const laborHours = Number(bookTime.hours || 0.75);
+    const pricePullInstall = Number((priceWePull + bookTime.labor_cost).toFixed(2));
     const shippingClass = dims.local_pickup_only
       ? 'local_pickup_only'
       : computeShippingClass(dims.weight_lbs, `${tax.partType} ${fullTitle}`, dims.length_in, dims.width_in, dims.height_in);

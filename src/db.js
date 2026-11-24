@@ -1256,6 +1256,30 @@ function isAllowedActiveDonorVehicle(input = {}) {
 
 const STRICT_PROHIBITED_PART_REGEX = /\b(air\s*bag|airbag|srs|supplemental\s+inflatable\s+restraint|clock\s*spring|clockspring|spiral\s*cable|seat\s*belt\s*retractor|seat\s*belt\s*pretensioner|seatbelt\s*retractor|seatbelt\s*pretensioner|pyrotechnic|inflator|catalytic\s*converter|catalytic|cat\s*converter|manifold\s+with\s+cat|trim\s+panel\s+module|trim\s+component)\b/i;
 
+// v32.3: Non-part reference photo/sticker filter (VIN stickers, door jamb decals, dash VIN plates, empty photos)
+const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+automotive\s+part|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo)\b/i;
+
+function isNonPartReferenceItem(fields = {}) {
+  const combined = [
+    fields.sku || '',
+    fields.title || '',
+    fields.part_name || '',
+    fields.category || '',
+    fields.description || '',
+    fields.filename || '',
+    fields.technicianHint || ''
+  ].join(' ');
+  const m = combined.match(NON_PART_REFERENCE_REGEX);
+  if (m) {
+    return {
+      isNonPart: true,
+      matchedTerm: m[0],
+      reason: `Non-Part Reference Blocked: "${m[0]}" (VIN sticker / door-jamb decal / certification label / non-part reference photo cannot be listed as a sellable OEM SKU).`
+    };
+  }
+  return { isNonPart: false, matchedTerm: '', reason: '' };
+}
+
 function validatePartCompliance(fields = {}) {
   const combined = [
     fields.title || '',
@@ -1269,6 +1293,15 @@ function validatePartCompliance(fields = {}) {
       compliant: false,
       matchedTerm: m[0],
       reason: `Hard Compliance Block: "${m[0]}" (SRS / Airbag / Clockspring / Pretensioner / Catalytic Converter) is strictly prohibited across Shopify, eBay Motors, and Meta.`
+    };
+  }
+  const np = isNonPartReferenceItem(fields);
+  if (np.isNonPart) {
+    return {
+      compliant: false,
+      non_part_reference: true,
+      matchedTerm: np.matchedTerm,
+      reason: np.reason
     };
   }
   return { compliant: true };
@@ -2352,6 +2385,10 @@ function isGhostOrBannedInventoryItem(item = {}) {
   if (skuUpper && PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) {
     return { blocked: true, ghost_delete: false, reason: `Permanently blocked sold / duplicate Subaru transmission SKU (${skuUpper}).` };
   }
+  const npCheck = isNonPartReferenceItem(item);
+  if (npCheck.isNonPart) {
+    return { blocked: true, ghost_delete: false, non_part_reference: true, reason: npCheck.reason };
+  }
   const allowCheck = isAllowedActiveDonorVehicle(item);
   if (!allowCheck.allowed) {
     return { blocked: true, ghost_delete: false, disposed_fleet: true, reason: allowCheck.reason };
@@ -3253,6 +3290,8 @@ module.exports = {
   isAllowedActiveDonorVehicle,
   isGhostOrBannedInventoryItem,
   purgeGhostAndBlockedInventory,
+  NON_PART_REFERENCE_REGEX,
+  isNonPartReferenceItem,
   validatePartCompliance,
   validateInventoryItemForPublish,
   normalizePhoneDigits,

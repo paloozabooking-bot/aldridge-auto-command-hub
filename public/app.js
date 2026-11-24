@@ -508,6 +508,56 @@ function showAllCatalogItems() {
   renderCatalogFiltered();
 }
 
+function resolveCategoryBookTimeLabor(item = {}, laborRateInput = 174.99) {
+  const rate = Number(laborRateInput || 174.99) || 174.99;
+  if (item && Number(item.install_labor_hours || 0) > 0 && item.install_labor_range && item.install_labor_label) {
+    const hrs = Number(item.install_labor_hours);
+    const laborCost = Number((hrs * rate).toFixed(2));
+    return {
+      hours: hrs,
+      range: String(item.install_labor_range),
+      labor_cost: laborCost,
+      is_major_drivetrain: Boolean(item.install_is_major_drivetrain),
+      label: String(item.install_labor_label)
+    };
+  }
+  const titleStr = String(item?.title || item?.part_name || '').trim();
+  const catStr = String(item?.category || item?.product_type || '').trim();
+  const titleLower = titleStr.toLowerCase();
+  const combined = `${titleStr} ${catStr}`.toLowerCase();
+  const isSmallSubpart = /\b(sensor|switch|module|ecm|ecu|pcm|bcm|tcm|computer|harness|wire|wiring|relay|fuse|solenoid|cover|bezel|trim|knob|handle|latch|hinge|mount|bracket|gasket|seal|hose|tube|pipe|duct|dipstick|cap|pulley|tensioner|belt|filter|box|air\s*box|air\s*cleaner|throttle\s*body|injector|coil\s*pack|ignition\s*coil|valve\s*cover|oil\s*pan|cooler|line|cable|shifter|linkage|reservoir|mirror|light|lamp|headlight|headlamp|taillight|tail\s*light|fog\s*light|speaker|radio|stereo|cluster|speedometer|visor|mat|console|armrest|vent|grille|emblem|badge|molding|weatherstrip|seal\s*strip|clip|bolt|nut|stud|washer|shield|splash\s*guard|liner|skid\s*plate|under\s*cover|regulator|actuator)\b/i.test(titleLower);
+
+  const build = (hours, range, isMajor) => ({
+    hours,
+    range,
+    labor_cost: Number((hours * rate).toFixed(2)),
+    is_major_drivetrain: isMajor,
+    label: isMajor || hours >= 2.0
+      ? `Est. ~${range} certified bay labor @ $${rate.toFixed(2)}/hr (Final quote confirmed prior to work)`
+      : `Est. ~${range} certified bay labor @ $${rate.toFixed(2)}/hr`
+  });
+
+  if (!isSmallSubpart && /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|motor\s*assembly|v6\s*engine|v8\s*engine|i4\s*engine|4\.0l\s*engine|5\.7l\s*engine|4\.7l\s*engine|2\.4l\s*engine|1\.4l\s*engine)\b/i.test(titleLower)) {
+    return build(12.0, '10.0–14.0 hrs', true);
+  }
+  if (!isSmallSubpart && /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|transfer\s*case|gearbox\s*assembly)\b/i.test(titleLower)) {
+    return build(6.0, '5.0–7.0 hrs', true);
+  }
+  if (!isSmallSubpart && /\b(front\s*differential|rear\s*differential|differential\s*(?:assembly|carrier|housing)|axle\s*(?:assembly|housing|shaft)|cv\s*axle|half\s*shaft|subframe|k-?frame|crossmember|steering\s*rack|rack\s*and\s*pinion|exhaust\s*manifold|catalytic|cylinder\s*head|timing\s*chain|timing\s*belt|heater\s*core|complete\s*dashboard|fuel\s*tank|gas\s*tank)\b/i.test(titleLower)) {
+    return build(3.5, '3.0–4.5 hrs', true);
+  }
+  if (
+    !/\b(handle|switch|latch|hinge|mirror|trim|molding|weatherstrip|seal|wiring|harness|speaker|panel\s*trim|cover\s*trim|bezel|cap|bracket|mount|sensor|relay|fuse)\b/i.test(titleLower) &&
+    /\b(alternator|generator|starter\s*motor|\bstarter\b|a\/?c\s*compressor|air\s*conditioning\s*compressor|radiator|condenser|strut|shock\s*absorber|coilover|control\s*arm|trailing\s*arm|suspension\s*arm|wheel\s*hub|hub\s*bearing|wheel\s*bearing|spindle|knuckle|fuel\s*pump|power\s*steering\s*pump|water\s*pump|brake\s*booster|master\s*cylinder|brake\s*caliper|abs\s*pump|abs\s*actuator|driveshaft|drive\s*shaft|complete\s*door|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door|front\s*fender|fender\s*panel|\bfender\b|quarter\s*panel|tailgate|liftgate|hatch\s*lid|trunk\s*lid|hood\s*panel|engine\s*hood|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|windshield|window\s*glass|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|turbocharger|intake\s*manifold)\b/i.test(titleLower)
+  ) {
+    return build(2.0, '1.5–2.5 hrs', false);
+  }
+  if (!isSmallSubpart && /\b(suspension|brakes|cooling|charging|starting)\b/i.test(combined) && !/\b(pad|clip|cap|cover|sensor|switch|line|hose)\b/i.test(titleLower)) {
+    return build(2.0, '1.5–2.5 hrs', false);
+  }
+  return build(0.75, '0.5–1.0 hr', false);
+}
+
 function renderPartsCards(items, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -522,6 +572,7 @@ function renderPartsCards(items, containerId) {
   const limit = containerId === 'catalog-parts-grid' && !state.showAllCatalog ? 48 : items.length;
   const visibleItems = items.slice(0, limit);
   const handlingFee = Number(state.data?.settings?.handling_fee_default ?? 10).toFixed(2);
+  const laborRate = Number(state.data?.settings?.labor_rate_hourly || 174.99);
 
   const cardsHtml = visibleItems.map((item) => {
     const img = item.photos?.[0] || '/assets/oem-parts.jpg';
@@ -532,9 +583,8 @@ function renderPartsCards(items, containerId) {
       : `<span class="badge badge-ok">Calculated Parcel (+$${handlingFee} Hdl)</span>`;
     const pullBadge = `<span class="badge badge-dark">1 Single Variant • ${photoCount} Real Photo${photoCount === 1 ? '' : 's'}</span>`;
     const partPrice = Number(item.price_we_pull || 0);
-    const installEst = Number(item.price_pull_install || 0) > partPrice
-      ? Number(item.price_pull_install)
-      : Math.round(partPrice + Number(item.install_labor_hours || 1.5) * Number(state.data?.settings?.labor_rate_hourly || 174.99));
+    const bookTime = resolveCategoryBookTimeLabor(item, laborRate);
+    const installEst = Number((partPrice + bookTime.labor_cost).toFixed(2));
 
     const primaryLabel = isLocalPickupOnly
       ? '<strong>Single-Variant OEM Part</strong> (Local Counter Pickup — 98467)'
@@ -567,7 +617,7 @@ function renderPartsCards(items, containerId) {
               <span class="tier-price">$${partPrice.toFixed(2)}</span>
             </div>
             <div style="margin-top:0.35rem;padding:0.42rem 0.55rem;background:var(--status-warn-bg);color:var(--status-warn-fg);border-radius:5px;font-size:0.76rem;line-height:1.35;">
-              <strong>🔧 Optional 5.0★ Shop Bay Install (98467):</strong> Est. <strong>$${installEst.toFixed(2)}</strong> turnkey installed (info callout — labor quoted/paid at bay; never double-books stock).
+              <strong>🔧 Optional 5.0★ Shop Bay Install (98467):</strong> Est. <strong>$${installEst.toFixed(2)}</strong> turnkey installed — ${esc(bookTime.label)}.
             </div>
           </div>
 
@@ -642,10 +692,8 @@ function renderPublicProductModalContent(item) {
   const partPrice = Number(item.price_we_pull || 0);
   const vipPrice = Number((partPrice * 0.85).toFixed(2));
   const shopProPrice = Number((partPrice * 0.75).toFixed(2));
-  const laborHours = Number(item.install_labor_hours || 1.2);
-  const installCombo = Number(item.price_pull_install || 0) > partPrice
-    ? Number(item.price_pull_install)
-    : Number((partPrice + laborHours * laborRate).toFixed(2));
+  const bookTime = resolveCategoryBookTimeLabor(item, laborRate);
+  const installCombo = Number((partPrice + bookTime.labor_cost).toFixed(2));
 
   const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
   const donor = item.donor || null;
@@ -730,7 +778,7 @@ function renderPublicProductModalContent(item) {
             <div class="pdm-price-tile combo">
               <span class="pdm-price-lbl">Buy Part + Certified $${laborRate.toFixed(2)}/hr Bay Install</span>
               <strong class="pdm-price-val">$${installCombo.toFixed(2)}</strong>
-              <small>Est. ~${laborHours.toFixed(1)} hrs certified bay labor + 5.0★ warranty</small>
+              <small>${esc(bookTime.label)}</small>
             </div>
             <div class="pdm-price-tile member" onclick="window.openMembershipModal && window.openMembershipModal('vip_driver_pass')" role="button" tabindex="0" title="Unlock VIP Driver -15% Pricing">
               <span class="pdm-price-lbl">VIP Driver (-15%)</span>
@@ -752,8 +800,8 @@ function renderPublicProductModalContent(item) {
             <small>${isLocalPickupOnly ? 'Free Counter Pickup • University Place 98467' : 'Ships Nationwide or Free 98467 Counter Pickup'}</small>
           </button>
           <button type="button" class="btn-install-clean pdm-cta-btn" onclick="window.closePublicProductModal(); selectPartAndBuy(${Number(item.id)}, true);">
-            <span>Book Installed at Shop — $${installCombo.toFixed(2)}</span>
-            <small>Part Held + Certified $${laborRate.toFixed(2)}/hr Bay Installation</small>
+            <span>Book Installed at Shop — Est. $${installCombo.toFixed(2)}</span>
+            <small>${esc(bookTime.label)}</small>
           </button>
         </div>
 

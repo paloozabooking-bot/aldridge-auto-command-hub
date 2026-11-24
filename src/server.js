@@ -67,7 +67,7 @@ const {
   pushSingleItemToShopify,
   handleShopifyWebhook
 } = require('./exporters');
-const { enrichAllActiveInventoryInDb, deduplicateCatalog, findCatalogDuplicateGroups, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
+const { resolveCategoryBookTimeLabor, enrichAllActiveInventoryInDb, deduplicateCatalog, findCatalogDuplicateGroups, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
   MEMBERSHIP_TIERS,
@@ -345,8 +345,18 @@ function hydrateInventoryItem(row, donorMap = null) {
   const cleanPhotos = allPhotos.filter((p) => p && !isQrCardUrl(p));
   const qrFileName = `${safeSku}.qr.png`;
   const tax = resolvePartTaxonomyAndMetafields(row);
+  const laborRate = Number(getSettings()?.labor_rate_hourly || 174.99);
+  const bookTime = resolveCategoryBookTimeLabor({ title: row.title, category: row.category || tax.partType }, laborRate);
+  const partPrice = Number(row.price_we_pull || 0);
+  const computedPullInstall = Number((partPrice + bookTime.labor_cost).toFixed(2));
   return {
     ...row,
+    install_labor_hours: bookTime.hours,
+    install_labor_range: bookTime.range,
+    install_labor_cost: bookTime.labor_cost,
+    install_labor_label: bookTime.label,
+    install_is_major_drivetrain: bookTime.is_major_drivetrain,
+    price_pull_install: computedPullInstall,
     photos: cleanPhotos,
     qr_card_url: `/uploads/${qrFileName}`,
     qr_card_ready: fs.existsSync(path.join(UPLOADS_DIR, qrFileName)),
@@ -527,11 +537,11 @@ const server = http.createServer(async (req, res) => {
       const items = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
         .all()
         .map((r) => hydrateInventoryItem(r, donorMap))
-        .filter((item) => isAllowedActiveDonorVehicle(item).allowed);
+        .filter((item) => isAllowedActiveDonorVehicle(item).allowed && validatePartCompliance(item).compliant);
       const pendingVerificationItems = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC")
         .all()
         .map((r) => hydrateInventoryItem(r, donorMap))
-        .filter((item) => isAllowedActiveDonorVehicle(item).allowed);
+        .filter((item) => isAllowedActiveDonorVehicle(item).allowed && validatePartCompliance(item).compliant);
       const duplicateArchivedCount = Number(db.prepare("SELECT COUNT(*) c FROM inventory_items WHERE status = 'duplicate_archived'").get()?.c || 0);
       const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC')
         .all()
@@ -714,7 +724,7 @@ const server = http.createServer(async (req, res) => {
       const activeCount = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0")
         .all()
         .map((r) => hydrateInventoryItem(r, donorMap))
-        .filter((r) => isAllowedActiveDonorVehicle(r).allowed).length;
+        .filter((r) => isAllowedActiveDonorVehicle(r).allowed && validatePartCompliance(r).compliant).length;
       const duplicateArchivedCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'duplicate_archived'").get().c;
       const vinSessionsCount = db.prepare('SELECT COUNT(*) AS c FROM vin_intake_sessions').get().c;
       const revSummary = getPhotoReviewSummary();
@@ -756,8 +766,10 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.2',
+        sw_version: 'v32.3',
         shopify_comaster_auto_hydration: true,
+        category_book_time_labor_matrix: true,
+        non_part_vin_sticker_filter: true,
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -1073,7 +1085,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const hydrated = hydrateInventoryItem(row, donorMap);
-      if (!isAllowedActiveDonorVehicle(hydrated).allowed) {
+      if (!isAllowedActiveDonorVehicle(hydrated).allowed || !validatePartCompliance(hydrated).compliant) {
         sendJson(res, 404, { ok: false, error: 'Part not found or no longer active.' });
         return;
       }
@@ -1094,7 +1106,7 @@ const server = http.createServer(async (req, res) => {
         }
         let rows = db.prepare(sql).all().map((r) => hydrateInventoryItem(r, donorMap));
         if (!includeArchived) {
-          rows = rows.filter((r) => isAllowedActiveDonorVehicle(r).allowed);
+          rows = rows.filter((r) => isAllowedActiveDonorVehicle(r).allowed && validatePartCompliance(r).compliant);
         }
         sendJson(res, 200, rows);
         return;

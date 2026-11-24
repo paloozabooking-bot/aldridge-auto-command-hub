@@ -619,6 +619,9 @@ function sanitizeShopifyExportCsv(csvText) {
     if (PROHIBITED_CAT_SKUS.has(sku) || catKeywordRegex.test(`${origTitle} ${origBody}`)) {
       archiveReason = 'PROHIBITED_CATALYTIC_CONVERTER';
       stats.archived_catalytic++;
+    } else if (isNonPartReferenceListing({ sku, title: origTitle, description: origBody }).blocked) {
+      archiveReason = 'NON_PART_VIN_STICKER_OR_REFERENCE';
+      stats.archived_srs_or_missing_photo++;
     } else if (
       PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS.has(sku) ||
       !p['Image Src'] ||
@@ -886,6 +889,27 @@ function generateDraftTrimHoldsCsv(sanitizedCsvText) {
   };
 }
 
+const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+automotive\s+part|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo)\b/i;
+
+function isNonPartReferenceListing(fields = {}) {
+  const blob = [
+    fields.sku || '',
+    fields.title || '',
+    fields.part_name || '',
+    fields.category || '',
+    fields.description || '',
+    fields.filename || ''
+  ].join(' ');
+  const m = blob.match(NON_PART_REFERENCE_REGEX);
+  return m
+    ? {
+        blocked: true,
+        matchedTerm: m[0],
+        reason: `Non-Part Reference Photo Blocked ("${m[0]}"): VIN stickers, door-jamb decals, certification labels, dash VIN plates, and empty photos are reference-only and cannot become sellable SKUs.`
+      }
+    : { blocked: false, matchedTerm: '', reason: '' };
+}
+
 module.exports = {
   AUDIT_DONOR_FLEET,
   PROHIBITED_CAT_SKUS,
@@ -893,6 +917,8 @@ module.exports = {
   CONFIRMED_SOLD_OR_GHOST_SKUS,
   DUPLICATE_MERGE_TO_PRIMARY,
   DIRECT_PUNCH_LIST,
+  NON_PART_REFERENCE_REGEX,
+  isNonPartReferenceListing,
   isCounterfeitMpn,
   isGoogleDriveViewerUrl,
   cleanListingTitle,

@@ -355,9 +355,87 @@ const DIMENSION_RULES = [
   { match: /\b(starter|master\s*cylinder|water\s*pump|oil\s*pump|fuel\s*pump\s*module|timing\s*chain|timing\s*belt|heater\s*core|shock\s*absorber|sway\s*bar|leaf\s*spring|coil\s*spring|trailer\s*hitch)\b/i, weight: 12.5, l: 14, w: 12, h: 10, labor: 1.5 }
 ];
 
+/**
+ * REALISTIC PART-CATEGORY BOOK-TIME LABOR MATRIX ($174.99/hr) — v32.3
+ * Replaces flat 1.0 hr / 1.5 hr fallback with certified shop book-time estimates:
+ *  - Engine Assemblies / Long Blocks / Short Blocks: 12.0 hrs (10.0–14.0 hrs, +$2,099.88)
+ *  - Automatic/Manual Transmissions & Transfer Cases: 6.0 hrs (5.0–7.0 hrs, +$1,049.94)
+ *  - Differentials, Axles, Subframes, Steering Racks & Exhaust Manifolds: 3.5 hrs (3.0–4.5 hrs, +$612.47)
+ *  - Alternators, Starters, A/C Compressors, Radiators, Struts, Control Arms, Hub Bearings, Fuel Pumps, Doors & Fenders: 2.0 hrs (1.5–2.5 hrs, +$349.98)
+ *  - Sensors, Switches, Mirrors, Headlights/Taillights, Shifters, Trim, Modules & Small Bolt-Ons: 0.75 hr (0.5–1.0 hr, +$131.24)
+ */
+function resolveCategoryBookTimeLabor(item = {}, laborRateInput = SHOP_LABOR_RATE_LOCKED) {
+  const rate = Number(laborRateInput || SHOP_LABOR_RATE_LOCKED) || SHOP_LABOR_RATE_LOCKED;
+  const titleStr = String(item.title || item.part_name || '').trim();
+  const catStr = String(item.category || item.product_type || '').trim();
+  const titleLower = titleStr.toLowerCase();
+  const combined = `${titleStr} ${catStr}`.toLowerCase();
+
+  // Guard: small engine/trans/door accessories & electronics must NEVER jump into 12-hr engine or 6-hr trans tiers
+  const isSmallSubpartOrAccessory = /\b(sensor|switch|module|ecm|ecu|pcm|bcm|tcm|computer|harness|wire|wiring|relay|fuse|solenoid|cover|bezel|trim|knob|handle|latch|hinge|mount|bracket|gasket|seal|hose|tube|pipe|duct|dipstick|cap|pulley|tensioner|belt|filter|box|air\s*box|air\s*cleaner|throttle\s*body|injector|coil\s*pack|ignition\s*coil|valve\s*cover|oil\s*pan|cooler|line|cable|shifter|linkage|reservoir|mirror|light|lamp|headlight|headlamp|taillight|tail\s*light|fog\s*light|speaker|radio|stereo|cluster|speedometer|visor|mat|console|armrest|vent|grille|emblem|badge|molding|weatherstrip|seal\s*strip|clip|bolt|nut|stud|washer|shield|splash\s*guard|liner|skid\s*plate|under\s*cover|regulator|actuator)\b/i.test(titleLower);
+
+  const buildTier = (tier, hours, range, isMajor) => {
+    const laborCost = Number((hours * rate).toFixed(2));
+    const rateTxt = `$${rate.toFixed(2)}/hr`;
+    const label = isMajor
+      ? `Est. ~${range} certified bay labor @ ${rateTxt} (Final quote confirmed prior to work)`
+      : `Est. ~${range} certified bay labor @ ${rateTxt}${hours >= 2.0 ? ' (Final quote confirmed prior to work)' : ''}`;
+    return {
+      tier,
+      hours,
+      range,
+      rate,
+      labor_cost: laborCost,
+      is_major_drivetrain: isMajor,
+      label
+    };
+  };
+
+  // Tier 5: Engine Assemblies / Long Blocks / Short Blocks (12.0 hrs | 10.0–14.0 hrs)
+  if (
+    !isSmallSubpartOrAccessory &&
+    /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|motor\s*assembly|v6\s*engine|v8\s*engine|i4\s*engine|4\.0l\s*engine|5\.7l\s*engine|4\.7l\s*engine|2\.4l\s*engine|1\.4l\s*engine)\b/i.test(titleLower)
+  ) {
+    return buildTier('engine_assembly', 12.0, '10.0–14.0 hrs', true);
+  }
+
+  // Tier 4: Automatic / Manual Transmissions, Transaxles & Transfer Cases (6.0 hrs | 5.0–7.0 hrs)
+  if (
+    !isSmallSubpartOrAccessory &&
+    /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|transfer\s*case|gearbox\s*assembly)\b/i.test(titleLower)
+  ) {
+    return buildTier('transmission_transfer_case', 6.0, '5.0–7.0 hrs', true);
+  }
+
+  // Tier 3: Differentials, Axles, Subframes, Steering Racks & Exhaust Manifolds/Cats (3.5 hrs | 3.0–4.5 hrs)
+  if (
+    !isSmallSubpartOrAccessory &&
+    /\b(front\s*differential|rear\s*differential|differential\s*(?:assembly|carrier|housing)|axle\s*(?:assembly|housing|shaft)|cv\s*axle|half\s*shaft|subframe|k-?frame|crossmember|steering\s*rack|rack\s*and\s*pinion|exhaust\s*manifold|catalytic|cylinder\s*head|timing\s*chain|timing\s*belt|heater\s*core|complete\s*dashboard|fuel\s*tank|gas\s*tank)\b/i.test(titleLower)
+  ) {
+    return buildTier('drivetrain_chassis_major', 3.5, '3.0–4.5 hrs', true);
+  }
+
+  // Tier 2: Alternators, Starters, A/C Compressors, Radiators, Struts, Control Arms, Hub Bearings, Fuel Pumps, Doors, Fenders, Hoods, Tailgates, Bumpers & Seats (2.0 hrs | 1.5–2.5 hrs)
+  if (
+    !/\b(handle|switch|latch|hinge|mirror|trim|molding|weatherstrip|seal|wiring|harness|speaker|panel\s*trim|cover\s*trim|bezel|cap|bracket|mount|sensor|relay|fuse)\b/i.test(titleLower) &&
+    /\b(alternator|generator|starter\s*motor|\bstarter\b|a\/?c\s*compressor|air\s*conditioning\s*compressor|radiator|condenser|strut|shock\s*absorber|coilover|control\s*arm|trailing\s*arm|suspension\s*arm|wheel\s*hub|hub\s*bearing|wheel\s*bearing|spindle|knuckle|fuel\s*pump|power\s*steering\s*pump|water\s*pump|brake\s*booster|master\s*cylinder|brake\s*caliper|abs\s*pump|abs\s*actuator|driveshaft|drive\s*shaft|complete\s*door|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door|front\s*fender|fender\s*panel|\bfender\b|quarter\s*panel|tailgate|liftgate|hatch\s*lid|trunk\s*lid|hood\s*panel|engine\s*hood|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|windshield|window\s*glass|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|turbocharger|intake\s*manifold)\b/i.test(titleLower)
+  ) {
+    return buildTier('mid_mechanical_body', 2.0, '1.5–2.5 hrs', false);
+  }
+
+  // Also check if a broad category matches mid-tier mechanical when title has no small-part markers
+  if (!isSmallSubpartOrAccessory && /\b(suspension|brakes|cooling|charging|starting)\b/i.test(combined) && !/\b(pad|clip|cap|cover|sensor|switch|line|hose)\b/i.test(titleLower)) {
+    return buildTier('mid_mechanical_body', 2.0, '1.5–2.5 hrs', false);
+  }
+
+  // Tier 1: Sensors, Switches, Mirrors, Headlights/Taillights, Shifters, Trim, Modules & Small Bolt-Ons (0.75 hr | 0.5–1.0 hr)
+  return buildTier('bolt_on_electrical_trim', 0.75, '0.5–1.0 hr', false);
+}
+
 function resolvePartDimensionsAndWeight(item = {}) {
   const titleStr = String(item.title || '');
   const catStr = String(item.category || '');
+  const bookTime = resolveCategoryBookTimeLabor({ title: titleStr, category: catStr });
   // Match specific title FIRST so broad category names never shadow light components
   const matched =
     DIMENSION_RULES.find((r) => r.match.test(titleStr)) ||
@@ -375,7 +453,10 @@ function resolvePartDimensionsAndWeight(item = {}) {
       length_in: matched.l,
       width_in: matched.w,
       height_in: matched.h,
-      labor_hours: matched.labor,
+      labor_hours: bookTime.hours,
+      labor_range: bookTime.range,
+      labor_label: bookTime.label,
+      is_major_drivetrain: bookTime.is_major_drivetrain,
       local_pickup_only: Boolean(matched.localPickup)
     };
   }
@@ -383,12 +464,12 @@ function resolvePartDimensionsAndWeight(item = {}) {
   // Deterministic category-tier fallback (ZERO 8.5 lb, ZERO 14x10x7 / 14x10x8!)
   const combined = `${titleStr} ${catStr}`.toLowerCase();
   if (/engine|drivetrain|transmission|axle|differential|exhaust/i.test(combined)) {
-    return { weight_lbs: 18.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: 1.8, local_pickup_only: false };
+    return { weight_lbs: 18.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
   }
   if (/suspension|brake|steering|cooling|radiator|hvac|fuel|charging|starting/i.test(combined)) {
-    return { weight_lbs: 14.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: 1.5, local_pickup_only: false };
+    return { weight_lbs: 14.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
   }
-  return { weight_lbs: 4.5, length_in: 10, width_in: 8, height_in: 6, labor_hours: 0.8, local_pickup_only: false };
+  return { weight_lbs: 4.5, length_in: 10, width_in: 8, height_in: 6, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
 }
 
 function normalizeVehicleTitleCasing(title) {
@@ -1361,6 +1442,7 @@ module.exports = {
   stripDriveUrlsFromPublicText,
   stripOffPlatformViolations,
   dedupeSentences,
+  resolveCategoryBookTimeLabor,
   resolvePartDimensionsAndWeight,
   buildRichStructuredDescription,
   normalizeVehicleGroup,

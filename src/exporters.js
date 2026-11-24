@@ -30,6 +30,7 @@ const {
   resolveCountryOfOrigin
 } = require('./taxonomy');
 const {
+  resolveCategoryBookTimeLabor,
   resolvePartDimensionsAndWeight,
   stripOffPlatformViolations,
   dedupeSentences
@@ -3559,8 +3560,9 @@ async function hydrateInventoryFromShopifyCoMaster({
           : computeShippingClass(weightLbs, `${w.productType} ${w.cleanTitle}`, lengthIn, widthIn, heightIn);
 
       const price = Math.max(15, Number(w.v0?.price || 45));
-      const laborRate = Number(settings.shop_labor_rate || 174.99);
-      const priceInstall = Number((price + laborRate).toFixed(2));
+      const laborRate = Number(settings.labor_rate_hourly || settings.shop_labor_rate || 174.99);
+      const bookTime = resolveCategoryBookTimeLabor({ title: w.cleanTitle, category: w.productType }, laborRate);
+      const priceInstall = Number((price + bookTime.labor_cost).toFixed(2));
       const oemMpn =
         String(w.meta['custom.oem_part_number'] || w.meta['custom.oem_mpn'] || w.meta['mm-google-shopping.mpn'] || '').trim() ||
         resolveStructuredOemMpn({ sku: w.sku, title: w.cleanTitle, fitment_years: w.fitYear, fitment_make: w.slot.make });
@@ -3601,7 +3603,7 @@ async function hydrateInventoryFromShopifyCoMaster({
             ?, ?, ?, ?, 'Tested OEM part — verified donor VIN.',
             ?, ?, 1, ?,
             'pulled', 0, ?, 1, ?,
-            1, ?, 1.0, 1,
+            1, ?, ?, 1,
             ?, ?, ?, ?, ?,
             10, 3, ?,
             ?, ?, ?,
@@ -3613,7 +3615,7 @@ async function hydrateInventoryFromShopifyCoMaster({
           w.fitYear || String(w.slot.years[0]), w.slot.make, w.slot.model,
           w.plainDesc || `Verified OEM ${w.cleanTitle}.`,
           binLoc, secCode, JSON.stringify(w.photoUrls),
-          price, price, priceInstall,
+          price, price, priceInstall, bookTime.hours,
           weightLbs, lengthIn, widthIn, heightIn, shipClass,
           channelsJson,
           prodId, varId, invItemId,
