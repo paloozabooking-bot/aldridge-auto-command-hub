@@ -1007,9 +1007,9 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
     ? [
-        'Title', 'Description', 'Price', 'Brand', 'Condition', 'Color', 'Quantity',
+        'Title', 'Description', 'Price', 'Brand', 'Category id', 'Condition', 'Color', 'Quantity',
         'Shipping weight', 'Shipping weight unit',
-        'Shipping length', 'Shipping width', 'Shipping height', 'Shipping dimension unit',
+        'Shipping height', 'Shipping width', 'Shipping length', 'Shipping Dimension Unit',
         'Tags', 'SKU', 'Who made', 'Accept offers', 'Is auction', 'Internal note', 'Photos'
       ]
     : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Origin_Country', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
@@ -1035,6 +1035,7 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
     if (mode === 'crosslist') {
       const crosslistCondition = condOut === 'New' ? 'NewWithoutTags' : 'Good';
       const crosslistColor = mapColorToCrosslistEnum(tax.attributes?.color || '');
+      const crosslistCategoryId = tax.crosslistCategoryId || 'ce11a633-09a8-a44a-2bd1-3bc758559eac';
       const weightOuncesInt = Math.max(1, Math.round(Number(dims.weight_lbs || 4.5) * 16));
       const lenInt = Math.max(1, Math.round(Number(dims.length_in || 10)));
       const widInt = Math.max(1, Math.round(Number(dims.width_in || 8)));
@@ -1067,14 +1068,15 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
         cleanDesc,
         basePrice,
         tax.brand || item.brand || 'OEM',
+        crosslistCategoryId,
         crosslistCondition,
         crosslistColor,
         1,
         weightOuncesInt,
         'Ounces',
-        lenInt,
-        widInt,
         hgtInt,
+        widInt,
+        lenInt,
         'Inches',
         pipeTags,
         item.sku,

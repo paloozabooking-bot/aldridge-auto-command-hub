@@ -439,6 +439,92 @@ function buildSeoMetadata(item = {}, tax = {}) {
   return { seoTitle, seoDescription };
 }
 
+const CROSSLIST_ALL_CAR_TRUCK_PARTS = {
+  id: 'ce11a633-09a8-a44a-2bd1-3bc758559eac',
+  label: 'Vehicles & parts > Car & truck parts > All car & truck parts'
+};
+
+// Official Crosslist CategoryId UUIDs sourced directly from Crosslist's official CSV template Categories sheet
+const CROSSLIST_CATEGORY_BY_SHOPIFY_TAXONOMY = {
+  'gid://shopify/TaxonomyCategory/vp-1-4-1': {
+    id: 'f8ba070c-9902-246c-0643-c1ff12c23b59',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck brakes & brake parts > All car & truck brake parts'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-3': {
+    id: '1eecd768-71f7-3d8b-5913-63a1fd340324',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck A/C & heating > All car & truck A/C & heating'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-6': {
+    id: '2b6f4dc4-78eb-3f8e-7eb8-e712305a58d7',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck engines & engine parts > All car & truck engines & engine parts'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-7': {
+    id: '366cfba1-a0d3-8a1d-39b9-f28587be3d2a',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck exhaust & emission systems > All car & truck exhaust & emission systems'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-8': {
+    id: 'dd88ab77-0bf9-58cb-6288-fdf6577b158f',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck air intake & fuel delivery > All car & truck air intake & fuel delivery'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-9': {
+    id: '4c73d643-0ccf-5bb2-2991-c1c28ebc7dc2',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck exterior parts & accessories > All car & truck exterior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-11': {
+    id: 'a649f980-2a1e-18de-a683-5df490852771',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck interior parts & accessories > All car & truck interior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-12': {
+    id: '78ae4a6a-6993-0784-08a2-513d1526a1d3',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck lighting & lamps > All car & truck lighting & lamps'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-13': {
+    id: '4c73d643-0ccf-5bb2-2991-c1c28ebc7dc2',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck exterior parts & accessories > All car & truck exterior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-14': {
+    id: 'b48715f1-47f9-204c-16db-2fdbdb707542',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck starters, alternators, ECUs & wiring > All car & truck starters, alternators, ECUs & wiring'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-15': {
+    id: 'a649f980-2a1e-18de-a683-5df490852771',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck interior parts & accessories > All car & truck interior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-16': {
+    id: 'a649f980-2a1e-18de-a683-5df490852771',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck interior parts & accessories > All car & truck interior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-17': {
+    id: '61c8e1dd-5928-25b5-7e35-2ec91b29825f',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck steering & suspension > All car & truck steering & suspension'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-19': {
+    id: '49aed814-0bb3-3421-384f-47d5d0a80ddb',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck transmission & drivetrain > All car & truck transmission & drivetrain'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-20': {
+    id: 'dbccff95-694d-1d43-496f-5b3efaa29f4c',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck wheels & tires > All car & truck wheels & tires'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-21': {
+    id: '4c73d643-0ccf-5bb2-2991-c1c28ebc7dc2',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck exterior parts & accessories > All car & truck exterior parts & accessories'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-22': {
+    id: 'e7467eda-98b0-382f-11eb-c6749c838e76',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck engine cooling components > All car & truck engine cooling components'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4-23': {
+    id: 'dd88ab77-0bf9-58cb-6288-fdf6577b158f',
+    label: 'Vehicles & parts > Car & truck parts > Car & truck air intake & fuel delivery > All car & truck air intake & fuel delivery'
+  },
+  'gid://shopify/TaxonomyCategory/vp-1-4': CROSSLIST_ALL_CAR_TRUCK_PARTS
+};
+
+function resolveCrosslistCategory(shopifyTaxonomyId = '') {
+  return CROSSLIST_CATEGORY_BY_SHOPIFY_TAXONOMY[String(shopifyTaxonomyId || '').trim()] || CROSSLIST_ALL_CAR_TRUCK_PARTS;
+}
+
 function resolvePartTaxonomyAndMetafields(item, settings = {}) {
   const titleText = String(item?.title || '');
   const fallbackText = `${item?.part_type || ''} ${item?.category || ''}`;
@@ -506,6 +592,7 @@ function resolvePartTaxonomyAndMetafields(item, settings = {}) {
   );
 
   const seo = buildSeoMetadata(item, { mpn, condition: condNormalized });
+  const crosslistCat = resolveCrosslistCategory(matched.shopifyTaxonomyId);
 
   return {
     partType: matched.partType,
@@ -515,6 +602,8 @@ function resolvePartTaxonomyAndMetafields(item, settings = {}) {
     shopifyProductCategory: matched.shopifyProductCategory,
     shopifyTaxonomyId: matched.shopifyTaxonomyId,
     shopifyTaxonomySearch: matched.shopifyTaxonomySearch || matched.partType,
+    crosslistCategoryId: crosslistCat.id,
+    crosslistCategoryLabel: crosslistCat.label,
     countryCodeOfOrigin,
     brand,
     mpn,
@@ -535,6 +624,9 @@ function resolvePartTaxonomyAndMetafields(item, settings = {}) {
 module.exports = {
   TAXONOMY_RULES,
   FALLBACK_TAXONOMY,
+  CROSSLIST_ALL_CAR_TRUCK_PARTS,
+  CROSSLIST_CATEGORY_BY_SHOPIFY_TAXONOMY,
+  resolveCrosslistCategory,
   sanitizeVerifiedMpn,
   resolveStructuredOemMpn,
   resolveCountryOfOrigin,
