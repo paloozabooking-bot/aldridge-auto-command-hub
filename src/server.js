@@ -767,9 +767,10 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.4',
+        sw_version: 'v32.5',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
+        mixed_cart_local_pickup_guard: true,
         category_book_time_labor_matrix: true,
         non_part_vin_sticker_filter: true,
         business_plan_url: '/business-plan',
@@ -2472,6 +2473,48 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Mixed-Cart Local_Pickup_Only Guard Helper & Validation Endpoint
+    const HEAVY_ASSEMBLY_PICKUP_RE = /\b(engine\s*(long\s*block|short\s*block|assembly|motor)|transmission(\s*assembly)?|transfer\s*case|subframe|crossmember|rear\s*axle|differential\s*assembly|hood(\s*panel)?|truck\s*bed|door\s*(shell|assembly)|fender\s*panel|quarter\s*panel|tailgate|sunroof\s*glass|windshield|fuel\s*tank)\b/i;
+    const MIXED_CART_LOCAL_PICKUP_BANNER =
+      'Heavy Assembly in Cart — Local Pickup Only at 5115 66th St W, Bldg B, University Place, WA 98467 (or remove heavy assemblies to ship parcel items separately)';
+    const isHeavyLocalPickupOrderItem = (dbItem, heavyThreshold = 70) => {
+      if (!dbItem) return false;
+      if (Number(dbItem.weight_lbs || 0) >= heavyThreshold) return true;
+      const sc = String(dbItem.shipping_class || '').toLowerCase();
+      if (sc && sc !== 'parcel_calculated') return true;
+      if (HEAVY_ASSEMBLY_PICKUP_RE.test(String(dbItem.title || ''))) return true;
+      return false;
+    };
+
+    if (method === 'POST' && pathname === '/api/cart/validate') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const settings = getSettings();
+      const heavyThreshold = Number(settings.freight_weight_threshold_lbs ?? 70);
+      const itemsReq = Array.isArray(b.items) ? b.items : [];
+      const heavySkus = [];
+      const parcelSkus = [];
+      for (const line of itemsReq) {
+        const sku = String(line?.sku || '').trim();
+        if (!sku) continue;
+        const dbItem = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(sku);
+        if (!dbItem) continue;
+        if (isHeavyLocalPickupOrderItem(dbItem, heavyThreshold)) heavySkus.push(dbItem.sku);
+        else parcelSkus.push(dbItem.sku);
+      }
+      const hasHeavyLocalPickup = heavySkus.length > 0;
+      sendJson(res, 200, {
+        ok: true,
+        has_heavy_local_pickup: hasHeavyLocalPickup,
+        mixed_cart: hasHeavyLocalPickup && parcelSkus.length > 0,
+        locked_fulfillment_mode: hasHeavyLocalPickup ? 'local_pickup_we_pull' : null,
+        warning_banner: hasHeavyLocalPickup ? MIXED_CART_LOCAL_PICKUP_BANNER : '',
+        cart_attributes: hasHeavyLocalPickup ? { Fulfillment_Mode: 'Local_Pickup_Only_Bldg_B' } : {},
+        heavy_skus: heavySkus,
+        parcel_skus: parcelSkus
+      });
+      return;
+    }
+
     // Direct Storefront 3-Tier Purchasing Orders
     if (method === 'POST' && pathname === '/api/orders') {
       const b = JSON.parse((await readRawBody(req)) || '{}');
@@ -2481,7 +2524,7 @@ const server = http.createServer(async (req, res) => {
       if (itemsReq.length === 0) return sendJson(res, 400, { error: 'Cart is empty.' });
       if (!b.policy_accepted) return sendJson(res, 400, { error: 'You must accept the Defect-Evidence Only Return & Fitment Policy to complete purchase.' });
 
-      const mode = b.fulfillment_mode || 'ship_calculated';
+      let mode = b.fulfillment_mode || 'ship_calculated';
       if (mode === 'self_pull_yard' && !b.waiver_accepted) {
         return sendJson(res, 400, { error: 'Self-Pull Yard Safety & Liability Waiver must be accepted for You-Pull-It orders.' });
       }
@@ -2499,9 +2542,10 @@ const server = http.createServer(async (req, res) => {
         }
         const qty = Number(line.qty || 1);
         const unitPrice = Number(dbItem.price_we_pull || 0);
+        const lineHeavy = isHeavyLocalPickupOrderItem(dbItem, heavyThreshold);
         subtotal += unitPrice * qty;
         totalWeight += Number(dbItem.weight_lbs || 8) * qty;
-        if (Number(dbItem.weight_lbs || 0) >= heavyThreshold || dbItem.shipping_class !== 'parcel_calculated') {
+        if (lineHeavy) {
           hasHeavyLocalPickup = true;
         }
         hydratedOrderItems.push({
@@ -2512,15 +2556,33 @@ const server = http.createServer(async (req, res) => {
           qty,
           unit_price: unitPrice,
           est_turnkey_installed_callout: Number(dbItem.price_pull_install || 0),
+          local_pickup_only: lineHeavy,
           mode
         });
       }
 
       if (mode === 'ship_calculated' && hasHeavyLocalPickup) {
         return sendJson(res, 400, {
-          error: `Items weighing ${heavyThreshold}+ lbs (or oversized assemblies) are strictly Local Pickup Only in University Place, WA 98467 (5115 66th St W, Bldg B). Please select We-Pull Local Counter Pickup or Shop Installation.`
+          error: MIXED_CART_LOCAL_PICKUP_BANNER,
+          locked_fulfillment_mode: 'local_pickup_we_pull',
+          cart_attributes: { Fulfillment_Mode: 'Local_Pickup_Only_Bldg_B' }
         });
       }
+
+      if (hasHeavyLocalPickup) {
+        mode = 'local_pickup_we_pull';
+        hydratedOrderItems.forEach((it) => { it.mode = mode; });
+      }
+
+      const incomingAttrs = (b.cart_attributes && typeof b.cart_attributes === 'object') ? b.cart_attributes : {};
+      const cartAttributes = hasHeavyLocalPickup
+        ? { ...incomingAttrs, Fulfillment_Mode: 'Local_Pickup_Only_Bldg_B' }
+        : incomingAttrs;
+      const rawNote = String(b.notes || '').trim();
+      const fulfillmentTag = hasHeavyLocalPickup ? 'Fulfillment_Mode: Local_Pickup_Only_Bldg_B' : '';
+      const combinedNotes = fulfillmentTag
+        ? (rawNote.includes('Local_Pickup_Only_Bldg_B') ? rawNote : [fulfillmentTag, rawNote].filter(Boolean).join(' | '))
+        : rawNote;
 
       let shippingCost = 0;
       let handlingFee = 0;
@@ -2584,7 +2646,7 @@ const server = http.createServer(async (req, res) => {
           hydratedOrderItems.map((i) => i.sku).join(', '),
           b.preferred_date || new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
           b.preferred_time || '10:00 AM',
-          b.notes || '',
+          combinedNotes,
           now
         );
       }
@@ -2602,7 +2664,7 @@ const server = http.createServer(async (req, res) => {
         b.customer_name,
         b.customer_email,
         b.customer_phone || '',
-        b.shipping_address || '',
+        hasHeavyLocalPickup ? '' : (b.shipping_address || ''),
         mode,
         JSON.stringify(hydratedOrderItems),
         subtotal,
@@ -2614,7 +2676,7 @@ const server = http.createServer(async (req, res) => {
         approvalStatus,
         linkedBookingCode,
         b.waiver_accepted ? 1 : 0,
-        b.notes || '',
+        combinedNotes,
         now
       );
 
@@ -2643,6 +2705,9 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         order_number: orderNumber,
         fulfillment_mode: mode,
+        local_pickup_locked: hasHeavyLocalPickup,
+        cart_attributes: cartAttributes,
+        notes: combinedNotes,
         approval_status: approvalStatus,
         linked_booking_code: linkedBookingCode,
         total,

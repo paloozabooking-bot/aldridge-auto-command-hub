@@ -137,7 +137,7 @@ const SHOP_SERVICES_CATALOG = [
     includes: [
       'Left & right shock/strut replacement labor + torque to OEM spec',
       'Complete front-end steering & bushing safety inspection',
-      'Great match with our in-stock Tacoma FOX 2.0 & Subaru struts'
+      'Great match with our in-stock 4Runner, Tundra, RAV4, Dakota & CR-V suspension parts'
     ]
   },
   {

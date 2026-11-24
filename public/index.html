@@ -1734,6 +1734,7 @@
         <h3 style="margin:0;">Direct Single-Variant Order &amp; Appointment Checkout</h3>
         <button type="button" class="btn btn-sm btn-outline" onclick="closeCartModal()">Close ✕</button>
       </div>
+      <div id="cart-mixed-local-pickup-banner" style="display:none;margin-bottom:0.85rem;padding:0.75rem 0.9rem;background:#fef3c7;border:1.5px solid #d97706;color:#78350f;border-radius:8px;font-size:0.84rem;line-height:1.45;font-weight:600;"></div>
       <div id="cart-items-container" style="margin-bottom:1rem;"></div>
 
       <form id="checkout-form">
@@ -1744,6 +1745,8 @@
             <option value="local_pickup_we_pull">Free Local Counter Pickup — University Place, WA 98467 (Required for 70+ lb Parts)</option>
             <option value="we_pull_and_install">Buy Part Now + Request Certified Shop Bay Installation Slot (Labor Quoted/Paid at Bay)</option>
           </select>
+          <div id="chk-mode-lock-note" style="display:none;margin-top:0.35rem;font-size:0.76rem;color:#92400e;font-weight:600;">🔒 Fulfillment locked to Local Pickup Only (<code>Fulfillment_Mode: Local_Pickup_Only_Bldg_B</code>). Remove heavy assemblies to ship parcel items separately.</div>
+          <input type="hidden" id="chk-fulfillment-attr" name="Fulfillment_Mode" value="" />
         </div>
 
         <div class="grid-2">
@@ -1903,7 +1906,7 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=30.0"></script>
+  <script src="/app.js?v=32.5"></script>
   <script src="/storefront-menu.js?v=30.0"></script>
   <script src="/sourcing-storefront.js?v=30.0"></script>
   <script src="/vin-aggregator-ui.js?v=30.0"></script>

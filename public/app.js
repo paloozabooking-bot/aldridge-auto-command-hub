@@ -959,13 +959,27 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+const MIXED_CART_LOCAL_PICKUP_BANNER =
+  'Heavy Assembly in Cart — Local Pickup Only at 5115 66th St W, Bldg B, University Place, WA 98467 (or remove heavy assemblies to ship parcel items separately)';
+const HEAVY_ASSEMBLY_PICKUP_RE = /\b(engine\s*(long\s*block|short\s*block|assembly|motor)|transmission(\s*assembly)?|transfer\s*case|subframe|crossmember|rear\s*axle|differential\s*assembly|hood(\s*panel)?|truck\s*bed|door\s*(shell|assembly)|fender\s*panel|quarter\s*panel|tailgate|sunroof\s*glass|windshield|fuel\s*tank)\b/i;
+
+function isLocalPickupOnlyCartItem(item) {
+  if (!item) return false;
+  const heavyThreshold = Number(state.data?.settings?.freight_weight_threshold_lbs ?? 70);
+  if (Number(item.weight_lbs || 0) >= heavyThreshold) return true;
+  const sc = String(item.shipping_class || '').toLowerCase();
+  if (sc && sc !== 'parcel_calculated') return true;
+  if (HEAVY_ASSEMBLY_PICKUP_RE.test(String(item.title || ''))) return true;
+  return false;
+}
+
 function selectPartAndBuy(itemId, requestInstallSlot = false) {
   const item = state.data.inventory.find((i) => i.id === itemId) || (pdmState.item && pdmState.item.id === itemId ? pdmState.item : null);
   if (!item) return;
-  const isLocalPickupOnly = Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated';
-  const chosenMode = requestInstallSlot
-    ? 'we_pull_and_install'
-    : (isLocalPickupOnly ? 'local_pickup_we_pull' : 'ship_calculated');
+  const isLocalPickupOnly = isLocalPickupOnlyCartItem(item);
+  const chosenMode = isLocalPickupOnly
+    ? 'local_pickup_we_pull'
+    : (requestInstallSlot ? 'we_pull_and_install' : 'ship_calculated');
 
   const existing = state.cart.find((c) => c.sku === item.sku);
   if (!existing) {
@@ -1013,8 +1027,18 @@ function renderCartSummary() {
   const box = document.getElementById('cart-items-container');
   const totalsBox = document.getElementById('cart-totals-box');
   const modeSelect = document.getElementById('chk-mode');
+  const bannerEl = document.getElementById('cart-mixed-local-pickup-banner');
+  const lockNoteEl = document.getElementById('chk-mode-lock-note');
+  const attrInput = document.getElementById('chk-fulfillment-attr');
 
   if (!state.cart.length) {
+    if (bannerEl) {
+      bannerEl.style.display = 'none';
+      bannerEl.textContent = '';
+    }
+    if (lockNoteEl) lockNoteEl.style.display = 'none';
+    if (attrInput) attrInput.value = '';
+    if (modeSelect) modeSelect.disabled = false;
     box.innerHTML = '<div style="padding:1rem;background:var(--bg-subtle);border-radius:6px;text-align:center;">Your order bag is empty. Browse photographed OEM parts to add items.</div>';
     totalsBox.innerHTML = '';
     return;
@@ -1022,18 +1046,35 @@ function renderCartSummary() {
 
   const hasHeavyLocalPickup = state.cart.some((line) => {
     const item = state.data.inventory.find((i) => i.sku === line.sku);
-    return item && (Number(item.weight_lbs || 0) >= 70 || item.shipping_class !== 'parcel_calculated');
+    return isLocalPickupOnlyCartItem(item);
   });
 
   const shipOpt = modeSelect.querySelector('option[value="ship_calculated"]');
   if (shipOpt) {
     shipOpt.disabled = hasHeavyLocalPickup;
   }
-  if (hasHeavyLocalPickup && modeSelect.value === 'ship_calculated') {
+  if (hasHeavyLocalPickup) {
     modeSelect.value = 'local_pickup_we_pull';
+    modeSelect.disabled = true;
+    modeSelect.dataset.lockedLocalPickup = 'true';
+    if (bannerEl) {
+      bannerEl.style.display = 'block';
+      bannerEl.innerHTML = `⚠️ <strong>${esc(MIXED_CART_LOCAL_PICKUP_BANNER)}</strong>`;
+    }
+    if (lockNoteEl) lockNoteEl.style.display = 'block';
+    if (attrInput) attrInput.value = 'Local_Pickup_Only_Bldg_B';
+  } else {
+    modeSelect.disabled = false;
+    modeSelect.dataset.lockedLocalPickup = 'false';
+    if (bannerEl) {
+      bannerEl.style.display = 'none';
+      bannerEl.textContent = '';
+    }
+    if (lockNoteEl) lockNoteEl.style.display = 'none';
+    if (attrInput) attrInput.value = '';
   }
 
-  const mode = modeSelect.value;
+  const mode = hasHeavyLocalPickup ? 'local_pickup_we_pull' : modeSelect.value;
   document.getElementById('chk-address-wrap').style.display = mode === 'ship_calculated' ? 'flex' : 'none';
   document.getElementById('chk-appt-fields').style.display = mode !== 'ship_calculated' ? 'block' : 'none';
   const waiverWrap = document.getElementById('chk-waiver-wrap');
@@ -1047,13 +1088,14 @@ function renderCartSummary() {
     if (!item) return '';
     const unit = Number(item.price_we_pull || 0);
     const installInfo = Number(item.price_pull_install || 0);
+    const lineIsHeavy = isLocalPickupOnlyCartItem(item);
     subtotal += unit * line.qty;
     totalWeight += Number(item.weight_lbs || 8) * line.qty;
 
     return `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:0.55rem 0;border-bottom:1px solid var(--border-light);font-size:0.85rem;">
         <div>
-          <strong>${esc(item.title)}</strong><br/>
+          <strong>${esc(item.title)}</strong>${lineIsHeavy ? ' <span style="display:inline-block;margin-left:0.35rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;font-size:0.7rem;font-weight:700;">Local Pickup Only (Bldg B)</span>' : ''}<br/>
           <span class="mono" style="font-size:0.75rem;color:var(--text-muted);">SKU: ${esc(item.sku)} • 1 Single Variant${installInfo > unit ? ` • Est. Bay Installed: $${installInfo.toFixed(2)}` : ''} • Security: ${esc(item.security_mark_code)}</span>
         </div>
         <div style="display:flex;align-items:center;gap:0.65rem;">
@@ -1076,7 +1118,7 @@ function renderCartSummary() {
   const grandTotal = (subtotal + shipEst + handlingFee + tax).toFixed(2);
 
   totalsBox.innerHTML = `
-    ${hasHeavyLocalPickup ? '<div style="margin-bottom:0.45rem;padding:0.45rem 0.6rem;background:var(--status-warn-bg);color:var(--status-warn-fg);border-radius:4px;font-size:0.79rem;"><strong>70+ lb / Oversize Rule:</strong> Local Pickup Only in University Place, WA 98467 (Parcel Shipping Disabled).</div>' : ''}
+    ${hasHeavyLocalPickup ? `<div style="margin-bottom:0.45rem;padding:0.5rem 0.65rem;background:#fef3c7;border:1px solid #d97706;color:#78350f;border-radius:5px;font-size:0.79rem;font-weight:600;">⚠️ ${esc(MIXED_CART_LOCAL_PICKUP_BANNER)}</div>` : ''}
     ${mode === 'we_pull_and_install' ? '<div style="margin-bottom:0.45rem;padding:0.45rem 0.6rem;background:var(--bg-white);border:1px solid var(--border-light);border-radius:4px;font-size:0.78rem;"><strong>Single-Variant Part Checkout:</strong> Reserves the physical part now; Certified Shop Bay Installation labor is confirmed &amp; settled at Bldg B upon inspection.</div>' : ''}
     <div style="display:flex;justify-content:space-between;"><span>Single-Variant Part Subtotal:</span><span class="mono">$${subtotal.toFixed(2)}</span></div>
     <div style="display:flex;justify-content:space-between;"><span>${mode === 'ship_calculated' ? `Calculated Parcel Shipping (${totalWeight.toFixed(1)} lbs)` : 'Local Counter / Bay — University Place, WA 98467'}:</span><span class="mono">$${shipEst.toFixed(2)}</span></div>
@@ -2291,15 +2333,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('checkout-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
+      const hasHeavyLocalPickup = state.cart.some((line) => {
+        const item = state.data.inventory.find((i) => i.sku === line.sku);
+        return isLocalPickupOnlyCartItem(item);
+      });
+      const effectiveMode = hasHeavyLocalPickup
+        ? 'local_pickup_we_pull'
+        : document.getElementById('chk-mode').value;
+      const cartAttributes = hasHeavyLocalPickup
+        ? { Fulfillment_Mode: 'Local_Pickup_Only_Bldg_B' }
+        : {};
+      const orderNote = hasHeavyLocalPickup
+        ? 'Fulfillment_Mode: Local_Pickup_Only_Bldg_B'
+        : '';
+
       const res = await api('/api/orders', {
         method: 'POST',
         body: JSON.stringify({
           items: state.cart,
-          fulfillment_mode: document.getElementById('chk-mode').value,
+          fulfillment_mode: effectiveMode,
+          cart_attributes: cartAttributes,
+          notes: orderNote,
           customer_name: document.getElementById('chk-name').value,
           customer_phone: document.getElementById('chk-phone').value,
           customer_email: document.getElementById('chk-email').value,
-          shipping_address: document.getElementById('chk-address').value,
+          shipping_address: hasHeavyLocalPickup ? '' : document.getElementById('chk-address').value,
           preferred_date: document.getElementById('chk-date').value,
           preferred_time: document.getElementById('chk-time').value,
           vehicle_ymm: document.getElementById('chk-ymm').value,
