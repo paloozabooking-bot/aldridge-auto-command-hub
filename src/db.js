@@ -1056,12 +1056,13 @@ const PERMANENTLY_BANNED_GHOST_VINS = new Set([
 ]);
 
 // PERMANENT 7-VEHICLE ACTIVE DONOR ALLOWLIST FIREWALL (DEFAULT-DENY EVERYTHING ELSE)
+// ALL 7 OF 7 ACTIVE DONORS NOW HAVE NHTSA ErrorCode: 0 VERIFIED 17-CHARACTER VINS
 const ACTIVE_DONOR_ALLOWLIST = [
   { slot: 1, label: '2004 Toyota 4Runner', years: [2004], make: 'Toyota', model: '4Runner', vin: 'JTEBU14R040057212' },
-  { slot: 2, label: '2012 Toyota 4Runner', years: [2012, 2013], make: 'Toyota', model: '4Runner', vin: 'JTEBU5JR5D5117391' },
+  { slot: 2, label: '2012/2013 Toyota 4Runner', years: [2012, 2013], make: 'Toyota', model: '4Runner', vin: 'JTEBU5JR5D5117391' },
   { slot: 3, label: '2010 Toyota Tundra', years: [2010], make: 'Toyota', model: 'Tundra', vin: '5TFHW5F12AX134337' },
   { slot: 4, label: '2006 Dodge Dakota', years: [2006], make: 'Dodge', model: 'Dakota', vin: '1D7HE48K56S679400' },
-  { slot: 5, label: '2005 Honda CR-V', years: [2005], make: 'Honda', model: 'CR-V', vin: '', plate_hint: 'WA CLX7123' },
+  { slot: 5, label: '2005/2006 Honda CR-V EX', years: [2005, 2006], make: 'Honda', model: 'CR-V', vin: 'JHLRD78866C009763', plate: 'WA CLX7123' },
   { slot: 6, label: '2010 Toyota RAV4', years: [2010], make: 'Toyota', model: 'RAV4', vin: 'JTMBF4DV1AD035337' },
   { slot: 7, label: '2012 Fiat 500', years: [2012], make: 'Fiat', model: '500', vin: '3C3CFFBR7CT380721' }
 ];
@@ -1073,6 +1074,8 @@ const ALLOWED_ACTIVE_DONOR_VINS = new Set(
 // PERMANENTLY DISPOSED / UNAPPROVED FLEET VINS (HARD BLOCKED AT INTAKE, SANITIZER, EXPORTER & SHOPIFY SYNC)
 const DISPOSED_DONOR_VINS = new Set([
   '1G4GA5GR2FF246661', // Ghost 2015 Buick LaCrosse / Verano
+  '1FTPW14V36FB14920', // Extinct / disposed 2006 Ford F-150
+  '2GNALDEK1C1187116', // Disposed Chevrolet Equinox
   '3C3CFFAR2FT502634', // Disposed 2015 Fiat 500 (keep ONLY 2012 Fiat 500)
   '1GCCS1449WK235424', // Disposed 1998 Chevrolet S-10 Pickup
   'JF1SF655XWH765781', // Disposed 1998 Subaru Forester
@@ -1088,7 +1091,7 @@ const DISPOSED_DONOR_VINS = new Set([
   '1GCEK19039Z249099'  // Disposed / unapproved 2009 Chevrolet Silverado
 ]);
 
-const DISPOSED_VEHICLE_TEXT_REGEX = /\b(chevy\s+s-?10|chevrolet\s+s-?10|s-?10\s+pickup|s10-98-bayb|ford\s+escape|escape-\d{2}|honda\s+od(?:y|e)ssey|odyssey-\d{2}|nissan\s+xterra|xterra-\d{2}|subaru\s+forester|forester-\d{2}|subaru\s+outback|outback-\d{2}|subaru\s+legacy|legacy-\d{2}|1978\s+toyota\s+pickup|toyota\s+pickup|toyota\s+hilux|chevrolet\s+equinox|chevy\s+equinox|equinox-\d{2}|buick\s+lacrosse|lacrosse-15-bayb|(?:2014|2015|2016)\s+fiat\s+500|fiat500-(?:14|15|16)-bayb|toyota\s+camry|camry-\d{2}|hyundai\s+xg300|xg300-\d{2}|chevrolet\s+silverado|chevy\s+silverado|silverado-\d{2})\b/i;
+const DISPOSED_VEHICLE_TEXT_REGEX = /\b(1ftpw14v36fb14920|2gnaldek1c1187116|ford\s+f-?150|f-?150\b|f150-\d{2}|chevy\s+s-?10|chevrolet\s+s-?10|s-?10\s+pickup|s10-98-bayb|ford\s+escape|escape-\d{2}|honda\s+od(?:y|e)ssey|odyssey-\d{2}|nissan\s+xterra|xterra-\d{2}|subaru\s+forester|forester-\d{2}|subaru\s+outback|outback-\d{2}|subaru\s+legacy|legacy-\d{2}|1978\s+toyota\s+pickup|toyota\s+pickup|toyota\s+hilux|chevrolet\s+equinox|chevy\s+equinox|equinox-\d{2}|buick\s+lacrosse|lacrosse-15-bayb|(?:2014|2015|2016)\s+fiat\s+500|fiat500-(?:14|15|16)-bayb|toyota\s+camry|camry-\d{2}|hyundai\s+xg300|xg300-\d{2}|chevrolet\s+silverado|chevy\s+silverado|silverado-\d{2})\b/i;
 
 // PERMANENTLY BANNED SOLD / DUPLICATE SUBARU TRANSMISSIONS & CONFIRMED SOLD SKUS
 const PERMANENTLY_BANNED_SOLD_SKUS = new Set([
@@ -1108,12 +1111,13 @@ const KNOWN_FAKE_OR_WRONG_VINS = new Set([
   '5KEAG4027J1000000'  // Placeholder 000000 tail
 ]);
 
-// Explicitly whitelisted real Aldridge Auto active donor VINs (confirmed in live Shopify orders & yard records)
+// Explicitly whitelisted real Aldridge Auto active donor VINs (ALL 7 of 7 verified NHTSA ErrorCode: 0)
 const VERIFIED_DONOR_VIN_WHITELIST = new Set([
   'JTEBU14R040057212', // 2004 Toyota 4Runner SR5 4x4 V6
   'JTEBU5JR5D5117391', // 2012/2013 Toyota 4Runner SR5 4x4 4.0L V6 (NHTSA ErrorCode: 0)
   '5TFHW5F12AX134337', // 2010 Toyota Tundra
   '1D7HE48K56S679400', // 2006 Dodge Dakota SLT
+  'JHLRD78866C009763', // 2005/2006 Honda CR-V EX 2.4L 4WD (MFD 10/2005, WA Plate CLX7123, NHTSA ErrorCode: 0)
   'JTMBF4DV1AD035337', // 2010 Toyota RAV4
   '3C3CFFBR7CT380721'  // 2012 Fiat 500
 ]);
@@ -1234,7 +1238,7 @@ function isAllowedActiveDonorVehicle(input = {}) {
     return { allowed: false, reason: 'Strict Allowlist Firewall: requires a verified 17-character NHTSA donor VIN.' };
   }
 
-  // Exact match against the 6 verified allowlist VINs
+  // Exact match against ALL 7 verified NHTSA ErrorCode: 0 allowlist VINs
   if (ALLOWED_ACTIVE_DONOR_VINS.has(vin)) {
     const slot = ACTIVE_DONOR_ALLOWLIST.find((v) => v.vin === vin);
     // Double-check Fiat 500 year cannot be 2014/2015/2016
@@ -1242,17 +1246,6 @@ function isAllowedActiveDonorVehicle(input = {}) {
       return { allowed: false, reason: `Blocked non-2012 Fiat 500 (${year}); ONLY 2012 Fiat 500 is allowed.` };
     }
     return { allowed: true, slot };
-  }
-
-  // Slot 5: 2005 Honda CR-V (once Chris supplies its real 17-char NHTSA-verified 2005 Honda CR-V VIN)
-  const is2005Crv =
-    year === 2005 &&
-    /^honda$/i.test(make) &&
-    /^cr-?v\b/i.test(model) &&
-    /^(JHL|SHS|2HK|5J6)/i.test(vin) &&
-    vin[9] === '5';
-  if (is2005Crv) {
-    return { allowed: true, slot: ACTIVE_DONOR_ALLOWLIST[4] };
   }
 
   return {

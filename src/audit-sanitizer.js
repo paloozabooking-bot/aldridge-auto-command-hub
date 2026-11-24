@@ -72,20 +72,20 @@ const AUDIT_DONOR_FLEET = [
   },
   {
     stock_number: 'DV-05-CRV05',
-    vin: 'AWAITING-17CHAR-VIN-CRV05',
-    year: 2005,
+    vin: 'JHLRD78866C009763',
+    year: 2006,
     make: 'Honda',
     model: 'CR-V',
-    trim: '2nd Gen (Gray • WA Plate CLX7123)',
+    trim: 'EX 4WD (MFD 10/2005 • Gray • WA Plate CLX7123)',
     engine: '2.4L K24A1 i-VTEC I4',
     transmission: 'Automatic',
-    drivetrain: 'AWD',
-    exterior_color: 'Gray',
-    paint_code: 'OEM',
+    drivetrain: '4WD',
+    exterior_color: 'Pewter Gray',
+    paint_code: 'NH-689M',
     mileage: 0,
     yard_row: 'Bldg B • Active Donor #5',
-    status: 'awaiting_vin',
-    notes: 'Active Donor #5 — WA Plate CLX7123 confirmed on photo P0521; awaiting 17-char door-jamb VIN to unlock publishing.'
+    status: 'active_yard',
+    notes: 'Active Donor #5 — Door-jamb sticker (photo P0345) + NHTSA ErrorCode 0 verified VIN JHLRD78866C009763 (MFD 10/2005, 2006 MY Honda CR-V EX 2.4L 4WD, WA Plate CLX7123).'
   },
   {
     stock_number: 'DV-06-RAV4-10',

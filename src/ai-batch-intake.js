@@ -1955,25 +1955,33 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
   const results = await Promise.all(
     subfolders.map(async (sf) => {
       const upperTitle = String(sf.title || '').toUpperCase();
-      // Hard-block permanently banned ghost 2015 Buick LaCrosse (1G4GA5GR2FF246661)
-      if (/1G4GA5GR2FF246661|BUICK[\s_-]+LACROSSE/i.test(upperTitle)) {
+      // Hard-block permanently banned ghost 2015 Buick LaCrosse (1G4GA5GR2FF246661) & extinct 2006 Ford F-150 (1FTPW14V36FB14920)
+      if (/1G4GA5GR2FF246661|BUICK[\s_-]+LACROSSE|1FTPW14V36FB14920|FORD[\s_-]+F-?150|\bF-?150\b/i.test(upperTitle)) {
+        const isF150 = /1FTPW14V36FB14920|F-?150/i.test(upperTitle);
         return {
           status: 'needs_vin',
           folder: {
             id: sf.id,
             title: sf.title,
             drive_url: sf.drive_url,
-            detected_vin: '1G4GA5GR2FF246661',
-            reason: 'PERMANENTLY BLOCKED GHOST VEHICLE: 2015 Buick LaCrosse (1G4GA5GR2FF246661) was never owned by Aldridge Auto. Supply the real 17-char Equinox VIN to unlock.'
+            detected_vin: isF150 ? '1FTPW14V36FB14920' : '1G4GA5GR2FF246661',
+            reason: isF150
+              ? 'PERMANENTLY BLOCKED DISPOSED VEHICLE: Extinct 2006 Ford F-150 (1FTPW14V36FB14920) is excluded by the 7-Vehicle Active Donor Allowlist Firewall.'
+              : 'PERMANENTLY BLOCKED GHOST VEHICLE: 2015 Buick LaCrosse (1G4GA5GR2FF246661) was never owned by Aldridge Auto.'
           }
         };
       }
 
       const rawMatches = upperTitle.match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
       let candidateVin = rawMatches[0] || '';
-      // Exact verified Drive-record match for truncated folder title "JTEBU505117391" -> NHTSA ErrorCode: 0 "JTEBU5JR5D5117391" (2013 Toyota 4Runner)
+      // Exact verified Drive-record match for truncated folder title "JTEBU505117391" -> NHTSA ErrorCode: 0 "JTEBU5JR5D5117391" (2012/2013 Toyota 4Runner)
       if (!candidateVin && /JTEBU505117391/i.test(upperTitle)) {
         candidateVin = 'JTEBU5JR5D5117391';
+      }
+      // Exact verified door-jamb VIN sticker match (photo P0345 in folder 1lW253AcsLUBycQJe8Q2DS2UimSwgCvox):
+      // MFD 10/'05 -> NHTSA ErrorCode: 0 "JHLRD78866C009763" (2005/2006 Honda CR-V EX 2.4L 4WD, WA Plate CLX7123)
+      if (!candidateVin && (/HONDA[\s_-]+CR-?V/i.test(upperTitle) || sf.id === '1lW253AcsLUBycQJe8Q2DS2UimSwgCvox')) {
+        candidateVin = 'JHLRD78866C009763';
       }
 
       if (!candidateVin) {
