@@ -177,8 +177,13 @@ function resolveExportDims(item = {}) {
   const wi = Number(item.width_in || 0);
   const h = Number(item.height_in || 0);
   const isLegacyDefault =
-    w <= 0 || w === 2 || w === 8.5 ||
-    (l === 14 && wi === 10 && (h === 7 || h === 8));
+    w <= 0 || w === 2 || w === 4.5 || w === 6 || w === 8.5 ||
+    (l === 10 && wi === 8 && h === 6) ||
+    (l === 14 && wi === 12 && h === 10) ||
+    (l === 14 && wi === 10 && (h === 7 || h === 8)) ||
+    (l === 48 && wi === 30 && h === 14 && (det.length_in !== 48 || det.width_in !== 30 || det.height_in !== 14)) ||
+    w < det.weight_lbs * 0.7 ||
+    l < det.length_in * 0.7;
   if (isLegacyDefault || l <= 0 || wi <= 0 || h <= 0) {
     return det;
   }
@@ -187,7 +192,7 @@ function resolveExportDims(item = {}) {
     length_in: Math.round(l),
     width_in: Math.round(wi),
     height_in: Math.round(h),
-    labor_hours: Number(item.install_labor_hours ?? det.labor_hours),
+    labor_hours: Number(det.labor_hours ?? item.install_labor_hours ?? 0.75),
     local_pickup_only: Boolean(det.local_pickup_only || item.shipping_class === 'local_pickup_only')
   };
 }
@@ -3887,16 +3892,25 @@ async function hydrateInventoryFromShopifyCoMaster({
         widthIn = Number(dimMatch[2]);
         heightIn = Number(dimMatch[3]);
       }
-      const fallbackDims = resolvePartDimensionsAndWeight(w.cleanTitle, w.productType);
-      if (!weightLbs || weightLbs <= 0) weightLbs = Number(fallbackDims.weight_lbs || 5);
-      if (!lengthIn || !widthIn || !heightIn) {
-        lengthIn = Number(fallbackDims.length_in || 12);
-        widthIn = Number(fallbackDims.width_in || 9);
+      const fallbackDims = resolvePartDimensionsAndWeight({ title: w.cleanTitle, category: w.productType });
+      const hydratedLegacySmallBox =
+        !weightLbs || weightLbs <= 0 || weightLbs === 4.5 || weightLbs === 6 || weightLbs === 8.5 ||
+        !lengthIn || !widthIn || !heightIn ||
+        (lengthIn === 10 && widthIn === 8 && heightIn === 6) ||
+        (lengthIn === 14 && widthIn === 12 && heightIn === 10) ||
+        weightLbs < Number(fallbackDims.weight_lbs || 0) * 0.7 ||
+        lengthIn < Number(fallbackDims.length_in || 0) * 0.7;
+      if (hydratedLegacySmallBox) {
+        weightLbs = Number(fallbackDims.weight_lbs || 4.5);
+        lengthIn = Number(fallbackDims.length_in || 10);
+        widthIn = Number(fallbackDims.width_in || 8);
         heightIn = Number(fallbackDims.height_in || 6);
       }
 
       const shipClass =
-        /Local_Pickup_Only/i.test(w.meta['custom.fulfillment_type'] || '') || weightLbs >= 70
+        fallbackDims.local_pickup_only ||
+        /Local_Pickup_Only/i.test(w.meta['custom.fulfillment_type'] || '') ||
+        weightLbs >= 70
           ? 'local_pickup_only'
           : computeShippingClass(weightLbs, `${w.productType} ${w.cleanTitle}`, lengthIn, widthIn, heightIn);
 
@@ -4110,6 +4124,24 @@ async function syncAllNativeShippingToShopify({ limit = 0, skus = [], onProgress
     const dims = resolveExportDims(item);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
     if (heavyPickupOnly) localPickupCount++;
+    const nextShippingClass = heavyPickupOnly ? 'local_pickup_only' : 'parcel_calculated';
+
+    // Persist audited physical weight, packed box dimensions & shipping class in SQLite so storefront & Shopify stay 100% aligned
+    try {
+      db.prepare(`
+        UPDATE inventory_items
+        SET weight_lbs = ?, length_in = ?, width_in = ?, height_in = ?, shipping_class = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        Number(dims.weight_lbs),
+        Math.round(Number(dims.length_in)),
+        Math.round(Number(dims.width_in)),
+        Math.round(Number(dims.height_in)),
+        nextShippingClass,
+        new Date().toISOString(),
+        item.id
+      );
+    } catch (_) {}
 
     let productId = String(item.shopify_product_id || '').trim();
     let variantId = String(item.shopify_variant_id || '').trim();
@@ -4162,6 +4194,36 @@ async function syncAllNativeShippingToShopify({ limit = 0, skus = [], onProgress
       heavyPickupOnly
     });
 
+    // Keep product-level custom.packed_dimensions, custom.fulfillment_type & custom.country_of_origin metafields in sync too
+    try {
+      const dimsLabel = `${Math.round(dims.length_in)}x${Math.round(dims.width_in)}x${Math.round(dims.height_in)} in (${Number(dims.weight_lbs)} lbs)`;
+      const originCode = res.live_country_code_of_origin || res.country_code_of_origin || resolveCountryOfOrigin(item);
+      const fulfillVal = heavyPickupOnly ? 'Local_Pickup_Only' : 'Parcel_Calculated';
+      await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/${schema.apiVersion}/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `mutation SyncShippingMetafields($metafields: [MetafieldsSetInput!]!) {
+              metafieldsSet(metafields: $metafields) {
+                metafields { key value }
+                userErrors { field message }
+              }
+            }`,
+            variables: {
+              metafields: [
+                { ownerId: `gid://shopify/Product/${productId}`, namespace: 'custom', key: 'packed_dimensions', type: 'single_line_text_field', value: dimsLabel },
+                { ownerId: `gid://shopify/Product/${productId}`, namespace: 'custom', key: 'fulfillment_type', type: 'single_line_text_field', value: fulfillVal },
+                { ownerId: `gid://shopify/Product/${productId}`, namespace: 'custom', key: 'country_of_origin', type: 'single_line_text_field', value: originCode }
+              ]
+            }
+          })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+    } catch (_) {}
+
     processed++;
     if (res.weight_saved) weightSaved++;
     if (res.packed_dimensions_saved) packedDimsSaved++;
@@ -4189,7 +4251,7 @@ async function syncAllNativeShippingToShopify({ limit = 0, skus = [], onProgress
     }
 
     emitProgress();
-    await new Promise((r) => setTimeout(r, 240));
+    await new Promise((r) => setTimeout(r, 220));
   }
 
   logSync(

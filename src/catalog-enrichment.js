@@ -318,41 +318,96 @@ const VERIFIED_SKU_ENRICHMENTS = {
   }
 };
 
-// DETERMINISTIC PART-SPECIFIC PHYSICAL WEIGHT (lb) & PACKED DIMENSIONS (L x W x H in) MATRIX
-// ZERO generic 8.5 lb or 14x10x7 / 14x10x8 fallbacks!
-// IMPORTANT: More specific light sub-components MUST precede heavier assemblies so title-first matching is exact.
+// DETERMINISTIC PART-SPECIFIC PHYSICAL WEIGHT (lb) & PACKED DIMENSIONS (L x W x H in) MATRIX (v32.6)
+// ZERO generic 8.5 lb, 14x10x7, or 4.5 lb / 10x8x6 fallbacks on bulky assemblies!
+// Precedence:
+//   1) Tiny hardware / sensors / switches / modules (explicitly excluded from bulky assembly rules)
+//   2) Heavy & oversized assemblies (engines, transmissions, differentials, subframes, frames, doors, hoods,
+//      tailgates, sunroofs/moonroofs, fenders, bumpers, seats, glass, dashboards, headliners, fuel tanks,
+//      running boards, ladder racks, batteries, tires/wheels, exhausts)
+//   3) Mid-size mechanical, lighting, body trim, HVAC housing & suspension/chassis assemblies
+//   4) Small interior/electrical/bolt-on sub-components
 const DIMENSION_RULES = [
-  // 1. Small electronic / switch / sensor / interior trim sub-components (1.5–6.5 lbs, 10 x 8 x 6 in)
-  { match: /\b(sensor|switch|relay|solenoid|knob|handle|latch|hinge|cap|vent|bezel|cover\s*trim|horn|coil|injector|bracket|bolt|clip|manual|mirror\s*glass|lock\s*actuator|sun\s*visor|headrest|armrest|cup\s*holder|ash\s*tray|clock|display\s*screen|camera|keyless|tpms|yaw\s*rate|oxygen|maf\s*sensor|camshaft|crankshaft)\b/i, weight: 2.0, l: 10, w: 8, h: 6, labor: 0.6 },
-  { match: /\b(ecm|ecu|pcm|bcm|tcm|tcu|module|computer|fuse\s*box|relay\s*box|junction\s*box|tipm|climate\s*control|hvac\s*control|heater\s*control|amplifier|bluetooth|blue&me|convergence)\b/i, weight: 3.5, l: 10, w: 8, h: 6, labor: 0.8 },
-  { match: /\b(wiper\s*blade|fuel\s*(gas\s*)?filler\s*(housing|pocket|door\s*hinge)|fuel\s*door|clutch\s*slave|ignition\s*coil|throttle\s*body|fuel\s*rail|blower\s*motor|wiper\s*motor|wiper\s*linkage|window\s*regulator|window\s*motor|reservoir|overflow\s*tank|washer\s*tank|coolant\s*tank)\b/i, weight: 4.5, l: 10, w: 8, h: 6, labor: 0.9 },
-  { match: /\b(headlight|headlamp|tail\s*light|taillight|tail\s*lamp|fog\s*light|parking\s*light|turn\s*signal|side\s*marker|side\s*mirror|door\s*mirror|wing\s*mirror|rearview\s*mirror|instrument\s*cluster|speedometer|gauge\s*cluster|radio|stereo|head\s*unit|navigation|infotainment|glove\s*box|center\s*console|overhead\s*console|dash\s*panel|dash\s*trim|dashboard\s*trim|pillar\s*trim|trim\s*panel|door\s*trim\s*panel|interior\s*door\s*panel|door\s*panel|cargo\s*trim|fender\s*liner|grille|air\s*intake\s*box|air\s*filter\s*housing|charcoal\s*canister|wheel\s*cover|hubcap|cowl|shifter|heat\s*shield|spare\s*tire\s*cover)\b/i, weight: 6.0, l: 10, w: 8, h: 6, labor: 0.8 },
+  // 1. Ultra-specific small switches, sensors, latches, bezels, relays, modules & brackets (1.5–3.5 lbs, 10 x 8 x 6 in)
+  // Guarded so "Door Assembly", "Sunroof Assembly", "Intake Manifold with Throttle Body", "HVAC Housing with Harness" NEVER match here!
+  { match: /\b(sensor|switch|relay|solenoid|knob|lock\s*actuator|door\s*handle|exterior\s*handle|interior\s*handle|grab\s*handle|hood\s*latch|door\s*latch|trunk\s*latch|tailgate\s*latch|hinge|filler\s*cap|oil\s*cap|radiator\s*cap|gas\s*cap|air\s*vent|dash\s*vent|bezel|cover\s*trim|horn|ignition\s*coil|coil\s*pack|fuel\s*injector|injector|clamp|retainer|hold\s*down|bolt|clip|owner'?s?\s*manual|mirror\s*glass|sun\s*visor|headrest|armrest|cup\s*holder|ash\s*tray|clock|display\s*screen|backup\s*camera|rear\s*camera|keyless|tpms|tire\s*pressure\s*monitor|yaw\s*rate|oxygen|o2\s*sensor|maf\s*sensor|camshaft|crankshaft|foot\s*rest|pedal\s*cover|stop\s*plate|bumper.*bracket|skirt\s*bracket|support\s*cover\s*trim|mounting\s*bracket|battery\s*terminal|dome\s*light|receiver\s*drier)\b/i, weight: 2.0, l: 10, w: 8, h: 6, labor: 0.6 },
+  { match: /\b(ecm|ecu|pcm|bcm|tcm|tcu|control\s*module|warning\s*module|airbag\s*module|abs\s*module|body\s*control|engine\s*control|computer|fuse\s*(?:and\s*relay\s*)?box|relay\s*box|junction\s*box|junction\s*block|tipm|climate\s*control|hvac\s*control|heater\s*control|ac\s*control\s*panel|amplifier|bluetooth|blue&me|convergence|audio\s*receiver|tuner\s*assembly)\b/i, weight: 3.5, l: 10, w: 8, h: 6, labor: 0.8 },
 
-  // 2. Complete Wheel + Tire Assemblies (42.0 lbs, 26 x 26 x 10 in) vs Bare Alloy/Steel Wheels/Rims (24.0 lbs, 20 x 20 x 9 in)
-  { match: /\b(wheel\s*(?:and|&|\+|with)\s*tire|tire\s*(?:and|&|\+|with)\s*wheel|spare\s*tire\s*assembly|complete\s*wheel.*tire|mounted\s*tire)\b/i, weight: 42.0, l: 26, w: 26, h: 10, labor: 0.4 },
-  { match: /\b(alloy\s*wheel|steel\s*wheel|wheel\s*rim|\brim\b|\bwheel\b)\b/i, weight: 24.0, l: 20, w: 20, h: 9, labor: 0.5 },
+  // 2. Engines / Long Blocks / Short Blocks (320.0 lbs, 36 x 30 x 32 in, Local_Pickup_Only)
+  { match: /\b(complete\s*engine|engine\s*assembly|engine\s*long\s*block|long\s*block|short\s*block|motor\s*assembly)\b/i, exclude: /\b(window|wiper|blower|fan|starter|seat|mirror|washer|sunroof|door|abs|pump|mount|cover|under\s*cover|skid|accessory|belt|pulley|tensioner|bay|trim|intake|coolant|wiring|harness)\b/i, weight: 320.0, l: 36, w: 30, h: 32, labor: 12.0, localPickup: true },
 
-  // 3. Engines / Long Blocks (320.0 lbs, 36 x 30 x 32 in, Local_Pickup_Only)
-  { match: /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|motor\s*assembly)\b/i, weight: 320.0, l: 36, w: 30, h: 32, labor: 8.5, localPickup: true },
+  // 3. Transmissions / Transaxles / Transfer Cases (145.0 lbs, 32 x 24 x 22 in, Local_Pickup_Only)
+  { match: /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|gearbox\s*assembly|cvt\s*transmission|transfer\s*case)\b/i, exclude: /\b(mount|crossmember|oil\s*pan|cooler|line|hose|cable|shifter|sensor|switch|module|tcm|tcu|dipstick|bracket)\b/i, weight: 145.0, l: 32, w: 24, h: 22, labor: 6.0, localPickup: true },
 
-  // 4. Transmissions / Transfer Cases (145.0 lbs, 32 x 24 x 22 in, Local_Pickup_Only)
-  { match: /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|gearbox|cvt\s*transmission|transfer\s*case)\b/i, weight: 145.0, l: 32, w: 24, h: 22, labor: 5.5, localPickup: true },
+  // 4. Tire Sets & Wheel/Tire Assemblies (must precede bare wheel/tire)
+  { match: /\b(set\s*of\s*[234]\s*(?:wheels?|tires?)|[234]\s*(?:wheels?|tires?)\s*set|wheel\s*(?:and|&|\+|with)\s*tire\s*set)\b/i, weight: 120.0, l: 32, w: 32, h: 32, labor: 0.75, localPickup: true },
+  { match: /\b(wheel\s*(?:and|&|\+|with)\s*tire|tire\s*(?:and|&|\+|with)\s*wheel|spare\s*tire\s*assembly|complete\s*wheel.*tire|mounted\s*tire)\b/i, weight: 45.0, l: 28, w: 28, h: 11, labor: 0.5 },
+  { match: /\btires?\b/i, exclude: /\b(pressure|tpms|sensor|monitor|cover|carrier|winch|jack|wrench|tool|hoist|bracket|well|liner)\b/i, weight: 32.0, l: 28, w: 28, h: 10, labor: 0.5 },
+  { match: /\b(alloy\s*wheel|steel\s*wheel|wheel\s*rim|\brim\b)\b/i, exclude: /\b(cover|hubcap|center\s*cap|lug|nut|stud|sensor|hub|bearing|speed|well|liner|arch|steering|flywheel)\b/i, weight: 24.0, l: 20, w: 20, h: 9, labor: 0.5 },
 
-  // 5. Differentials / Axle Assemblies (85.0 lbs, 28 x 18 x 16 in, Local_Pickup_Only)
-  { match: /\b(front\s*differential|rear\s*differential|differential\s*carrier|differential\s*assembly|third\s*member|rear\s*axle\s*assembly|front\s*axle\s*assembly|axle\s*housing)\b/i, weight: 85.0, l: 28, w: 18, h: 16, labor: 3.8, localPickup: true },
+  // 5. Differentials / Axle Housings / Subframes / Frame Sections (72–85 lbs, Local_Pickup_Only)
+  { match: /\b(front\s*differential|rear\s*differential|differential\s*carrier|differential\s*assembly|third\s*member|rear\s*axle\s*assembly|front\s*axle\s*assembly|axle\s*housing)\b/i, weight: 85.0, l: 28, w: 18, h: 16, labor: 3.5, localPickup: true },
+  { match: /\b(frame\s*section|frame\s*cut|frame\s*rail|chassis\s*frame|subframe|k-?frame|front\s*subframe\s*crossmember|rear\s*subframe)\b/i, weight: 75.0, l: 48, w: 30, h: 14, labor: 3.5, localPickup: true },
 
-  // 6. Doors / Hoods / Tailgates / Bumpers / Seats / Glass (45.0–65.0 lbs, 48 x 30 x 14 in, Local_Pickup_Only)
-  { match: /\b(complete\s*door|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door)\b/i, weight: 62.0, l: 48, w: 30, h: 14, labor: 2.5, localPickup: true },
-  { match: /\b(tailgate|liftgate|hatch\s*lid|trunk\s*lid|deck\s*lid)\b/i, weight: 60.0, l: 48, w: 30, h: 14, labor: 2.2, localPickup: true },
-  { match: /\b(hood\s*panel|engine\s*hood|car\s*hood|\bhood\b)\b/i, weight: 58.0, l: 48, w: 30, h: 14, labor: 1.8, localPickup: true },
-  { match: /\b(front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|car\s*seats?|seat\s*assembly|seat\s*pair|seat\s*set|\bseat\b)\b/i, weight: 55.0, l: 48, w: 30, h: 14, labor: 1.2, localPickup: true },
-  { match: /\b(front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|bumper\s*reinforcement|fender\s*panel|front\s*fender|quarter\s*panel|complete\s*dashboard|fuel\s*tank|gas\s*tank)\b/i, weight: 48.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
-  { match: /\b(windshield|back\s*window|rear\s*window\s*glass|sliding\s*rear.*window|door\s*window\s*glass|quarter\s*window\s*glass|window\s*glass|sunroof\s*glass)\b/i, weight: 45.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+  // 6. Sunroof / Moonroof Assemblies & Glass (48 lbs, 44 x 36 x 8 in, Local_Pickup_Only)
+  { match: /\b(sunroof|moonroof)\b/i, exclude: /\b(switch|motor|shade\s*clip|drain|seal|trim\s*ring|control|console)\b/i, weight: 48.0, l: 44, w: 36, h: 8, labor: 2.5, localPickup: true },
 
-  // 7. Alternators / Starters / Compressors / Calipers / Hubs / Radiators & Mid-Weight Chassis Assemblies (12.0–22.0 lbs, 14 x 12 x 10 in)
-  { match: /\b(radiator|condenser|cooling\s*fan|fan\s*shroud|fan\s*assembly|driveshaft|drive\s*shaft|steering\s*rack|rack\s*and\s*pinion|steering\s*column|strut\s*assembly|coilover|shock.*coil|intake\s*manifold|exhaust\s*manifold|turbo|turbocharger|intercooler|cv\s*axle|axle\s*shaft|subframe|roof\s*rack)\b/i, weight: 20.0, l: 14, w: 12, h: 10, labor: 2.0 },
-  { match: /\b(alternator|generator|a\/?c\s*compressor|air\s*conditioning\s*compressor|brake\s*caliper|caliper|wheel\s*hub|spindle|knuckle|control\s*arm|suspension\s*arm|brake\s*rotor|brake\s*booster|abs\s*pump|abs\s*actuator|power\s*steering\s*pump|cylinder\s*head|flywheel|torque\s*converter)\b/i, weight: 16.0, l: 14, w: 12, h: 10, labor: 1.8 },
-  { match: /\b(starter|master\s*cylinder|water\s*pump|oil\s*pump|fuel\s*pump\s*module|timing\s*chain|timing\s*belt|heater\s*core|shock\s*absorber|sway\s*bar|leaf\s*spring|coil\s*spring|trailer\s*hitch)\b/i, weight: 12.5, l: 14, w: 12, h: 10, labor: 1.5 }
+  // 7. Complete Doors / Tailgates / Liftgates / Hoods / Fenders / Quarter Panels / Bumpers / Seats / Glass / Dashboards / Headliners / Bed Liners / Racks / Fuel Tanks / Batteries
+  { match: /\b(door\s*assembly|door\s*shell|complete\s*door)\b/i, exclude: /\b(panel|trim|card|handle|latch|hinge|mirror|regulator|lock|actuator|switch|speaker|wiring|harness|fuel\s*door|gas\s*door|glove\s*box)\b/i, weight: 62.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+  { match: /\b(front\s*(?:left|right)?\s*(?:driver|passenger)?\s*(?:side)?\s*door|rear\s*(?:left|right)?\s*(?:driver|passenger)?\s*(?:side)?\s*door|sliding\s*door|car\s*door)\b/i, exclude: /\b(panel|trim|card|handle|latch|hinge|mirror|glass|window|regulator|lock|actuator|switch|speaker|wiring|harness|check|strap|seal|weatherstrip|molding|sill|scuff|fuel\s*door|gas\s*door|glove\s*box)\b/i, weight: 62.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+  { match: /\b(tailgate|liftgate|hatch\s*lid|rear\s*hatch|trunk\s*lid|deck\s*lid)\b/i, exclude: /\b(handle|latch|hinge|strut|support|cable|switch|camera|emblem|trim|panel|glass|window|motor|wiper|lock|actuator)\b/i, weight: 60.0, l: 54, w: 28, h: 12, labor: 2.0, localPickup: true },
+  { match: /\b(hood\s*panel|hood\s*assembly|engine\s*hood|car\s*hood|\bhood\b)\b/i, exclude: /\b(latch|hinge|prop|rod|strut|support|cowl|scoop|release|cable|insulator|pad|liner|trim|seal|weatherstrip|emblem|deflector|bug\s*shield)\b/i, weight: 58.0, l: 56, w: 48, h: 10, labor: 2.0, localPickup: true },
+  { match: /\b(front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|car\s*seats?|seat\s*assembly|seat\s*pair|seat\s*set|3rd\s*row\s*seat|second\s*row\s*seat|\bseat\b)\b/i, exclude: /\b(belt|buckle|retractor|switch|motor|heater|module|sensor|trim|bezel|cover\s*trim|rail\s*cover|bracket|handle|lever|knob|headrest|armrest)\b/i, weight: 55.0, l: 42, w: 28, h: 24, labor: 1.5, localPickup: true },
+  { match: /\b(bed\s*liner|truck\s*bed\s*liner)\b/i, weight: 45.0, l: 72, w: 56, h: 18, labor: 1.0, localPickup: true },
+  { match: /\b(ladder\s*rack|truck\s*bed.*rack|bed\s*rack|running\s*board|step\s*bar|nerf\s*bar|side\s*step)\b/i, weight: 48.0, l: 72, w: 14, h: 10, labor: 1.5, localPickup: true },
+  { match: /\b(front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|bumper\s*reinforcement|bumper\s*bar)\b/i, exclude: /\b(bracket|clip|retainer|sensor|reflector|filler|grille|fog|light|lamp|trim|molding|valence|skirt\s*bracket|tow\s*hook\s*cover|cap)\b/i, weight: 38.0, l: 68, w: 20, h: 18, labor: 2.0, localPickup: true },
+  { match: /\b(fender\s*apron|inner\s*fender\s*apron)\b/i, weight: 28.0, l: 40, w: 22, h: 14, labor: 2.5, localPickup: true },
+  { match: /\b(fender\s*assembly|fender\s*panel|front\s*fender|\bfender\b|quarter\s*panel|bed\s*panel|truck\s*bed\s*side|bedside)\b/i, exclude: /\b(liner|flare|trim|molding|emblem|badge|bracket|apron|splash|mud\s*flap)\b/i, weight: 34.0, l: 48, w: 30, h: 14, labor: 2.0, localPickup: true },
+  { match: /\b(dashboard\s*assembly|dashboard\s*frame|complete\s*dashboard|dash\s*pad\s*assembly|instrument\s*panel\s*assembly|interior\s*front\s*cabin\s*assembly)\b/i, exclude: /\b(trim|bezel|vent|switch|cluster|glove|speaker|cover|mat)\b/i, weight: 45.0, l: 56, w: 22, h: 18, labor: 3.5, localPickup: true },
+  { match: /\b(roof\s*headliner|headliner\s*assembly|interior\s*headliner|floor\s*carpet|carpet\s*assembly)\b/i, weight: 28.0, l: 64, w: 44, h: 8, labor: 2.0, localPickup: true },
+  { match: /\b(fuel\s*tank|gas\s*tank)\b/i, exclude: /\b(cap|door|strap|filler\s*neck|filler\s*housing|pump|sending\s*unit|sensor|shield)\b/i, weight: 38.0, l: 44, w: 24, h: 16, labor: 3.0, localPickup: true },
+  { match: /\b(battery\s*assembly|12v\s*battery|car\s*battery|automotive\s*battery)\b/i, exclude: /\b(tray|hold\s*down|clamp|retainer|cable|terminal|sensor|cover|box|bracket|blanket)\b/i, weight: 42.0, l: 13, w: 10, h: 10, labor: 0.5, localPickup: true },
+  { match: /\b(windshield|back\s*window|rear\s*window\s*glass|rear\s*(?:power\s*)?sliding\s*window|sliding\s*rear.*window|back\s*glass)\b/i, exclude: /\b(wiper|washer|motor|linkage|arm|blade|reservoir|pump|switch|cowl|molding|trim|seal|mirror)\b/i, weight: 42.0, l: 58, w: 34, h: 8, labor: 2.0, localPickup: true },
+  { match: /\b(exhaust\s*assembly|exhaust\s*muffler|muffler\s*assembly|cat-?back|exhaust\s*pipe|tailpipe|resonator\s*pipe)\b/i, exclude: /\b(manifold|tip|hanger|clamp|gasket|heat\s*shield|sensor)\b/i, weight: 34.0, l: 54, w: 16, h: 12, labor: 2.0, localPickup: true },
+
+  // 8. Large Parcel / Bulky Trim, Glass, Cooling, Chassis, Suspension & Exhaust Components (9–38 lbs, real packed box LxWxH)
+  { match: /\b(door\s*glass|door\s*window\s*glass|quarter\s*glass|quarter\s*window|side\s*window\s*glass|vent\s*glass)\b/i, weight: 16.0, l: 34, w: 24, h: 6, labor: 1.5 },
+  { match: /\b(roof\s*rack|luggage\s*rack|roof\s*rail|crossbar)\b/i, weight: 22.0, l: 60, w: 12, h: 8, labor: 1.0 },
+  { match: /\b(rocker\s*panel|side\s*skirt|front\s*valance|rear\s*valance|air\s*dam|rear\s*spoiler|wing\s*spoiler)\b/i, weight: 14.0, l: 62, w: 10, h: 8, labor: 1.5 },
+  { match: /\b(door\s*trim\s*panel|interior\s*door\s*panel|door\s*panel\s*assembly|door\s*panel\s*trim|door\s*panel|door\s*card)\b/i, weight: 12.0, l: 36, w: 24, h: 6, labor: 0.75 },
+  { match: /\b(quarter\s*panel.*trim|rear\s*cargo\s*cover|trunk\s*shade|sound\s*deadening\s*panel)\b/i, weight: 9.0, l: 36, w: 20, h: 8, labor: 0.75 },
+  { match: /\b(radiator\s*cooling\s*assembly|radiator\s*assembly|radiator\s*core\s*support|core\s*support|\bradiator\b)\b/i, exclude: /\b(cap|hose|bracket|overflow|reservoir|fan|shroud|support\s*cover|trim)\b/i, weight: 22.0, l: 32, w: 24, h: 8, labor: 2.0 },
+  { match: /\b(a\/?c\s*condenser|condenser\s*assembly|\bcondenser\b)\b/i, weight: 14.0, l: 30, w: 22, h: 6, labor: 2.0 },
+  { match: /\b(cooling\s*fan|fan\s*shroud|fan\s*clutch.*blade|radiator\s*fan|fan\s*assembly)\b/i, weight: 14.0, l: 26, w: 20, h: 8, labor: 1.5 },
+  { match: /\b(steering\s*rack|rack\s*and\s*pinion)\b/i, weight: 28.0, l: 46, w: 12, h: 10, labor: 3.5 },
+  { match: /\b(driveshaft|drive\s*shaft|propeller\s*shaft)\b/i, weight: 26.0, l: 54, w: 8, h: 8, labor: 2.0 },
+  { match: /\b(steering\s*column)\b/i, weight: 22.0, l: 36, w: 12, h: 10, labor: 2.0 },
+  { match: /\b(leaf\s*spring|trailer\s*hitch|tow\s*hitch|receiver\s*hitch)\b/i, weight: 38.0, l: 50, w: 12, h: 10, labor: 2.0 },
+  { match: /\b(transmission\s*crossmember|crossmember)\b/i, weight: 22.0, l: 34, w: 10, h: 8, labor: 2.0 },
+  { match: /\b(strut\s*(?:and|&)?\s*spring|strut\s*assembly|coilover|front\s*strut|shock.*coil)\b/i, weight: 18.0, l: 26, w: 10, h: 10, labor: 2.0 },
+  { match: /\b(cv\s*axle|axle\s*shaft|half\s*shaft)\b/i, weight: 18.0, l: 30, w: 8, h: 8, labor: 2.0 },
+  { match: /\b(intake\s*manifold|exhaust\s*manifold|intercooler|turbocharger|\bturbo\b)\b/i, weight: 18.0, l: 22, w: 14, h: 12, labor: 2.5 },
+  { match: /\b(hvac\s*blower\s*motor\s*housing|blower\s*motor\s*housing|heater\s*box|hvac\s*housing|evaporator\s*box|heater\s*core\s*housing)\b/i, weight: 16.0, l: 24, w: 18, h: 14, labor: 2.5 },
+  { match: /\b(cargo\s*storage\s*box|storage\s*box\s*assembly|center\s*console|subwoofer.*enclosure|subwoofer\s*speaker)\b/i, weight: 14.0, l: 26, w: 16, h: 12, labor: 1.0 },
+  { match: /\b(control\s*arm|suspension\s*arm|trailing\s*arm|sway\s*bar|stabilizer\s*bar)\b/i, weight: 14.0, l: 24, w: 14, h: 8, labor: 2.0 },
+  { match: /\b(spare\s*tire\s*jack|scissor\s*jack|jack\s*tool\s*kit)\b/i, weight: 11.0, l: 20, w: 8, h: 6, labor: 0.5 },
+  { match: /\b(front\s*grille|radiator\s*grille|grille\s*assembly|\bgrille\b)\b/i, weight: 10.0, l: 42, w: 14, h: 8, labor: 0.75 },
+  { match: /\b(fender\s*flare|fender\s*liner|wheel\s*well\s*liner|splash\s*shield|engine\s*under\s*cover|skid\s*plate|under\s*cover)\b/i, weight: 9.0, l: 32, w: 22, h: 8, labor: 0.75 },
+  { match: /\b(rear\s*shock|shock\s*absorber|coil\s*spring)\b/i, weight: 10.0, l: 24, w: 6, h: 6, labor: 1.5 },
+  { match: /\b(alternator|generator|a\/?c\s*compressor|air\s*conditioning\s*compressor|brake\s*caliper|caliper|wheel\s*hub|spindle|knuckle|brake\s*rotor|brake\s*booster|abs\s*pump|abs\s*actuator|power\s*steering\s*pump|cylinder\s*head|flywheel|torque\s*converter|transmission\s*oil\s*pan|oil\s*pan)\b/i, weight: 16.0, l: 14, w: 12, h: 10, labor: 2.0 },
+  { match: /\b(starter|master\s*cylinder|water\s*pump|oil\s*pump|fuel\s*pump\s*module|timing\s*chain|timing\s*belt|heater\s*core|engine\s*mount|accessory\s*belt\s*system)\b/i, weight: 12.5, l: 14, w: 12, h: 10, labor: 2.0 },
+
+  // 9. Medium Parcel Lighting, Mirrors, Intake/Air Boxes, Wiper Linkages & Regulators (6–9 lbs, real box LxWxH)
+  { match: /\b(headlight|headlamp)\b/i, weight: 9.0, l: 22, w: 14, h: 12, labor: 0.75 },
+  { match: /\b(tail\s*light|taillight|tail\s*lamp)\b/i, weight: 6.0, l: 18, w: 12, h: 10, labor: 0.75 },
+  { match: /\b(side\s*view\s*(?:door\s*)?mirror|exterior\s*(?:view\s*)?mirror|side\s*mirror|door\s*mirror|wing\s*mirror)\b/i, weight: 6.5, l: 16, w: 12, h: 10, labor: 0.75 },
+  { match: /\b(air\s*filter\s*box|air\s*intake\s*box|air\s*cleaner\s*box|air\s*filter\s*housing|wiper\s*motor.*linkage|wiper\s*linkage|window\s*regulator|charcoal\s*canister|evaporative\s*emissions|engine\s*cover|body\s*wiring\s*harness|wiring\s*harness)\b/i, weight: 7.5, l: 18, w: 12, h: 10, labor: 1.0 },
+  { match: /\b(instrument\s*cluster|speedometer|gauge\s*cluster|radio|stereo|head\s*unit|navigation|infotainment|glove\s*box|overhead\s*console|dash\s*panel|dash\s*trim|dashboard\s*trim|pillar\s*trim|trim\s*panel|cargo\s*trim|wheel\s*cover|hubcap|cowl|shifter|heat\s*shield|spare\s*tire\s*cover|mud\s*flap|splash\s*guard|speaker\s*set|accelerator.*pedal|gas\s*pedal|battery\s*tray)\b/i, weight: 6.0, l: 16, w: 12, h: 8, labor: 0.75 },
+  { match: /\b(kick\s*panel|scuff\s*plate)\b/i, weight: 4.0, l: 18, w: 10, h: 6, labor: 0.5 },
+  { match: /\b(wiper\s*arm)\b/i, weight: 3.5, l: 22, w: 4, h: 3, labor: 0.5 },
+
+  // 10. Small Mechanical / Fluid / Wiper Components (4.5 lbs, 12 x 10 x 6 in)
+  { match: /\b(wiper\s*blade|fuel\s*(gas\s*)?filler\s*(housing|pocket|door\s*hinge)|fuel\s*door|clutch\s*slave|clutch\s*cable|throttle\s*body|fuel\s*rail|blower\s*motor|wiper\s*motor|window\s*motor|reservoir|overflow\s*tank|washer\s*tank|coolant\s*tank|fog\s*light|parking\s*light|turn\s*signal|side\s*marker|rear\s*view\s*mirror|rearview\s*mirror)\b/i, weight: 4.5, l: 12, w: 10, h: 6, labor: 0.75 }
 ];
 
 /**
@@ -410,15 +465,15 @@ function resolveCategoryBookTimeLabor(item = {}, laborRateInput = SHOP_LABOR_RAT
   // Tier 3: Differentials, Axles, Subframes, Steering Racks & Exhaust Manifolds/Cats (3.5 hrs | 3.0–4.5 hrs)
   if (
     !isSmallSubpartOrAccessory &&
-    /\b(front\s*differential|rear\s*differential|differential\s*(?:assembly|carrier|housing)|axle\s*(?:assembly|housing|shaft)|cv\s*axle|half\s*shaft|subframe|k-?frame|crossmember|steering\s*rack|rack\s*and\s*pinion|exhaust\s*manifold|catalytic|cylinder\s*head|timing\s*chain|timing\s*belt|heater\s*core|complete\s*dashboard|fuel\s*tank|gas\s*tank)\b/i.test(titleLower)
+    /\b(front\s*differential|rear\s*differential|differential\s*(?:assembly|carrier|housing)|axle\s*(?:assembly|housing|shaft)|cv\s*axle|half\s*shaft|subframe|k-?frame|crossmember|steering\s*rack|rack\s*and\s*pinion|exhaust\s*manifold|catalytic|cylinder\s*head|timing\s*chain|timing\s*belt|heater\s*core|complete\s*dashboard|dashboard\s*assembly|fuel\s*tank|gas\s*tank|frame\s*section|frame\s*rail)\b/i.test(titleLower)
   ) {
     return buildTier('drivetrain_chassis_major', 3.5, '3.0–4.5 hrs', true);
   }
 
-  // Tier 2: Alternators, Starters, A/C Compressors, Radiators, Struts, Control Arms, Hub Bearings, Fuel Pumps, Doors, Fenders, Hoods, Tailgates, Bumpers & Seats (2.0 hrs | 1.5–2.5 hrs)
+  // Tier 2: Alternators, Starters, A/C Compressors, Radiators, Struts, Control Arms, Hub Bearings, Fuel Pumps, Doors, Fenders, Hoods, Tailgates, Bumpers, Sunroofs & Seats (2.0 hrs | 1.5–2.5 hrs)
   if (
     !/\b(handle|switch|latch|hinge|mirror|trim|molding|weatherstrip|seal|wiring|harness|speaker|panel\s*trim|cover\s*trim|bezel|cap|bracket|mount|sensor|relay|fuse)\b/i.test(titleLower) &&
-    /\b(alternator|generator|starter\s*motor|\bstarter\b|a\/?c\s*compressor|air\s*conditioning\s*compressor|radiator|condenser|strut|shock\s*absorber|coilover|control\s*arm|trailing\s*arm|suspension\s*arm|wheel\s*hub|hub\s*bearing|wheel\s*bearing|spindle|knuckle|fuel\s*pump|power\s*steering\s*pump|water\s*pump|brake\s*booster|master\s*cylinder|brake\s*caliper|abs\s*pump|abs\s*actuator|driveshaft|drive\s*shaft|complete\s*door|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door|front\s*fender|fender\s*panel|\bfender\b|quarter\s*panel|tailgate|liftgate|hatch\s*lid|trunk\s*lid|hood\s*panel|engine\s*hood|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|windshield|window\s*glass|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|turbocharger|intake\s*manifold)\b/i.test(titleLower)
+    /\b(alternator|generator|starter\s*motor|\bstarter\b|a\/?c\s*compressor|air\s*conditioning\s*compressor|radiator|condenser|strut|shock\s*absorber|coilover|control\s*arm|trailing\s*arm|suspension\s*arm|wheel\s*hub|hub\s*bearing|wheel\s*bearing|spindle|knuckle|fuel\s*pump|power\s*steering\s*pump|water\s*pump|brake\s*booster|master\s*cylinder|brake\s*caliper|abs\s*pump|abs\s*actuator|driveshaft|drive\s*shaft|complete\s*door|door\s*shell|door\s*assembly|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|car\s*door|front\s*fender|fender\s*panel|fender\s*assembly|\bfender\b|quarter\s*panel|tailgate|liftgate|hatch\s*lid|trunk\s*lid|hood\s*panel|hood\s*assembly|engine\s*hood|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|windshield|window\s*glass|door\s*glass|quarter\s*glass|sunroof|moonroof|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|turbocharger|intake\s*manifold)\b/i.test(titleLower)
   ) {
     return buildTier('mid_mechanical_body', 2.0, '1.5–2.5 hrs', false);
   }
@@ -433,13 +488,14 @@ function resolveCategoryBookTimeLabor(item = {}, laborRateInput = SHOP_LABOR_RAT
 }
 
 function resolvePartDimensionsAndWeight(item = {}) {
-  const titleStr = String(item.title || '');
-  const catStr = String(item.category || '');
+  const titleStr = typeof item === 'string' ? item : String(item.title || '');
+  const catStr = typeof item === 'string' ? '' : String(item.category || '');
   const bookTime = resolveCategoryBookTimeLabor({ title: titleStr, category: catStr });
+  const matchesRule = (r, txt) => r.match.test(txt) && (!r.exclude || !r.exclude.test(txt));
   // Match specific title FIRST so broad category names never shadow light components
   const matched =
-    DIMENSION_RULES.find((r) => r.match.test(titleStr)) ||
-    DIMENSION_RULES.find((r) => r.match.test(`${titleStr} ${catStr}`));
+    DIMENSION_RULES.find((r) => matchesRule(r, titleStr)) ||
+    DIMENSION_RULES.find((r) => matchesRule(r, `${titleStr} ${catStr}`));
 
   if (matched) {
     // Allow Vision-verified weight/dim refinement ONLY within +/- 30% of deterministic class bounds
@@ -464,10 +520,10 @@ function resolvePartDimensionsAndWeight(item = {}) {
   // Deterministic category-tier fallback (ZERO 8.5 lb, ZERO 14x10x7 / 14x10x8!)
   const combined = `${titleStr} ${catStr}`.toLowerCase();
   if (/engine|drivetrain|transmission|axle|differential|exhaust/i.test(combined)) {
-    return { weight_lbs: 18.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
+    return { weight_lbs: 18.0, length_in: 16, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
   }
   if (/suspension|brake|steering|cooling|radiator|hvac|fuel|charging|starting/i.test(combined)) {
-    return { weight_lbs: 14.0, length_in: 14, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
+    return { weight_lbs: 14.0, length_in: 16, width_in: 12, height_in: 10, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
   }
   return { weight_lbs: 4.5, length_in: 10, width_in: 8, height_in: 6, labor_hours: bookTime.hours, labor_range: bookTime.range, labor_label: bookTime.label, is_major_drivetrain: bookTime.is_major_drivetrain, local_pickup_only: false };
 }
