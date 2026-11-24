@@ -982,11 +982,36 @@ function generateMetaCatalogCsv(items, settings, baseUrl) {
   return rows.join('\n') + '\n';
 }
 
+function mapColorToCrosslistEnum(rawColor = '') {
+  const c = String(rawColor || '').toLowerCase();
+  if (/\bclear\b/.test(c)) return 'Clear';
+  if (/\bsilver\b|\bchrome\b|\baluminum\b/.test(c)) return 'Silver';
+  if (/\bgray\b|\bgrey\b|\bmetallic\b|\bcharcoal\b|\bgraphite\b/.test(c)) return 'Gray';
+  if (/\bwhite\b|\bivory\b/.test(c)) return 'White';
+  if (/\bred\b|\bmaroon\b/.test(c)) return 'Red';
+  if (/\bburgundy\b/.test(c)) return 'Burgundy';
+  if (/\bnavy\b/.test(c)) return 'Navy';
+  if (/\bblue\b/.test(c)) return 'Blue';
+  if (/\bgreen\b/.test(c)) return 'Green';
+  if (/\btan\b/.test(c)) return 'Tan';
+  if (/\bbeige\b|\bcream\b/.test(c)) return 'Beige';
+  if (/\bbrown\b/.test(c)) return 'Brown';
+  if (/\bgold\b/.test(c)) return 'Gold';
+  if (/\byellow\b/.test(c)) return 'Yellow';
+  if (/\borange\b/.test(c)) return 'Orange';
+  return 'Black';
+}
+
 function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo') {
   items = ensureDeduplicatedItems(items);
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
-    ? ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Quantity', 'Year', 'Make', 'Model', 'Donor_VIN', 'Origin_Country', 'eBay_US_Category_ID', 'Weight (lbs)', 'Length', 'Width', 'Height', 'Shipping_Policy', 'Zip Code', 'Image 1', 'Additional_Images', 'Bin_Location']
+    ? [
+        'Title', 'Description', 'Price', 'Brand', 'Condition', 'Color', 'Quantity',
+        'Shipping weight', 'Shipping weight unit',
+        'Shipping length', 'Shipping width', 'Shipping height', 'Shipping dimension unit',
+        'Tags', 'SKU', 'Who made', 'Accept offers', 'Is auction', 'Internal note', 'Photos'
+      ]
     : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Origin_Country', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
 
   const rows = [headers.join(',')];
@@ -999,21 +1024,65 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
     const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
     const extraImgs = photos.slice(1).map(resolvePhoto).join('|');
+    const allPhotosPipe = photos.map(resolvePhoto).filter(Boolean).join('|');
     const condOut = normalizeExportCondition(item.condition);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
     const shippingPolicy = heavyPickupOnly ? 'Local_Pickup_Only' : 'Calculated_Parcel';
-    const basePrice = Number(item.price_we_pull || 0).toFixed(2);
-    const cleanDesc = buildCleanPlainListingDesc({ ...item, title: title80 }, settings);
+    const basePrice = Math.max(0, Number(item.price_we_pull || 0)).toFixed(2);
+    const cleanDesc = buildCleanPlainListingDesc({ ...item, title: title80 }, settings).slice(0, 12000);
     const donorVin = String(item.verified_vin || '').trim().toUpperCase();
 
     if (mode === 'crosslist') {
+      const crosslistCondition = condOut === 'New' ? 'NewWithoutTags' : 'Good';
+      const crosslistColor = mapColorToCrosslistEnum(tax.attributes?.color || '');
+      const weightOuncesInt = Math.max(1, Math.round(Number(dims.weight_lbs || 4.5) * 16));
+      const lenInt = Math.max(1, Math.round(Number(dims.length_in || 10)));
+      const widInt = Math.max(1, Math.round(Number(dims.width_in || 8)));
+      const hgtInt = Math.max(1, Math.round(Number(dims.height_in || 6)));
+      const pipeTags = [
+        'OEM',
+        item.fitment_years || '',
+        item.fitment_make || '',
+        item.fitment_model || '',
+        shippingPolicy,
+        tax.partType || '',
+        donorVin ? `VIN:${donorVin}` : ''
+      ]
+        .map((t) => String(t || '').replace(/[|,]+/g, ' ').trim())
+        .filter(Boolean)
+        .filter((v, idx, arr) => arr.indexOf(v) === idx)
+        .join('|');
+      const internalNote = [
+        `Bin: ${item.bin_location || 'BAY-B'}`,
+        donorVin ? `VIN: ${donorVin}` : '',
+        `MPN: ${tax.mpn}`,
+        `Origin: ${tax.countryCodeOfOrigin}`,
+        `Shipping: ${shippingPolicy}`,
+        `eBayCat: ${tax.ebayUsCategoryId}`,
+        `Zip: ${settings.zip || '98467'}`
+      ].filter(Boolean).join(' | ');
+
       rows.push([
-        item.sku, title80, cleanDesc, tax.brand || item.brand || 'OEM', tax.mpn, condOut,
-        basePrice, 1, item.fitment_years || '', item.fitment_make || '', item.fitment_model || '',
-        donorVin, tax.countryCodeOfOrigin,
-        tax.ebayUsCategoryId, dims.weight_lbs, dims.length_in, dims.width_in, dims.height_in,
-        shippingPolicy, settings.zip || '98467', imgUrl, extraImgs,
-        item.bin_location || ''
+        title80,
+        cleanDesc,
+        basePrice,
+        tax.brand || item.brand || 'OEM',
+        crosslistCondition,
+        crosslistColor,
+        1,
+        weightOuncesInt,
+        'Ounces',
+        lenInt,
+        widInt,
+        hgtInt,
+        'Inches',
+        pipeTags,
+        item.sku,
+        'SomeoneElse',
+        'TRUE',
+        'FALSE',
+        internalNote,
+        allPhotosPipe
       ].map(csvEscape).join(','));
     } else {
       rows.push([
