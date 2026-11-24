@@ -3622,9 +3622,10 @@ async function hydrateInventoryFromShopifyCoMaster({
   const tokenRef = { token: auth.token };
   const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
 
+  const onlyActiveFilter = onlyActive && !reactivateAccidentallyArchived ? 'status:active' : null;
   const query = `
-    query HydrateAllowlistProducts($cursor: String) {
-      products(first: 100, after: $cursor) {
+    query HydrateAllowlistProducts($cursor: String, $queryFilter: String) {
+      products(first: 100, after: $cursor, query: $queryFilter) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
@@ -3667,25 +3668,36 @@ async function hydrateInventoryFromShopifyCoMaster({
   let pages = 0;
   while (pages < 60) {
     pages++;
-    const resp = await shopifyFetchWithRetry(
-      graphqlUrl,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ query, variables: { cursor } })
-      },
-      { authMode: auth.authMode, settings, tokenRef }
-    );
-    if (!resp.ok) {
-      throw new Error(`Shopify GraphQL hydration scan failed (HTTP ${resp.status})`);
+    let payload = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const resp = await shopifyFetchWithRetry(
+        graphqlUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ query, variables: { cursor, queryFilter: onlyActiveFilter } })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (!resp.ok) {
+        throw new Error(`Shopify GraphQL hydration scan failed (HTTP ${resp.status})`);
+      }
+      payload = await resp.json();
+      const throttled = Array.isArray(payload?.errors) && payload.errors.some((e) => /throttl/i.test(String(e?.message || e?.extensions?.code || '')));
+      if (throttled) {
+        const waitMs = 800 * (attempt + 1);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      break;
     }
-    const payload = await resp.json();
     const conn = payload?.data?.products;
     const nodes = conn?.nodes || [];
     for (const n of nodes) allNodes.push(n);
     if (!conn?.pageInfo?.hasNextPage || !conn?.pageInfo?.endCursor) break;
     cursor = conn.pageInfo.endCursor;
-    await new Promise((r) => setTimeout(r, 120));
+    const avail = Number(payload?.extensions?.cost?.throttleStatus?.currentlyAvailable ?? 1000);
+    await new Promise((r) => setTimeout(r, avail < 350 ? 900 : 180));
   }
 
   const stripHtmlToText = (html = '') =>
@@ -4340,8 +4352,39 @@ async function archiveSkusOnShopifyAndDb({ skus = [], archiveNonParts = true } =
 
     if (!canCallShopify) continue;
 
-    let productId = String(row.shopify_product_id || '').trim();
-    if (!productId) {
+    const productIdsToArchive = new Set();
+    if (String(row.shopify_product_id || '').trim()) {
+      productIdsToArchive.add(String(row.shopify_product_id).trim());
+    }
+    try {
+      const findResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `query FindBySku($q: String!) {
+              products(first: 15, query: $q) {
+                nodes { id status title }
+              }
+            }`,
+            variables: { q: `sku:${sku}` }
+          })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (findResp.ok) {
+        const fData = await findResp.json();
+        for (const n of fData?.data?.products?.nodes || []) {
+          const m = String(n?.id || '').match(/(\d+)$/);
+          if (m && String(n?.status || '').toUpperCase() !== 'ARCHIVED') {
+            productIdsToArchive.add(m[1]);
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (productIdsToArchive.size === 0) {
       try {
         const handle = sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const lookupResp = await shopifyFetchWithRetry(
@@ -4351,54 +4394,54 @@ async function archiveSkusOnShopifyAndDb({ skus = [], archiveNonParts = true } =
         );
         if (lookupResp.ok) {
           const lData = await lookupResp.json();
-          if (lData?.products?.[0]?.id) productId = String(lData.products[0].id);
+          if (lData?.products?.[0]?.id) productIdsToArchive.add(String(lData.products[0].id));
         }
       } catch (_) {}
     }
 
-    if (!productId) continue;
-
-    try {
-      const gqlResp = await shopifyFetchWithRetry(
-        `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            query: `mutation ArchiveNonPartProduct($product: ProductUpdateInput!) {
-              productUpdate(product: $product) {
-                product { id title status }
-                userErrors { field message }
+    for (const productId of productIdsToArchive) {
+      try {
+        const gqlResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              query: `mutation ArchiveNonPartProduct($product: ProductUpdateInput!) {
+                productUpdate(product: $product) {
+                  product { id title status }
+                  userErrors { field message }
+                }
+              }`,
+              variables: {
+                product: {
+                  id: `gid://shopify/Product/${productId}`,
+                  status: 'ARCHIVED'
+                }
               }
-            }`,
-            variables: {
-              product: {
-                id: `gid://shopify/Product/${productId}`,
-                status: 'ARCHIVED'
-              }
-            }
-          })
-        },
-        { authMode: auth.authMode, settings, tokenRef }
-      );
-      if (!gqlResp.ok) {
-        errors.push(`${sku}: Shopify HTTP ${gqlResp.status}`);
-      } else {
-        const data = await gqlResp.json();
-        const uerrs = data?.data?.productUpdate?.userErrors || [];
-        if (data?.errors?.length || uerrs.length) {
-          errors.push(`${sku}: ${JSON.stringify(data.errors || uerrs).slice(0, 180)}`);
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (!gqlResp.ok) {
+          errors.push(`${sku} (${productId}): Shopify HTTP ${gqlResp.status}`);
         } else {
-          archivedShopify.push({
-            sku,
-            shopify_product_id: productId,
-            shopify_status: data?.data?.productUpdate?.product?.status || 'ARCHIVED',
-            title: data?.data?.productUpdate?.product?.title || row.title
-          });
+          const data = await gqlResp.json();
+          const uerrs = data?.data?.productUpdate?.userErrors || [];
+          if (data?.errors?.length || uerrs.length) {
+            errors.push(`${sku} (${productId}): ${JSON.stringify(data.errors || uerrs).slice(0, 180)}`);
+          } else {
+            archivedShopify.push({
+              sku,
+              shopify_product_id: productId,
+              shopify_status: data?.data?.productUpdate?.product?.status || 'ARCHIVED',
+              title: data?.data?.productUpdate?.product?.title || row.title
+            });
+          }
         }
+      } catch (err) {
+        errors.push(`${sku} (${productId}): ${err.message}`);
       }
-    } catch (err) {
-      errors.push(`${sku}: ${err.message}`);
     }
   }
 
