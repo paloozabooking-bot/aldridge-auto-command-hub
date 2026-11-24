@@ -4281,6 +4281,147 @@ async function syncAllNativeShippingToShopify({ limit = 0, skus = [], onProgress
   };
 }
 
+/**
+ * SURGICAL SKU ARCHIVE (SQLite + Shopify):
+ * Archives specific SKUs (and/or any SKU matching isNonPartReferenceItem) in SQLite (status='archived', quantity=0)
+ * AND on Shopify (status='ARCHIVED') without touching any other active listings.
+ */
+async function archiveSkusOnShopifyAndDb({ skus = [], archiveNonParts = true } = {}) {
+  const { isNonPartReferenceItem } = require('./db');
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+  const now = new Date().toISOString();
+
+  const targetSkuSet = new Set(
+    (Array.isArray(skus) ? skus : [])
+      .map((s) => String(s || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+
+  const allRows = db.prepare('SELECT * FROM inventory_items').all();
+  const matchedRows = [];
+  const seenSkus = new Set();
+
+  for (const row of allRows) {
+    const skuUp = String(row.sku || '').trim().toUpperCase();
+    if (!skuUp) continue;
+    const np = archiveNonParts ? isNonPartReferenceItem(row) : { isNonPart: false };
+    if (targetSkuSet.has(skuUp) || np.isNonPart) {
+      matchedRows.push({ row, reason: np.isNonPart ? np.reason : 'Explicit staff archive' });
+      seenSkus.add(skuUp);
+    }
+  }
+
+  // Also include explicitly requested SKUs even if not present in SQLite (so Shopify still archives by handle!)
+  for (const skuUp of targetSkuSet) {
+    if (!seenSkus.has(skuUp)) {
+      matchedRows.push({ row: { id: null, sku: skuUp, title: skuUp, shopify_product_id: '' }, reason: 'Explicit staff archive' });
+    }
+  }
+
+  const archivedSqlite = [];
+  const archivedShopify = [];
+  const errors = [];
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+  const canCallShopify = Boolean(domain && auth.token && auth.authMode !== 'shpss_missing_client_id');
+
+  for (const entry of matchedRows) {
+    const { row, reason } = entry;
+    const sku = String(row.sku || '').trim();
+    if (row.id) {
+      db.prepare(`
+        UPDATE inventory_items
+        SET status = 'archived', quantity = 0, updated_at = ?
+        WHERE id = ?
+      `).run(now, row.id);
+      archivedSqlite.push({ sku, id: row.id, title: row.title, reason });
+    }
+
+    if (!canCallShopify) continue;
+
+    let productId = String(row.shopify_product_id || '').trim();
+    if (!productId) {
+      try {
+        const handle = sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const lookupResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products.json?handle=${encodeURIComponent(handle)}&limit=1`,
+          { method: 'GET', headers: { Accept: 'application/json' } },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (lookupResp.ok) {
+          const lData = await lookupResp.json();
+          if (lData?.products?.[0]?.id) productId = String(lData.products[0].id);
+        }
+      } catch (_) {}
+    }
+
+    if (!productId) continue;
+
+    try {
+      const gqlResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            query: `mutation ArchiveNonPartProduct($product: ProductUpdateInput!) {
+              productUpdate(product: $product) {
+                product { id title status }
+                userErrors { field message }
+              }
+            }`,
+            variables: {
+              product: {
+                id: `gid://shopify/Product/${productId}`,
+                status: 'ARCHIVED'
+              }
+            }
+          })
+        },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (!gqlResp.ok) {
+        errors.push(`${sku}: Shopify HTTP ${gqlResp.status}`);
+      } else {
+        const data = await gqlResp.json();
+        const uerrs = data?.data?.productUpdate?.userErrors || [];
+        if (data?.errors?.length || uerrs.length) {
+          errors.push(`${sku}: ${JSON.stringify(data.errors || uerrs).slice(0, 180)}`);
+        } else {
+          archivedShopify.push({
+            sku,
+            shopify_product_id: productId,
+            shopify_status: data?.data?.productUpdate?.product?.status || 'ARCHIVED',
+            title: data?.data?.productUpdate?.product?.title || row.title
+          });
+        }
+      }
+    } catch (err) {
+      errors.push(`${sku}: ${err.message}`);
+    }
+  }
+
+  logSync(
+    'outbound',
+    'shopify_surgical_archive',
+    'archive_non_part_skus',
+    'TARGETED',
+    errors.length ? 'partial' : 'success',
+    `Archived ${archivedSqlite.length} SQLite & ${archivedShopify.length} Shopify non-part/target SKUs (${archivedShopify.map((x) => x.sku).join(', ') || 'none'}); errors=${errors.length}.`
+  );
+
+  return {
+    ok: errors.length === 0,
+    shop_domain: domain || '',
+    archived_sqlite_count: archivedSqlite.length,
+    archived_shopify_count: archivedShopify.length,
+    archived_sqlite: archivedSqlite,
+    archived_shopify: archivedShopify,
+    errors
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -4305,6 +4446,7 @@ module.exports = {
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
   syncAllNativeShippingToShopify,
+  archiveSkusOnShopifyAndDb,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,

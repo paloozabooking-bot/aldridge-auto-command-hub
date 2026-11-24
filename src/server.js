@@ -63,6 +63,7 @@ const {
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
   syncAllNativeShippingToShopify,
+  archiveSkusOnShopifyAndDb,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
@@ -767,7 +768,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.7',
+        sw_version: 'v32.8',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -2258,6 +2259,21 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'GET' && pathname === '/api/employee/shopify/sync-shipping/status') {
         sendJson(res, 200, { ok: true, job: global.__aldridgeShopifyShippingJob || null });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/employee/shopify/archive-skus') {
+        try {
+          const rawStr = (await readRawBody(req)) || '{}';
+          let opts = {};
+          try { opts = rawStr ? JSON.parse(rawStr) : {}; } catch (_) {}
+          const skus = Array.isArray(opts.skus) ? opts.skus : [];
+          const archiveNonParts = opts.archive_non_parts !== false;
+          const result = await archiveSkusOnShopifyAndDb({ skus, archiveNonParts });
+          sendJson(res, 200, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify SKU archive failed.' });
+        }
         return;
       }
 

@@ -1256,10 +1256,22 @@ function isAllowedActiveDonorVehicle(input = {}) {
 
 const STRICT_PROHIBITED_PART_REGEX = /\b(air\s*bag|airbag|srs|supplemental\s+inflatable\s+restraint|clock\s*spring|clockspring|spiral\s*cable|seat\s*belt\s*retractor|seat\s*belt\s*pretensioner|seatbelt\s*retractor|seatbelt\s*pretensioner|pyrotechnic|inflator|catalytic\s*converter|catalytic|cat\s*converter|manifold\s+with\s+cat|trim\s+panel\s+module|trim\s+component)\b/i;
 
-// v32.3: Non-part reference photo/sticker filter (VIN stickers, door jamb decals, dash VIN plates, empty photos)
-const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+automotive\s+part|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo)\b/i;
+// v32.8: Non-part reference photo/sticker filter (VIN stickers, door jamb decals, U-Haul truck photos, handwritten parts list papers, empty photos)
+const NON_PART_BANNED_SKUS = new Set([
+  'ALD-04TOY-PHOTO-OF-U-HAU-80E3',
+  'ALD-04TOY-PAPER-WITH-HAN-7CC4'
+]);
+const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+(?:specific\s+)?automotive(?:\s+part)?|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo|photo\s+of\s+u-?haul|u-?haul\s*trucks?|paper\s+with\s+handwritten|handwritten\s+(?:parts?\s+)?list|handwritten\s+notes?|parts?\s+list\s+(?:paper|sheet|note)|shop\s+lot\s+photo|parking\s+lot\s+photo|receipt\s+photo|invoice\s+photo)\b/i;
 
 function isNonPartReferenceItem(fields = {}) {
+  const skuUpper = String(fields.sku || '').trim().toUpperCase();
+  if (skuUpper && NON_PART_BANNED_SKUS.has(skuUpper)) {
+    return {
+      isNonPart: true,
+      matchedTerm: skuUpper,
+      reason: `Non-Part Reference SKU Permanently Blocked: "${skuUpper}" (U-Haul truck photo / handwritten parts list paper cannot be listed as a sellable OEM SKU).`
+    };
+  }
   const combined = [
     fields.sku || '',
     fields.title || '',
@@ -1274,7 +1286,7 @@ function isNonPartReferenceItem(fields = {}) {
     return {
       isNonPart: true,
       matchedTerm: m[0],
-      reason: `Non-Part Reference Blocked: "${m[0]}" (VIN sticker / door-jamb decal / certification label / non-part reference photo cannot be listed as a sellable OEM SKU).`
+      reason: `Non-Part Reference Blocked: "${m[0]}" (VIN sticker / door-jamb decal / U-Haul truck photo / handwritten parts list paper cannot be listed as a sellable OEM SKU).`
     };
   }
   return { isNonPart: false, matchedTerm: '', reason: '' };

@@ -889,9 +889,22 @@ function generateDraftTrimHoldsCsv(sanitizedCsvText) {
   };
 }
 
-const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+automotive\s+part|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo)\b/i;
+const NON_PART_BANNED_SKUS = new Set([
+  'ALD-04TOY-PHOTO-OF-U-HAU-80E3',
+  'ALD-04TOY-PAPER-WITH-HAN-7CC4'
+]);
+
+const NON_PART_REFERENCE_REGEX = /\b(vin\s*(?:tag|plate|sticker|decal|label|certification|number\s*plate)|vehicle\s*certification\s*(?:label|sticker|decal)|door\s*jamb\s*(?:sticker|label|decal|vin|tag|placard)|dash\s*vin\s*(?:plate|tag|sticker)|federal\s*(?:certification|safety)\s*(?:sticker|label|decal)|tire\s*(?:loading|pressure|information)\s*(?:sticker|placard|label|decal)|emission\s*control\s*(?:label|sticker|decal)|no\s+automotive\s+parts?|no\s+part(?:s)?\s+visible|not\s+an?\s+(?:specific\s+)?automotive(?:\s+part)?|n\/a\s*[-–:]\s*no\s+(?:automotive\s+)?parts?|walkaround\s+photo|entire\s+vehicle\s+exterior|license\s*plate\s*photo|photo\s+of\s+u-?haul|u-?haul\s*trucks?|paper\s+with\s+handwritten|handwritten\s+(?:parts?\s+)?list|handwritten\s+notes?|parts?\s+list\s+(?:paper|sheet|note)|shop\s+lot\s+photo|parking\s+lot\s+photo|receipt\s+photo|invoice\s+photo)\b/i;
 
 function isNonPartReferenceListing(fields = {}) {
+  const skuUpper = String(fields.sku || '').trim().toUpperCase();
+  if (skuUpper && NON_PART_BANNED_SKUS.has(skuUpper)) {
+    return {
+      blocked: true,
+      matchedTerm: skuUpper,
+      reason: `Non-Part Reference SKU Permanently Blocked ("${skuUpper}"): U-Haul truck photos, handwritten parts list papers, and reference images cannot become sellable SKUs.`
+    };
+  }
   const blob = [
     fields.sku || '',
     fields.title || '',
@@ -905,7 +918,7 @@ function isNonPartReferenceListing(fields = {}) {
     ? {
         blocked: true,
         matchedTerm: m[0],
-        reason: `Non-Part Reference Photo Blocked ("${m[0]}"): VIN stickers, door-jamb decals, certification labels, dash VIN plates, and empty photos are reference-only and cannot become sellable SKUs.`
+        reason: `Non-Part Reference Photo Blocked ("${m[0]}"): VIN stickers, door-jamb decals, U-Haul truck photos, handwritten parts list papers, and reference photos cannot become sellable SKUs.`
       }
     : { blocked: false, matchedTerm: '', reason: '' };
 }
@@ -917,6 +930,7 @@ module.exports = {
   CONFIRMED_SOLD_OR_GHOST_SKUS,
   DUPLICATE_MERGE_TO_PRIMARY,
   DIRECT_PUNCH_LIST,
+  NON_PART_BANNED_SKUS,
   NON_PART_REFERENCE_REGEX,
   isNonPartReferenceListing,
   isCounterfeitMpn,
