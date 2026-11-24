@@ -64,6 +64,7 @@ const {
   syncAllToShopifyCoMaster,
   syncAllNativeShippingToShopify,
   archiveSkusOnShopifyAndDb,
+  updateShopifyProductTypesAndCategories,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
@@ -768,7 +769,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.10',
+        sw_version: 'v32.11',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -2274,6 +2275,88 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify SKU archive failed.' });
         }
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/employee/shopify/update-product-types') {
+        try {
+          const rawStr = (await readRawBody(req)) || '{}';
+          let opts = {};
+          try { opts = rawStr ? JSON.parse(rawStr) : {}; } catch (_) {}
+          const skus = Array.isArray(opts.skus) ? opts.skus : [];
+          const updates = Array.isArray(opts.updates) ? opts.updates : [];
+          const productType = opts.product_type !== undefined ? opts.product_type : opts.productType;
+          const categoryGid = opts.category_gid !== undefined ? opts.category_gid : opts.categoryGid;
+          const clearCategory = Boolean(opts.clear_category === true || opts.clearCategory === true);
+          const limit = Number(opts.limit || 0);
+          const runAsync = Boolean(opts.async === true || opts.async === 'true');
+
+          if (runAsync) {
+            const jobId = `SHCAT-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            global.__aldridgeShopifyProductTypeJob = {
+              job_id: jobId,
+              status: 'running',
+              started_at: new Date().toISOString(),
+              finished_at: '',
+              progress: {
+                total_active: 0,
+                processed: 0,
+                updated_count: 0,
+                errors_count: 0
+              },
+              result: null,
+              error: ''
+            };
+            setImmediate(async () => {
+              try {
+                const r = await updateShopifyProductTypesAndCategories({
+                  skus,
+                  updates,
+                  productType,
+                  categoryGid,
+                  clearCategory,
+                  limit,
+                  onProgress: (p) => {
+                    if (global.__aldridgeShopifyProductTypeJob) {
+                      global.__aldridgeShopifyProductTypeJob.progress = p;
+                    }
+                  }
+                });
+                global.__aldridgeShopifyProductTypeJob.result = r;
+                global.__aldridgeShopifyProductTypeJob.status = 'completed';
+                global.__aldridgeShopifyProductTypeJob.finished_at = new Date().toISOString();
+              } catch (catErr) {
+                global.__aldridgeShopifyProductTypeJob.error = catErr.message || String(catErr);
+                global.__aldridgeShopifyProductTypeJob.status = 'failed';
+                global.__aldridgeShopifyProductTypeJob.finished_at = new Date().toISOString();
+              }
+            });
+            sendJson(res, 202, {
+              ok: true,
+              accepted: true,
+              ...global.__aldridgeShopifyProductTypeJob,
+              poll_url: '/api/employee/shopify/update-product-types/status'
+            });
+            return;
+          }
+
+          const result = await updateShopifyProductTypesAndCategories({
+            skus,
+            updates,
+            productType,
+            categoryGid,
+            clearCategory,
+            limit
+          });
+          sendJson(res, 200, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify productType/category update failed.' });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/shopify/update-product-types/status') {
+        sendJson(res, 200, { ok: true, job: global.__aldridgeShopifyProductTypeJob || null });
         return;
       }
 

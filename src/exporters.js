@@ -4534,6 +4534,244 @@ async function archiveSkusOnShopifyAndDb({ skus = [], archiveNonParts = true } =
   };
 }
 
+/**
+ * Updates Shopify `productType` and/or Standard Product Taxonomy `category` on active
+ * marketplace-safe SKUs via Admin GraphQL `productUpdate` (API 2027-01).
+ * Supports both per-SKU overrides (`updates: [{ sku, product_type, category_gid, clear_category }]`)
+ * for targeted Crosslist category-mapping tests and uniform bulk updates across all active SKUs.
+ */
+async function updateShopifyProductTypesAndCategories({
+  skus = [],
+  updates = [],
+  productType = undefined,
+  categoryGid = undefined,
+  clearCategory = false,
+  limit = 0,
+  onProgress = null
+} = {}) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return {
+      ok: false,
+      mode: 'not_configured',
+      message: 'Shopify Admin API credentials not configured in this environment.',
+      errors: ['Shopify Admin API credentials not configured']
+    };
+  }
+
+  const overrideMap = new Map();
+  if (Array.isArray(updates)) {
+    for (const u of updates) {
+      const k = String(u?.sku || '').trim().toUpperCase();
+      if (k) overrideMap.set(k, u);
+    }
+  }
+
+  const hasGlobalChange = productType !== undefined || categoryGid !== undefined || clearCategory === true;
+  if (!hasGlobalChange && overrideMap.size === 0) {
+    return {
+      ok: false,
+      error: 'Provide product_type, category_gid, clear_category: true, or an updates[] array.'
+    };
+  }
+
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+
+  const allDbItems = db.prepare('SELECT * FROM inventory_items').all();
+  let targetItems = ensureDeduplicatedItems(allDbItems.filter(isMarketplaceSafeItem));
+
+  const skuFilter = new Set();
+  if (Array.isArray(skus)) {
+    for (const s of skus) {
+      const k = String(s || '').trim().toUpperCase();
+      if (k) skuFilter.add(k);
+    }
+  }
+  if (skuFilter.size === 0 && overrideMap.size > 0) {
+    for (const k of overrideMap.keys()) skuFilter.add(k);
+  }
+  if (skuFilter.size > 0) {
+    targetItems = targetItems.filter((i) => skuFilter.has(String(i.sku || '').trim().toUpperCase()));
+  }
+  const lim = Number(limit || 0);
+  if (lim > 0) {
+    targetItems = targetItems.slice(0, lim);
+  }
+
+  let processed = 0;
+  let updatedCount = 0;
+  const results = [];
+  const errors = [];
+
+  const emitProgress = () => {
+    if (typeof onProgress === 'function') {
+      onProgress({
+        total_active: targetItems.length,
+        processed,
+        updated_count: updatedCount,
+        errors_count: errors.length
+      });
+    }
+  };
+  emitProgress();
+
+  const gqlMutation = `mutation UpdateProductTypeAndCategory($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
+      product {
+        id
+        title
+        productType
+        category { id fullName }
+      }
+      userErrors { field message }
+    }
+  }`;
+
+  for (const item of targetItems) {
+    const sku = String(item.sku || '').trim();
+    const skuUpper = sku.toUpperCase();
+    const ov = overrideMap.get(skuUpper) || {};
+
+    const effProductType = ov.product_type !== undefined
+      ? ov.product_type
+      : (ov.productType !== undefined ? ov.productType : productType);
+    const effClearCategory = ov.clear_category !== undefined
+      ? Boolean(ov.clear_category)
+      : (ov.clearCategory !== undefined ? Boolean(ov.clearCategory) : Boolean(clearCategory));
+    const effCategoryGid = ov.category_gid !== undefined
+      ? ov.category_gid
+      : (ov.categoryGid !== undefined ? ov.categoryGid : categoryGid);
+
+    let productId = String(item.shopify_product_id || '').trim();
+    if (!productId) {
+      try {
+        const handle = sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const lookupResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products.json?handle=${encodeURIComponent(handle)}&limit=1`,
+          { method: 'GET', headers: { Accept: 'application/json' } },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (lookupResp.ok) {
+          const lData = await lookupResp.json();
+          if (lData?.products?.[0]?.id) {
+            productId = String(lData.products[0].id);
+            try {
+              db.prepare('UPDATE inventory_items SET shopify_product_id = ? WHERE id = ?').run(productId, item.id);
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!productId) {
+      errors.push(`${sku}: Missing Shopify product ID`);
+      processed++;
+      emitProgress();
+      continue;
+    }
+
+    const productInput = { id: `gid://shopify/Product/${productId}` };
+    if (effProductType !== undefined && effProductType !== null) {
+      productInput.productType = String(effProductType);
+    }
+    if (effClearCategory) {
+      productInput.category = null;
+    } else if (effCategoryGid) {
+      productInput.category = String(effCategoryGid);
+    }
+
+    let succeeded = false;
+    let lastErr = '';
+    let updatedProduct = null;
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const gqlResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              query: gqlMutation,
+              variables: { product: productInput }
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (!gqlResp.ok) {
+          lastErr = `HTTP ${gqlResp.status}`;
+          if (gqlResp.status === 429 || gqlResp.status >= 500) {
+            await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+            continue;
+          }
+          break;
+        }
+        const data = await gqlResp.json();
+        const isThrottled = Array.isArray(data?.errors) && data.errors.some((e) => /throttled/i.test(String(e?.message || e?.extensions?.code || '')));
+        if (isThrottled) {
+          lastErr = 'THROTTLED';
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+          continue;
+        }
+        const uerrs = data?.data?.productUpdate?.userErrors || [];
+        if (data?.errors?.length || uerrs.length) {
+          lastErr = JSON.stringify(data.errors || uerrs).slice(0, 220);
+          break;
+        }
+        updatedProduct = data?.data?.productUpdate?.product || null;
+        succeeded = true;
+        break;
+      } catch (err) {
+        lastErr = err.message || String(err);
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+
+    if (succeeded) {
+      updatedCount++;
+      if (targetItems.length <= 25 || results.length < 15) {
+        results.push({
+          sku,
+          shopify_product_id: productId,
+          title: updatedProduct?.title || item.title || '',
+          product_type: updatedProduct?.productType ?? '',
+          category_id: updatedProduct?.category?.id || null,
+          category_full_name: updatedProduct?.category?.fullName || null
+        });
+      }
+    } else {
+      errors.push(`${sku} (${productId}): ${lastErr || 'Unknown error'}`);
+    }
+
+    processed++;
+    emitProgress();
+    if (targetItems.length > 5) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  logSync(
+    'outbound',
+    'shopify_product_type_category',
+    'update_product_types_and_categories',
+    targetItems.length <= 10 ? 'TARGETED' : 'BULK',
+    errors.length ? 'partial' : 'success',
+    `Updated Shopify productType/category on ${updatedCount}/${targetItems.length} SKUs (errors=${errors.length}).`
+  );
+
+  return {
+    ok: errors.length === 0,
+    shop_domain: domain,
+    total_active: targetItems.length,
+    processed,
+    updated_count: updatedCount,
+    results,
+    errors
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -4559,6 +4797,7 @@ module.exports = {
   syncAllToShopifyCoMaster,
   syncAllNativeShippingToShopify,
   archiveSkusOnShopifyAndDb,
+  updateShopifyProductTypesAndCategories,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
