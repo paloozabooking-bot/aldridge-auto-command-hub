@@ -3894,7 +3894,7 @@ async function hydrateInventoryFromShopifyCoMaster({
       }
       const fallbackDims = resolvePartDimensionsAndWeight({ title: w.cleanTitle, category: w.productType });
       const hydratedLegacySmallBox =
-        !weightLbs || weightLbs <= 0 || weightLbs === 4.5 || weightLbs === 6 || weightLbs === 8.5 ||
+        !weightLbs || weightLbs <= 0 || weightLbs === 2 || weightLbs === 4.5 || weightLbs === 6 || weightLbs === 8.5 ||
         !lengthIn || !widthIn || !heightIn ||
         (lengthIn === 10 && widthIn === 8 && heightIn === 6) ||
         (lengthIn === 14 && widthIn === 12 && heightIn === 10) ||
