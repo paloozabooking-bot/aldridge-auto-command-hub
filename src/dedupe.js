@@ -304,7 +304,7 @@ const SOLD_SUBARU_TRANSMISSION_SKUS = new Set([
   'ALD-98SUB-AUTOMATIC-TRAN-FFBA'
 ]);
 const SOLD_SUBARU_TRANSMISSION_FILE_REGEX = /\b(?:P0126__|P1942__|P0082__)|1998[\s_-]+subaru[\s_-]+(?:outback|forester)[\s_-]+(?:automatic[\s_-]+)?transmission|2003[\s_-]+subaru[\s_-]+outback[\s_-]+manual[\s_-]+transmission/i;
-const GHOST_LACROSSE_REGEX = /\b(1G4GA5GR2FF246661|LACROSSE-15-BAYB|buick[\s_-]+lacrosse)\b/i;
+const DISPOSED_FLEET_BLOCK_REGEX = /\b(1G4GA5GR2FF246661|3C3CFFAR2FT502634|1GCCS1449WK235424|JF1SF655XWH765781|4S4BP60C997340376|4S3BH686936656339|4S3BP686754320948|5N1ED28T81C544357|JT2BG12K3T0403962|KMHFU45DX1A151775|1GCEK19039Z249099|LACROSSE-15-BAYB|buick[\s_-]+lacrosse|chevy[\s_-]+s-?10|chevrolet[\s_-]+s-?10|ford[\s_-]+escape|honda[\s_-]+od(?:y|e)ssey|nissan[\s_-]+xterra|subaru[\s_-]+forester|subaru[\s_-]+outback|subaru[\s_-]+legacy|1978[\s_-]+toyota[\s_-]+pickup|toyota[\s_-]+pickup|chevrolet[\s_-]+equinox|chevy[\s_-]+equinox|(?:2014|2015|2016)[\s_-]+fiat[\s_-]+500|toyota[\s_-]+camry|hyundai[\s_-]+xg300|chevrolet[\s_-]+silverado)\b/i;
 
 function checkSoldOrderAndSrsBlocklist({ filename = '', legacySku = '', title = '', description = '' } = {}) {
   const legacyInfo = legacySku ? { code: String(legacySku).toUpperCase() } : extractLegacySkuPrefix(filename);
@@ -312,11 +312,11 @@ function checkSoldOrderAndSrsBlocklist({ filename = '', legacySku = '', title = 
   const soldSet = getLiveSoldSkuSet();
   const rawBlob = `${filename} ${legacySku} ${title} ${description}`;
 
-  if (GHOST_LACROSSE_REGEX.test(rawBlob)) {
+  if (DISPOSED_FLEET_BLOCK_REGEX.test(rawBlob)) {
     return {
       blocked: true,
-      category: 'ghost_vehicle_banned',
-      reason: 'Permanently blocked ghost vehicle: 2015 Buick LaCrosse (1G4GA5GR2FF246661) was never owned by Aldridge Auto.'
+      category: 'disposed_fleet_firewall',
+      reason: 'Permanently blocked by 7-Vehicle Active Donor Allowlist Firewall (disposed/ghost/unapproved vehicle).'
     };
   }
 

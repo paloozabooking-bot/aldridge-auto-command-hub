@@ -17,6 +17,8 @@ const {
   generateSecurityCode,
   computeShippingClass,
   validateVinStrict,
+  ACTIVE_DONOR_ALLOWLIST,
+  isAllowedActiveDonorVehicle,
   purgeGhostAndBlockedInventory,
   validatePartCompliance,
   validateInventoryItemForPublish,
@@ -521,10 +523,18 @@ const server = http.createServer(async (req, res) => {
       const requestedOrg = urlObj.searchParams.get('org') || req.headers['x-org-slug'] || req.headers.host || 1;
       const organization = resolveOrganization(requestedOrg);
       const donorMap = buildDonorMap();
-      const items = db.prepare("SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification', 'duplicate_archived') ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
-      const pendingVerificationItems = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC").all().map((r) => hydrateInventoryItem(r, donorMap));
+      const items = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
+        .all()
+        .map((r) => hydrateInventoryItem(r, donorMap))
+        .filter((item) => isAllowedActiveDonorVehicle(item).allowed);
+      const pendingVerificationItems = db.prepare("SELECT * FROM inventory_items WHERE status = 'pending_verification' ORDER BY id DESC")
+        .all()
+        .map((r) => hydrateInventoryItem(r, donorMap))
+        .filter((item) => isAllowedActiveDonorVehicle(item).allowed);
       const duplicateArchivedCount = Number(db.prepare("SELECT COUNT(*) c FROM inventory_items WHERE status = 'duplicate_archived'").get()?.c || 0);
-      const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC').all();
+      const donors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC')
+        .all()
+        .filter((d) => isAllowedActiveDonorVehicle(d).allowed);
       const specials = db.prepare('SELECT * FROM specials WHERE active = 1 ORDER BY id DESC').all();
       const appointments = db.prepare('SELECT * FROM appointments ORDER BY id DESC LIMIT 100').all().map((a) => ({
         ...a,
@@ -655,7 +665,10 @@ const server = http.createServer(async (req, res) => {
     // Donor Vehicle Garage
     if (pathname === '/api/donors') {
       if (method === 'GET') {
-        sendJson(res, 200, db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC').all());
+        const allowedDonors = db.prepare('SELECT * FROM donor_vehicles ORDER BY id DESC')
+          .all()
+          .filter((d) => isAllowedActiveDonorVehicle(d).allowed);
+        sendJson(res, 200, allowedDonors);
         return;
       }
       if (method === 'POST') {
@@ -663,6 +676,15 @@ const server = http.createServer(async (req, res) => {
         const vinCheck = validateVinStrict(b.vin);
         if (vinCheck.empty || !vinCheck.valid) {
           return sendJson(res, 422, { error: vinCheck.reason || 'A valid 17-digit NHTSA Modulo-11 VIN is required to add a donor vehicle.' });
+        }
+        const allowCheck = isAllowedActiveDonorVehicle({
+          vin: vinCheck.vin,
+          year: Number(b.year || 0),
+          make: b.make || '',
+          model: b.model || ''
+        });
+        if (!allowCheck.allowed) {
+          return sendJson(res, 422, { error: `ACTIVE DONOR ALLOWLIST FIREWALL BLOCKED: ${allowCheck.reason}` });
         }
         const now = new Date().toISOString();
         const stock = (b.stock_number || `DV-${b.year || '2020'}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`).trim();
@@ -687,7 +709,11 @@ const server = http.createServer(async (req, res) => {
     // Cloud Health & Direct Camera-to-Shopify Status Probe
     if (method === 'GET' && pathname === '/api/health') {
       const cfg = getSettings();
-      const activeCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'active'").get().c;
+      const donorMap = buildDonorMap();
+      const activeCount = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0")
+        .all()
+        .map((r) => hydrateInventoryItem(r, donorMap))
+        .filter((r) => isAllowedActiveDonorVehicle(r).allowed).length;
       const duplicateArchivedCount = db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'duplicate_archived'").get().c;
       const vinSessionsCount = db.prepare('SELECT COUNT(*) AS c FROM vin_intake_sessions').get().c;
       const revSummary = getPhotoReviewSummary();
@@ -698,6 +724,14 @@ const server = http.createServer(async (req, res) => {
         duplicate_archived_skus: duplicateArchivedCount,
         vin_intake_sessions_count: vinSessionsCount,
         mandatory_vin_intake_only: true,
+        active_donor_allowlist_firewall: true,
+        active_donor_allowlist_count: ACTIVE_DONOR_ALLOWLIST.length,
+        active_donor_allowlist: ACTIVE_DONOR_ALLOWLIST.map((v) => ({
+          slot: v.slot,
+          label: v.label,
+          vin: v.vin || null,
+          plate: v.plate || null
+        })),
         clean_slate_purged: Boolean(cfg.clean_slate_vin_purge_v1),
         shopify_clean_slate_purged: Boolean(cfg.shopify_clean_slate_purge_v1),
         photo_triage_clean_slate_purged: revSummary.total === 0,
@@ -721,7 +755,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v31.0',
+        sw_version: 'v32.0',
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -753,7 +787,8 @@ const server = http.createServer(async (req, res) => {
       const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
         .all()
         .filter((r) => getValidPhotos(r).length > 0 && validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
-        .map((r) => hydrateInventoryItem(r, donorMap));
+        .map((r) => hydrateInventoryItem(r, donorMap))
+        .filter((r) => isAllowedActiveDonorVehicle(r).allowed);
       const queue = rows.map((i) => ({
         sku: i.sku,
         title: i.title,
@@ -1026,16 +1061,21 @@ const server = http.createServer(async (req, res) => {
       const donorMap = buildDonorMap();
       let row = null;
       if (/^\d+$/.test(idOrSku)) {
-        row = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND status NOT IN ('compliance_blocked', 'duplicate_archived')").get(Number(idOrSku));
+        row = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND status = 'active' AND quantity > 0").get(Number(idOrSku));
       }
       if (!row && idOrSku) {
-        row = db.prepare("SELECT * FROM inventory_items WHERE UPPER(sku) = ? AND status NOT IN ('compliance_blocked', 'duplicate_archived')").get(idOrSku.toUpperCase());
+        row = db.prepare("SELECT * FROM inventory_items WHERE UPPER(sku) = ? AND status = 'active' AND quantity > 0").get(idOrSku.toUpperCase());
       }
       if (!row) {
         sendJson(res, 404, { ok: false, error: 'Part not found or no longer active.' });
         return;
       }
-      sendJson(res, 200, { ok: true, item: hydrateInventoryItem(row, donorMap) });
+      const hydrated = hydrateInventoryItem(row, donorMap);
+      if (!isAllowedActiveDonorVehicle(hydrated).allowed) {
+        sendJson(res, 404, { ok: false, error: 'Part not found or no longer active.' });
+        return;
+      }
+      sendJson(res, 200, { ok: true, item: hydrated });
       return;
     }
 
@@ -1043,11 +1083,17 @@ const server = http.createServer(async (req, res) => {
       if (method === 'GET') {
         const donorMap = buildDonorMap();
         const includePending = urlObj.searchParams.get('include_pending') === '1';
-        const rows = db.prepare(
-          includePending
-            ? "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'duplicate_archived') ORDER BY id DESC"
-            : "SELECT * FROM inventory_items WHERE status NOT IN ('compliance_blocked', 'pending_verification', 'duplicate_archived') ORDER BY id DESC"
-        ).all().map((r) => hydrateInventoryItem(r, donorMap));
+        const includeArchived = urlObj.searchParams.get('include_archived') === '1';
+        let sql = "SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC";
+        if (includeArchived) {
+          sql = "SELECT * FROM inventory_items ORDER BY id DESC";
+        } else if (includePending) {
+          sql = "SELECT * FROM inventory_items WHERE status IN ('active', 'pending_verification') ORDER BY id DESC";
+        }
+        let rows = db.prepare(sql).all().map((r) => hydrateInventoryItem(r, donorMap));
+        if (!includeArchived) {
+          rows = rows.filter((r) => isAllowedActiveDonorVehicle(r).allowed);
+        }
         sendJson(res, 200, rows);
         return;
       }
@@ -1072,6 +1118,21 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
+        // 0b. PERMANENT 7-VEHICLE ACTIVE DONOR ALLOWLIST FIREWALL
+        const sessionAllow = isAllowedActiveDonorVehicle({
+          vin: lockedSession.vin,
+          year: lockedSession.year,
+          make: lockedSession.make,
+          model: lockedSession.model,
+          title: b.title
+        });
+        if (!sessionAllow.allowed) {
+          return sendJson(res, 422, {
+            ok: false,
+            error: `ACTIVE DONOR ALLOWLIST FIREWALL BLOCKED: ${sessionAllow.reason}`
+          });
+        }
+
         // 1. Hard Compliance Block on SRS/Airbags/Clocksprings/Pretensioners & Catalytic Converters
         const comp = validatePartCompliance({
           title: b.title,
@@ -1083,16 +1144,20 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 422, { error: comp.reason });
         }
 
-        // 2. Hard Fake-VIN Block if donor_vin or donor_vehicle_id is supplied
+        // 2. Hard Fake-VIN & Allowlist Block if donor_vin or donor_vehicle_id is supplied
         if (b.donor_vin) {
           const vc = validateVinStrict(b.donor_vin);
           if (!vc.valid) return sendJson(res, 422, { error: vc.reason });
+          const ac = isAllowedActiveDonorVehicle({ vin: vc.vin, year: b.year, make: b.make, model: b.model });
+          if (!ac.allowed) return sendJson(res, 422, { error: `ACTIVE DONOR ALLOWLIST FIREWALL BLOCKED: ${ac.reason}` });
         }
         if (b.donor_vehicle_id) {
-          const dv = db.prepare('SELECT vin FROM donor_vehicles WHERE id = ?').get(Number(b.donor_vehicle_id));
+          const dv = db.prepare('SELECT vin, year, make, model FROM donor_vehicles WHERE id = ?').get(Number(b.donor_vehicle_id));
           if (dv && dv.vin) {
             const vc = validateVinStrict(dv.vin);
             if (!vc.valid) return sendJson(res, 422, { error: `Donor vehicle VIN blocked: ${vc.reason}` });
+            const ac = isAllowedActiveDonorVehicle(dv);
+            if (!ac.allowed) return sendJson(res, 422, { error: `ACTIVE DONOR ALLOWLIST FIREWALL BLOCKED: ${ac.reason}` });
           }
         }
 

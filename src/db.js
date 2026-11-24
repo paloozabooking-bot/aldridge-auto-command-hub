@@ -1052,8 +1052,43 @@ const VIN_TRANSLITERATION = {
 const VIN_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
 // PERMANENTLY BANNED GHOST VINS — NEVER OWNED BY ALDRIDGE AUTO (cannot be bypassed even by NHTSA ErrorCode === "0")
 const PERMANENTLY_BANNED_GHOST_VINS = new Set([
-  '1G4GA5GR2FF246661' // Ghost 2015 Buick LaCrosse / Verano mis-pasted onto 2016 Equinox folder — owner NEVER had a 2015 Buick LaCrosse
+  '1G4GA5GR2FF246661' // Ghost 2015 Buick LaCrosse / Verano — owner NEVER had a 2015 Buick LaCrosse
 ]);
+
+// PERMANENT 7-VEHICLE ACTIVE DONOR ALLOWLIST FIREWALL (DEFAULT-DENY EVERYTHING ELSE)
+const ACTIVE_DONOR_ALLOWLIST = [
+  { slot: 1, label: '2004 Toyota 4Runner', years: [2004], make: 'Toyota', model: '4Runner', vin: 'JTEBU14R040057212' },
+  { slot: 2, label: '2012 Toyota 4Runner', years: [2012, 2013], make: 'Toyota', model: '4Runner', vin: 'JTEBU5JR5D5117391' },
+  { slot: 3, label: '2010 Toyota Tundra', years: [2010], make: 'Toyota', model: 'Tundra', vin: '5TFHW5F12AX134337' },
+  { slot: 4, label: '2006 Dodge Dakota', years: [2006], make: 'Dodge', model: 'Dakota', vin: '1D7HE48K56S679400' },
+  { slot: 5, label: '2005 Honda CR-V', years: [2005], make: 'Honda', model: 'CR-V', vin: '', plate_hint: 'WA CLX7123' },
+  { slot: 6, label: '2010 Toyota RAV4', years: [2010], make: 'Toyota', model: 'RAV4', vin: 'JTMBF4DV1AD035337' },
+  { slot: 7, label: '2012 Fiat 500', years: [2012], make: 'Fiat', model: '500', vin: '3C3CFFBR7CT380721' }
+];
+
+const ALLOWED_ACTIVE_DONOR_VINS = new Set(
+  ACTIVE_DONOR_ALLOWLIST.map((v) => v.vin).filter(Boolean)
+);
+
+// PERMANENTLY DISPOSED / UNAPPROVED FLEET VINS (HARD BLOCKED AT INTAKE, SANITIZER, EXPORTER & SHOPIFY SYNC)
+const DISPOSED_DONOR_VINS = new Set([
+  '1G4GA5GR2FF246661', // Ghost 2015 Buick LaCrosse / Verano
+  '3C3CFFAR2FT502634', // Disposed 2015 Fiat 500 (keep ONLY 2012 Fiat 500)
+  '1GCCS1449WK235424', // Disposed 1998 Chevrolet S-10 Pickup
+  'JF1SF655XWH765781', // Disposed 1998 Subaru Forester
+  '4S4BP60C997340376', // Disposed 2009 Subaru Outback
+  '4S3BH686936656339', // Disposed 2003 Subaru Outback
+  '4S3BP686754320948', // Disposed 2005 Subaru Legacy / Outback
+  '5N1ED28T81C544357', // Disposed 2001 Nissan Xterra
+  '5N1ED22Y91C504281', // Invalid / disposed Nissan Xterra
+  '4F2CU92B01KA54281', // Disposed Ford Escape
+  '5FNRL18451B072461', // Disposed Honda Odyssey
+  'JT2BG12K3T0403962', // Disposed / unapproved 1996 Toyota Camry
+  'KMHFU45DX1A151775', // Disposed / unapproved 2001 Hyundai XG300
+  '1GCEK19039Z249099'  // Disposed / unapproved 2009 Chevrolet Silverado
+]);
+
+const DISPOSED_VEHICLE_TEXT_REGEX = /\b(chevy\s+s-?10|chevrolet\s+s-?10|s-?10\s+pickup|s10-98-bayb|ford\s+escape|escape-\d{2}|honda\s+od(?:y|e)ssey|odyssey-\d{2}|nissan\s+xterra|xterra-\d{2}|subaru\s+forester|forester-\d{2}|subaru\s+outback|outback-\d{2}|subaru\s+legacy|legacy-\d{2}|1978\s+toyota\s+pickup|toyota\s+pickup|toyota\s+hilux|chevrolet\s+equinox|chevy\s+equinox|equinox-\d{2}|buick\s+lacrosse|lacrosse-15-bayb|(?:2014|2015|2016)\s+fiat\s+500|fiat500-(?:14|15|16)-bayb|toyota\s+camry|camry-\d{2}|hyundai\s+xg300|xg300-\d{2}|chevrolet\s+silverado|chevy\s+silverado|silverado-\d{2})\b/i;
 
 // PERMANENTLY BANNED SOLD / DUPLICATE SUBARU TRANSMISSIONS & CONFIRMED SOLD SKUS
 const PERMANENTLY_BANNED_SOLD_SKUS = new Set([
@@ -1073,11 +1108,14 @@ const KNOWN_FAKE_OR_WRONG_VINS = new Set([
   '5KEAG4027J1000000'  // Placeholder 000000 tail
 ]);
 
-// Explicitly whitelisted real Aldridge Auto donor VINs (confirmed in live Shopify orders & yard records)
+// Explicitly whitelisted real Aldridge Auto active donor VINs (confirmed in live Shopify orders & yard records)
 const VERIFIED_DONOR_VIN_WHITELIST = new Set([
-  'JTEBU14R040057212', // 2004 Toyota 4Runner SR5 4x4 V6 (confirmed in Shopify Orders #1009, #1017, #1022-#1025, #1037, #1044, #1045)
+  'JTEBU14R040057212', // 2004 Toyota 4Runner SR5 4x4 V6
+  'JTEBU5JR5D5117391', // 2012/2013 Toyota 4Runner SR5 4x4 4.0L V6 (NHTSA ErrorCode: 0)
+  '5TFHW5F12AX134337', // 2010 Toyota Tundra
   '1D7HE48K56S679400', // 2006 Dodge Dakota SLT
-  'JTEBU5JR5D5117391'  // 2013 Toyota 4Runner SR5 4x4 4.0L V6 (verified NHTSA ErrorCode: 0 from Drive records & Unified_Master_Upload.csv)
+  'JTMBF4DV1AD035337', // 2010 Toyota RAV4
+  '3C3CFFBR7CT380721'  // 2012 Fiat 500
 ]);
 
 // Runtime registry of 17-char VINs that passed live NHTSA vPIC decoding (ErrorCode === "0" + valid check digit + factory model)
@@ -1099,7 +1137,7 @@ function isVinCheckDigitValid(rawVin) {
 
 function registerNhtsaVerifiedVin(rawVin) {
   const cleaned = String(rawVin || '').trim().toUpperCase();
-  if (PERMANENTLY_BANNED_GHOST_VINS.has(cleaned)) return false;
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(cleaned) || DISPOSED_DONOR_VINS.has(cleaned)) return false;
   if (/^[A-HJ-NPR-Z0-9]{17}$/.test(cleaned) && isVinCheckDigitValid(cleaned).valid) {
     NHTSA_VERIFIED_CLEAN_VINS.add(cleaned);
     return true;
@@ -1116,6 +1154,14 @@ function validateVinStrict(rawVin) {
       vin: cleaned,
       permanent_ghost_ban: true,
       reason: `PERMANENTLY BLOCKED GHOST VEHICLE VIN "${cleaned}" (2015 Buick LaCrosse / Verano — never owned by Aldridge Auto).`
+    };
+  }
+  if (DISPOSED_DONOR_VINS.has(cleaned)) {
+    return {
+      valid: false,
+      vin: cleaned,
+      disposed_fleet_ban: true,
+      reason: `PERMANENTLY BLOCKED DISPOSED / UNAPPROVED FLEET VIN "${cleaned}" (not in the 7-vehicle Active Donor Allowlist).`
     };
   }
   if (/^AUDIT-|^NO-VIN|^UNKNOWN|^N\/?A$|^VIN-TITLE-CHECK$/i.test(cleaned)) {
@@ -1156,6 +1202,63 @@ function validateVinStrict(rawVin) {
     };
   }
   return { valid: true, vin: cleaned, empty: false };
+}
+
+/**
+ * PERMANENT 7-VEHICLE ACTIVE DONOR ALLOWLIST FIREWALL (DEFAULT-DENY)
+ * Permits ONLY:
+ *  1) 2004 Toyota 4Runner (JTEBU14R040057212)
+ *  2) 2012/2013 Toyota 4Runner (JTEBU5JR5D5117391)
+ *  3) 2010 Toyota Tundra (5TFHW5F12AX134337)
+ *  4) 2006 Dodge Dakota (1D7HE48K56S679400)
+ *  5) 2005 Honda CR-V (requires verified 17-char NHTSA Honda CR-V VIN)
+ *  6) 2010 Toyota RAV4 (JTMBF4DV1AD035337)
+ *  7) 2012 Fiat 500 (3C3CFFBR7CT380721)
+ */
+function isAllowedActiveDonorVehicle(input = {}) {
+  const vin = String(input.verified_vin || input.donor_vin || input.vin || '').trim().toUpperCase();
+  const make = String(input.fitment_make || input.make || '').trim();
+  const model = String(input.fitment_model || input.model || '').trim();
+  const yearRaw = String(input.fitment_years || input.year || '').trim();
+  const yrMatch = yearRaw.match(/\b(19[6-9]\d|20[0-2]\d)\b/) || String(input.title || '').match(/\b(19[6-9]\d|20[0-2]\d)\b/);
+  const year = yrMatch ? parseInt(yrMatch[1], 10) : 0;
+  const textBlob = `${input.title || ''} ${make} ${model} ${yearRaw} ${input.bin_location || ''}`.trim();
+
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(vin) || DISPOSED_DONOR_VINS.has(vin)) {
+    return { allowed: false, reason: `Blocked disposed/ghost fleet VIN (${vin}).` };
+  }
+  if (DISPOSED_VEHICLE_TEXT_REGEX.test(textBlob)) {
+    return { allowed: false, reason: `Blocked disposed/unapproved vehicle ("${textBlob.slice(0, 70)}").` };
+  }
+  if (!vin || vin.length !== 17 || !validateVinStrict(vin).valid) {
+    return { allowed: false, reason: 'Strict Allowlist Firewall: requires a verified 17-character NHTSA donor VIN.' };
+  }
+
+  // Exact match against the 6 verified allowlist VINs
+  if (ALLOWED_ACTIVE_DONOR_VINS.has(vin)) {
+    const slot = ACTIVE_DONOR_ALLOWLIST.find((v) => v.vin === vin);
+    // Double-check Fiat 500 year cannot be 2014/2015/2016
+    if (make.toLowerCase() === 'fiat' && year && year !== 2012) {
+      return { allowed: false, reason: `Blocked non-2012 Fiat 500 (${year}); ONLY 2012 Fiat 500 is allowed.` };
+    }
+    return { allowed: true, slot };
+  }
+
+  // Slot 5: 2005 Honda CR-V (once Chris supplies its real 17-char NHTSA-verified 2005 Honda CR-V VIN)
+  const is2005Crv =
+    year === 2005 &&
+    /^honda$/i.test(make) &&
+    /^cr-?v\b/i.test(model) &&
+    /^(JHL|SHS|2HK|5J6)/i.test(vin) &&
+    vin[9] === '5';
+  if (is2005Crv) {
+    return { allowed: true, slot: ACTIVE_DONOR_ALLOWLIST[4] };
+  }
+
+  return {
+    allowed: false,
+    reason: `Blocked by 7-Vehicle Active Donor Allowlist Firewall: "${[year || '', make, model].filter(Boolean).join(' ') || vin}" (${vin}) is not one of the 7 active donor vehicles.`
+  };
 }
 
 const STRICT_PROHIBITED_PART_REGEX = /\b(air\s*bag|airbag|srs|supplemental\s+inflatable\s+restraint|clock\s*spring|clockspring|spiral\s*cable|seat\s*belt\s*retractor|seat\s*belt\s*pretensioner|seatbelt\s*retractor|seatbelt\s*pretensioner|pyrotechnic|inflator|catalytic\s*converter|catalytic|cat\s*converter|manifold\s+with\s+cat|trim\s+panel\s+module|trim\s+component)\b/i;
@@ -2250,22 +2353,24 @@ function isGhostOrBannedInventoryItem(item = {}) {
   const makeLower = String(item.fitment_make || '').toLowerCase();
   const modelLower = String(item.fitment_model || '').toLowerCase();
 
-  if (PERMANENTLY_BANNED_GHOST_VINS.has(vinUpper)) {
-    return { blocked: true, reason: `Permanently banned ghost vehicle VIN (${vinUpper} — 2015 Buick LaCrosse never owned by Aldridge Auto).` };
-  }
-  if (binUpper.includes('LACROSSE') || (makeLower === 'buick' && modelLower.includes('lacrosse')) || /\bbuick\s+lacrosse\b/i.test(titleLower)) {
-    return { blocked: true, reason: 'Permanently banned ghost 2015 Buick LaCrosse inventory item.' };
+  if (PERMANENTLY_BANNED_GHOST_VINS.has(vinUpper) || binUpper.includes('LACROSSE') || (makeLower === 'buick' && modelLower.includes('lacrosse')) || /\bbuick\s+lacrosse\b/i.test(titleLower)) {
+    return { blocked: true, ghost_delete: true, reason: `Permanently banned ghost 2015 Buick LaCrosse (${vinUpper || 'LACROSSE'}).` };
   }
   if (skuUpper && PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) {
-    return { blocked: true, reason: `Permanently blocked sold / duplicate Subaru transmission SKU (${skuUpper}).` };
+    return { blocked: true, ghost_delete: false, reason: `Permanently blocked sold / duplicate Subaru transmission SKU (${skuUpper}).` };
+  }
+  const allowCheck = isAllowedActiveDonorVehicle(item);
+  if (!allowCheck.allowed) {
+    return { blocked: true, ghost_delete: false, disposed_fleet: true, reason: allowCheck.reason };
   }
   return { blocked: false, reason: '' };
 }
 
-function purgeGhostAndBlockedInventory({ actor = 'system_v31_purge' } = {}) {
+function purgeGhostAndBlockedInventory({ actor = 'system_v32_allowlist_purge' } = {}) {
   const now = new Date().toISOString();
-  const allRows = db.prepare('SELECT id, sku, title, verified_vin, bin_location, fitment_make, fitment_model, status, quantity FROM inventory_items').all();
+  const allRows = db.prepare('SELECT id, sku, title, verified_vin, bin_location, fitment_years, fitment_make, fitment_model, status, quantity FROM inventory_items').all();
   let purgedGhostItems = 0;
+  let purgedDisposedFleet = 0;
   let purgedSoldTrans = 0;
   let purgedNoVinItems = 0;
   const purgedSkus = [];
@@ -2279,56 +2384,57 @@ function purgeGhostAndBlockedInventory({ actor = 'system_v31_purge' } = {}) {
   for (const row of allRows) {
     const skuUpper = String(row.sku || '').trim().toUpperCase();
     const vinUpper = String(row.verified_vin || '').trim().toUpperCase();
-    const ghostCheck = isGhostOrBannedInventoryItem(row);
+    const check = isGhostOrBannedInventoryItem(row);
 
-    if (ghostCheck.blocked) {
+    if (check.blocked) {
       if (row.status !== 'archived' || Number(row.quantity || 0) > 0) {
         archiveStmt.run(now, row.id);
-        if (PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) purgedSoldTrans++;
-        else purgedGhostItems++;
+        if (check.ghost_delete) purgedGhostItems++;
+        else if (PERMANENTLY_BANNED_SOLD_SKUS.has(skuUpper)) purgedSoldTrans++;
+        else if (!vinUpper || vinUpper.length !== 17) purgedNoVinItems++;
+        else purgedDisposedFleet++;
         purgedSkus.push(row.sku);
       }
-      continue;
-    }
-
-    // Strict "No Real Verified 17-Char Donor VIN = No Listing": quarantine/archive VIN-TITLE-CHECK or invalid VIN rows
-    const vinCheck = validateVinStrict(vinUpper);
-    if (row.status === 'active' && (!vinUpper || vinUpper.length !== 17 || !vinCheck.valid)) {
-      archiveStmt.run(now, row.id);
-      purgedNoVinItems++;
-      purgedSkus.push(row.sku);
     }
   }
 
-  // Delete ghost Buick LaCrosse donor vehicle & mark its intake sessions purged
-  const deletedDonors = db.prepare(`
-    DELETE FROM donor_vehicles
-    WHERE UPPER(COALESCE(vin, '')) = '1G4GA5GR2FF246661'
-       OR (LOWER(COALESCE(make, '')) = 'buick' AND LOWER(COALESCE(model, '')) LIKE '%lacrosse%')
-       OR UPPER(COALESCE(vin, '')) = 'VIN-TITLE-CHECK'
-  `).run().changes;
+  // Delete all disposed/ghost/non-allowlist donor_vehicles rows (keep ONLY the 7 active donor vehicles)
+  const allDonors = db.prepare('SELECT id, vin, year, make, model FROM donor_vehicles').all();
+  const delDonorStmt = db.prepare('DELETE FROM donor_vehicles WHERE id = ?');
+  let deletedDonors = 0;
+  for (const dv of allDonors) {
+    if (!isAllowedActiveDonorVehicle(dv).allowed) {
+      delDonorStmt.run(dv.id);
+      deletedDonors++;
+    }
+  }
 
-  const purgedSessions = db.prepare(`
-    UPDATE vin_intake_sessions
-    SET status = 'purged', updated_at = ?
-    WHERE UPPER(COALESCE(vin, '')) IN ('1G4GA5GR2FF246661', 'VIN-TITLE-CHECK')
-       OR (LOWER(COALESCE(make, '')) = 'buick' AND LOWER(COALESCE(model, '')) LIKE '%lacrosse%')
-  `).run(now).changes;
+  // Mark all disposed/ghost/non-allowlist vin_intake_sessions as purged
+  const allSessions = db.prepare("SELECT id, vin, year, make, model FROM vin_intake_sessions WHERE status != 'purged'").all();
+  const purgeSessionStmt = db.prepare("UPDATE vin_intake_sessions SET status = 'purged', updated_at = ? WHERE id = ?");
+  let purgedSessions = 0;
+  for (const sess of allSessions) {
+    if (!isAllowedActiveDonorVehicle(sess).allowed) {
+      purgeSessionStmt.run(now, sess.id);
+      purgedSessions++;
+    }
+  }
 
-  if (purgedGhostItems || purgedSoldTrans || purgedNoVinItems || deletedDonors || purgedSessions) {
+  if (purgedGhostItems || purgedDisposedFleet || purgedSoldTrans || purgedNoVinItems || deletedDonors || purgedSessions) {
     logSync(
       'internal',
-      'ghost_and_vin_gate_purge',
-      'v31_strict_purge',
+      'allowlist_firewall_purge',
+      'v32_7vehicle_purge',
       'ALL',
       'success',
-      `[${actor}] Purged ghost_lacrosse=${purgedGhostItems}, sold_subaru_trans=${purgedSoldTrans}, no_real_vin=${purgedNoVinItems}, donor_rows_deleted=${deletedDonors}, sessions_purged=${purgedSessions}.`
+      `[${actor}] Purged ghost_lacrosse=${purgedGhostItems}, disposed_fleet=${purgedDisposedFleet}, sold_subaru_trans=${purgedSoldTrans}, no_real_vin=${purgedNoVinItems}, donor_rows_deleted=${deletedDonors}, sessions_purged=${purgedSessions}.`
     );
   }
 
   return {
     ok: true,
     purged_ghost_lacrosse: purgedGhostItems,
+    purged_disposed_fleet: purgedDisposedFleet,
     purged_sold_subaru_trans: purgedSoldTrans,
     purged_no_real_vin: purgedNoVinItems,
     deleted_donor_vehicles: deletedDonors,
@@ -3141,12 +3247,17 @@ module.exports = {
   generateSecurityCode,
   generateReferralCode,
   computeShippingClass,
+  ACTIVE_DONOR_ALLOWLIST,
+  ALLOWED_ACTIVE_DONOR_VINS,
+  DISPOSED_DONOR_VINS,
+  DISPOSED_VEHICLE_TEXT_REGEX,
   PERMANENTLY_BANNED_GHOST_VINS,
   PERMANENTLY_BANNED_SOLD_SKUS,
   VERIFIED_DONOR_VIN_WHITELIST,
   isVinCheckDigitValid,
   registerNhtsaVerifiedVin,
   validateVinStrict,
+  isAllowedActiveDonorVehicle,
   isGhostOrBannedInventoryItem,
   purgeGhostAndBlockedInventory,
   validatePartCompliance,

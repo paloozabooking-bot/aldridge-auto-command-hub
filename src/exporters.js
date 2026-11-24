@@ -9,7 +9,9 @@ const {
   computeShippingClass,
   PERMANENTLY_BANNED_GHOST_VINS,
   PERMANENTLY_BANNED_SOLD_SKUS,
+  DISPOSED_VEHICLE_TEXT_REGEX,
   validateVinStrict,
+  isAllowedActiveDonorVehicle,
   isGhostOrBannedInventoryItem,
   purgeGhostAndBlockedInventory,
   validatePartCompliance,
@@ -72,6 +74,7 @@ function getShopifyGalleryPhotos(item) {
 function isMarketplaceSafeItem(item) {
   if (!item || Number(item.quantity || 0) <= 0 || item.status !== 'active') return false;
   if (isGhostOrBannedInventoryItem(item).blocked) return false;
+  if (!isAllowedActiveDonorVehicle(item).allowed) return false;
   const vVin = String(item.verified_vin || '').trim().toUpperCase();
   // STRICT NO REAL 17-CHAR VERIFIED DONOR VIN = NO LISTING (zero VIN-TITLE-CHECK bypass)
   if (!vVin || vVin.length !== 17 || !validateVinStrict(vVin).valid) return false;
@@ -1752,6 +1755,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   const settings = getSettings();
   const allDbItems = db.prepare('SELECT * FROM inventory_items').all();
   const items = allDbItems.filter(isMarketplaceSafeItem);
+  const activeAllowedSkusSet = new Set(items.map((r) => String(r.sku || '').trim().toUpperCase()).filter(Boolean));
   const blockedSkusSet = new Set([
     ...PROHIBITED_CAT_SKUS,
     ...PROHIBITED_SRS_AND_MISSING_PHOTO_SKUS,
@@ -1762,21 +1766,21 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   ]);
   const ghostDeleteSkusSet = new Set(
     allDbItems
-      .filter((r) => isGhostOrBannedInventoryItem(r).blocked)
+      .filter((r) => isGhostOrBannedInventoryItem(r).ghost_delete === true)
       .map((r) => String(r.sku || '').trim().toUpperCase())
       .filter(Boolean)
   );
   const duplicateArchivedSkusSet = new Set(
     allDbItems
-      .filter((r) => r.status === 'duplicate_archived' || r.status === 'sold' || r.status === 'archived')
+      .filter((r) => r.status === 'duplicate_archived' || r.status === 'sold' || r.status === 'archived' || isGhostOrBannedInventoryItem(r).disposed_fleet === true)
       .map((r) => String(r.sku || '').trim().toUpperCase())
-      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s))
+      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s) && !activeAllowedSkusSet.has(s))
   );
   const pendingVerificationSkusSet = new Set(
     allDbItems
       .filter((r) => r.status === 'pending_verification' || (r.status === 'active' && !validateInventoryItemForPublish(r).valid))
       .map((r) => String(r.sku || '').trim().toUpperCase())
-      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s) && !duplicateArchivedSkusSet.has(s))
+      .filter((s) => s && !blockedSkusSet.has(s) && !ghostDeleteSkusSet.has(s) && !duplicateArchivedSkusSet.has(s) && !activeAllowedSkusSet.has(s))
   );
 
   const auth = await resolveShopifyAccessToken(settings, { forceRefresh: Boolean(updateExisting) });
@@ -1808,6 +1812,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   const existingHandles = new Set();
   const existingSkus = new Map();
   const liveGhostProductsToDelete = new Map(); // productId -> { title, sku }
+  const liveDisposedOrNonAllowlistToArchive = new Map(); // productId -> { title, sku, status, inventory_item_id, inventory_quantity }
 
   let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,title,vendor,tags,status,variants,images`;
   while (nextUrl) {
@@ -1824,6 +1829,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
       existingHandles.add(String(p.handle || '').toLowerCase());
       const pBlob = `${p.title || ''} ${p.vendor || ''} ${p.tags || ''} ${p.handle || ''}`;
       const isLiveGhostLaCrosse = /\b(1G4GA5GR2FF246661|LACROSSE-15-BAYB|buick[\s_-]+lacrosse)\b/i.test(pBlob);
+      const isLiveDisposedVehicle = DISPOSED_VEHICLE_TEXT_REGEX.test(pBlob);
       const cleanCdnImages = (p.images || [])
         .filter((img) => img && img.src && !isQrCardUrl(img.src) && !/scan qr|security tag/i.test(String(img.alt || '')))
         .map((img) => img.src);
@@ -1837,9 +1843,11 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
         });
       }
 
+      let productMatchesAllowedActiveSku = false;
       for (const v of p.variants || []) {
         if (v.sku) {
           const skuUpper = String(v.sku).trim().toUpperCase();
+          if (activeAllowedSkusSet.has(skuUpper)) productMatchesAllowedActiveSku = true;
           existingSkus.set(skuUpper, {
             product_id: String(p.id || ''),
             handle: String(p.handle || ''),
@@ -1859,6 +1867,22 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
               inventory_item_id: String(v.inventory_item_id || '')
             });
           }
+        }
+      }
+
+      // 7-VEHICLE ALLOWLIST FIREWALL ON SHOPIFY: Any product NOT in the verified 7-vehicle active catalog (or matching disposed vehicles) MUST be archived & zeroed!
+      if (p.id && !liveGhostProductsToDelete.has(String(p.id))) {
+        const primaryVar = p.variants?.[0] || {};
+        const needsArchiveOrZero = String(p.status || '') !== 'archived' || Number(primaryVar.inventory_quantity || 0) > 0;
+        if (needsArchiveOrZero && (isLiveDisposedVehicle || !productMatchesAllowedActiveSku)) {
+          liveDisposedOrNonAllowlistToArchive.set(String(p.id), {
+            product_id: String(p.id),
+            title: String(p.title || ''),
+            sku: String(primaryVar.sku || ''),
+            status: String(p.status || 'active'),
+            inventory_item_id: String(primaryVar.inventory_item_id || ''),
+            inventory_quantity: Number(primaryVar.inventory_quantity || 0)
+          });
         }
       }
     }
@@ -1901,6 +1925,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   let pushed = 0;
   let updatedCount = 0;
   let deletedGhostLaCrosse = 0;
+  let archivedDisposedFleet = 0;
   let deletedQrImages = 0;
   let draftedBlocked = 0;
   let archivedPending = 0;
@@ -1921,7 +1946,6 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
         deletedGhostLaCrosse++;
         logSync('outbound', 'shopify_co_master', 'delete_ghost_lacrosse', ghost.sku || ghost.product_id, 'success', `Permanently DELETED ghost 2015 Buick LaCrosse product "${ghost.title}" (ID ${ghost.product_id}) from ${domain}.`);
       } else {
-        // Fallback: archive & zero inventory if delete rejected
         await shopifyFetchWithRetry(
           `https://${domain}/admin/api/2025-01/products/${ghost.product_id}.json`,
           {
@@ -1934,16 +1958,47 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
         await zeroShopifyInventoryItem(ghost.inventory_item_id);
         deletedGhostLaCrosse++;
       }
-      await new Promise((r) => setTimeout(r, 220));
+      await new Promise((r) => setTimeout(r, 180));
     } catch (err) {
       errors.push(`delete-ghost ${ghost.sku || ghost.product_id}: ${err.message}`);
+    }
+  }
+
+  // 0b. 7-VEHICLE ALLOWLIST FIREWALL PURGE ON SHOPIFY: Archive & zero EVERY disposed/unapproved/non-allowlist product!
+  for (const disp of liveDisposedOrNonAllowlistToArchive.values()) {
+    try {
+      if (disp.status !== 'archived') {
+        const archResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${disp.product_id}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              product: {
+                id: Number(disp.product_id),
+                status: 'archived',
+                tags: 'DISPOSED-FLEET-ARCHIVED, ALLOWLIST-FIREWALL'
+              }
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (archResp.ok) archivedDisposedFleet++;
+        else errors.push(`archive-disposed ${disp.sku || disp.product_id}: HTTP ${archResp.status}`);
+      }
+      if (Number(disp.inventory_quantity || 0) > 0) {
+        await zeroShopifyInventoryItem(disp.inventory_item_id);
+      }
+      await new Promise((r) => setTimeout(r, 180));
+    } catch (err) {
+      errors.push(`archive-disposed ${disp.sku || disp.product_id}: ${err.message}`);
     }
   }
 
   // 1. COMPLIANCE & SOLD TRANSMISSION ENFORCEMENT: Archive & zero prohibited/sold SKUs on Shopify!
   for (const blockedSku of blockedSkusSet) {
     const liveBlocked = existingSkus.get(blockedSku);
-    if (!liveBlocked || liveGhostProductsToDelete.has(liveBlocked.product_id)) continue;
+    if (!liveBlocked || liveGhostProductsToDelete.has(liveBlocked.product_id) || liveDisposedOrNonAllowlistToArchive.has(liveBlocked.product_id)) continue;
     const needsArchive = liveBlocked.status !== 'archived';
     const needsZero = Number(liveBlocked.inventory_quantity || 0) > 0;
     if (!needsArchive && !needsZero) continue;
@@ -1983,7 +2038,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   // 1b. ZERO-PLACEHOLDER & UNVERIFIED-VIN QUARANTINE: Archive & zero any pending_verification SKU on Shopify
   for (const pendSku of pendingVerificationSkusSet) {
     const livePend = existingSkus.get(pendSku);
-    if (!livePend || liveGhostProductsToDelete.has(livePend.product_id)) continue;
+    if (!livePend || liveGhostProductsToDelete.has(livePend.product_id) || liveDisposedOrNonAllowlistToArchive.has(livePend.product_id)) continue;
     const needsArchive = livePend.status !== 'archived';
     const needsZero = Number(livePend.inventory_quantity || 0) > 0;
     if (!needsArchive && !needsZero) continue;
@@ -2017,7 +2072,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   // 1c. PERMANENT DUPLICATE / SOLD ARCHIVAL
   for (const dupSku of duplicateArchivedSkusSet) {
     const liveDup = existingSkus.get(dupSku);
-    if (!liveDup || liveGhostProductsToDelete.has(liveDup.product_id)) continue;
+    if (!liveDup || liveGhostProductsToDelete.has(liveDup.product_id) || liveDisposedOrNonAllowlistToArchive.has(liveDup.product_id)) continue;
     const needsArchive = liveDup.status !== 'archived';
     const needsZero = Number(liveDup.inventory_quantity || 0) > 0;
     if (!needsArchive && !needsZero) continue;
@@ -2345,10 +2400,10 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
   logSync(
     'outbound',
     'shopify_co_master',
-    updateExisting ? 'live_api_v31_full_sync' : 'live_api_push',
+    updateExisting ? 'live_api_v32_allowlist_full_sync' : 'live_api_push',
     'ALL',
     errors.length ? 'partial' : 'success',
-    `Shopify v31 sync on ${domain} via ${auth.authMode}: created=${pushed}, updated=${updatedCount}, deleted_ghost_lacrosse=${deletedGhostLaCrosse}, deleted_qr_images=${deletedQrImages}, archived_blocked=${draftedBlocked}, archived_pending=${archivedPending}, archived_dupes=${archivedDuplicates}, publications=${publications.length}, collections_created=${collectionsSummary.collections_created}, errors=${errors.length} (active_catalog=${finalActiveCount}).`
+    `Shopify v32 Allowlist sync on ${domain} via ${auth.authMode}: created=${pushed}, updated=${updatedCount}, deleted_ghost_lacrosse=${deletedGhostLaCrosse}, archived_disposed_fleet=${archivedDisposedFleet}, deleted_qr_images=${deletedQrImages}, archived_blocked=${draftedBlocked}, archived_pending=${archivedPending}, archived_dupes=${archivedDuplicates}, publications=${publications.length}, collections_created=${collectionsSummary.collections_created}, errors=${errors.length} (active_7vehicle_catalog=${finalActiveCount}).`
   );
   return {
     mode: 'live_api',
@@ -2357,6 +2412,7 @@ async function syncAllToShopifyCoMaster({ updateExisting = false } = {}) {
     synced_count: pushed,
     updated_count: updatedCount,
     deleted_ghost_lacrosse_count: deletedGhostLaCrosse,
+    archived_disposed_fleet_count: archivedDisposedFleet,
     deleted_qr_images_count: deletedQrImages,
     updated_image_alts_count: updatedImageAlts,
     drafted_blocked_count: draftedBlocked,

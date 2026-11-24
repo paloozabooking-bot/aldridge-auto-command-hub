@@ -11,6 +11,7 @@ const {
   generateSecurityCode,
   computeShippingClass,
   validateVinStrict,
+  isAllowedActiveDonorVehicle,
   validatePartCompliance,
   validateInventoryItemForPublish,
   logSync
@@ -938,8 +939,16 @@ async function resolveUniversalVinFromInput(payload = {}, staffUser = 'Shop Staf
     throw err;
   }
 
-  // Decode via NHTSA vPIC FIRST before locking so we NEVER silently bind conflicting years!
+  // Decode via NHTSA vPIC FIRST before locking so we NEVER silently bind conflicting or disposed vehicles!
   const preDecoded = resolvedVin ? await decodeVinLiveNhtsa(resolvedVin) : null;
+  if (preDecoded) {
+    const allowRes = isAllowedActiveDonorVehicle(preDecoded);
+    if (!allowRes.allowed) {
+      const err = new Error(allowRes.reason);
+      err.statusCode = 422;
+      throw err;
+    }
+  }
   const vinLabelConflict = preDecoded ? detectFolderVinConflict(labelForConflict, preDecoded) : { has_conflict: false, warning: '' };
 
   // Permanent Conflict Gate: if folder label disagrees with NHTSA VIN decode and staff has NOT clicked confirm_vin_decode or trust_folder_year, pause and ask staff in 1 click!
@@ -2005,6 +2014,19 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
               drive_url: sf.drive_url,
               detected_vin: candidateVin,
               reason: `NHTSA vPIC could not decode factory Year/Make/Model for ${candidateVin} — verify stamped VIN.`
+            }
+          };
+        }
+        const allowCheck = isAllowedActiveDonorVehicle(decoded);
+        if (!allowCheck.allowed) {
+          return {
+            status: 'needs_vin',
+            folder: {
+              id: sf.id,
+              title: sf.title,
+              drive_url: sf.drive_url,
+              detected_vin: candidateVin,
+              reason: allowCheck.reason
             }
           };
         }

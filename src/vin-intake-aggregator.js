@@ -15,6 +15,7 @@ const {
   validateVinStrict,
   isVinCheckDigitValid,
   registerNhtsaVerifiedVin,
+  isAllowedActiveDonorVehicle,
   validatePartCompliance,
   validateInventoryItemForPublish,
   computeShippingClass,
@@ -345,6 +346,14 @@ async function createVinIntakeVehicleSession(payload = {}, staffUser = 'Shop Sta
 
   if (!year || !make || !model) {
     const err = new Error(`VIN ${vin} could not resolve Year/Make/Model automatically. Confirm VIN accuracy or supply verified Year/Make/Model from the door jamb sticker.`);
+    err.statusCode = 422;
+    throw err;
+  }
+
+  // PERMANENT 7-VEHICLE ACTIVE DONOR ALLOWLIST FIREWALL (Default-Deny)
+  const allowCheck = isAllowedActiveDonorVehicle({ vin, year, make, model });
+  if (!allowCheck.allowed) {
+    const err = new Error(`ACTIVE DONOR ALLOWLIST FIREWALL BLOCKED (${year} ${make} ${model} / ${vin}): ${allowCheck.reason}`);
     err.statusCode = 422;
     throw err;
   }

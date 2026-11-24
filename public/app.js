@@ -303,7 +303,12 @@ function renderAll() {
 
   renderSpecials(specials);
   populateCategoryFilter(inventory);
-  renderPartsCards(pickBalancedVehicleShowcase(activeItems, 8), 'home-featured-parts');
+  const featuredTop4 = pickBalancedVehicleShowcase(activeItems, 4, { sortByPrice: true, prioritizeHighDollar: true });
+  const featuredSkuSet = new Set(featuredTop4.map((i) => String(i.sku || '').toUpperCase()));
+  renderPartsCards(
+    pickBalancedVehicleShowcase(activeItems, 8, { sortByPrice: true, prioritizeHighDollar: true, excludeSkus: featuredSkuSet }),
+    'home-featured-parts'
+  );
   renderCatalogFiltered();
   renderUhaulHub(settings);
   showCustomerPolicy('master_return_refund_policy');
@@ -326,7 +331,25 @@ function getCanonicalBaseUrl(settings) {
   return String(raw).trim().replace(/\/+$/, '') || 'https://aldridgeautosupply.com';
 }
 
-function pickBalancedVehicleShowcase(items, count = 6, { sortByPrice = false, excludeSkus = new Set() } = {}) {
+function scoreHighDollarAssembly(item = {}) {
+  const blob = `${item.title || ''} ${item.category || ''}`.toLowerCase();
+  const price = Number(item.price_we_pull || 0);
+  // Tier 3 (highest): Powertrain & Drivetrain major assemblies
+  if (/\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|transfer\s*case|front\s*differential|rear\s*differential|differential\s*(?:carrier|assembly)|axle\s*assembly)\b/i.test(blob)) {
+    return 3000 + price;
+  }
+  // Tier 2: High-value Wheels/Tires, Complete Doors/Tailgates/Hoods/Seats
+  if (/\b(wheel.*tire|tire.*wheel|alloy\s*wheel|complete\s*door|door\s*shell|front\s*door|rear\s*door|tailgate|liftgate|hood\s*panel|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|leather\s*seat)\b/i.test(blob)) {
+    return 2000 + price;
+  }
+  // Tier 1: High-value OEM Electronics, Lighting & Major Chassis Assemblies
+  if (/\b(ecm|ecu|pcm|bcm|tcm|engine\s*control|instrument\s*cluster|speedometer|navigation|radio|stereo|head\s*unit|amplifier|abs\s*pump|headlight|headlamp|alternator|a\/?c\s*compressor|steering\s*rack|radiator|strut\s*assembly|driveshaft)\b/i.test(blob)) {
+    return 1000 + price;
+  }
+  return price;
+}
+
+function pickBalancedVehicleShowcase(items, count = 6, { sortByPrice = true, prioritizeHighDollar = true, excludeSkus = new Set() } = {}) {
   const clean = (Array.isArray(items) ? items : []).filter((i) => {
     if (!i || i.status !== 'active' || Number(i.quantity || 0) <= 0) return false;
     if (excludeSkus && excludeSkus.has(String(i.sku || '').toUpperCase())) return false;
@@ -335,18 +358,23 @@ function pickBalancedVehicleShowcase(items, count = 6, { sortByPrice = false, ex
   });
   if (!clean.length) return [];
 
-  // Group by donor vehicle family (Make + Model) so consecutive cards never repeat the same car model
+  // Group by donor vehicle (Year + Make + Model) so consecutive cards diversify across the 7 active vehicles
   const buckets = new Map();
   for (const item of clean) {
+    const yr = String(item.fitment_years || '').trim();
     const mk = String(item.fitment_make || '').trim().toUpperCase();
     const md = String(item.fitment_model || '').trim().toUpperCase().replace(/\s+PICKUP$/i, '');
-    const familyKey = `${mk}|${md}` || `SKU:${item.sku}`;
+    const familyKey = `${yr}|${mk}|${md}` || `SKU:${item.sku}`;
     if (!buckets.has(familyKey)) buckets.set(familyKey, []);
     buckets.get(familyKey).push(item);
   }
 
   for (const list of buckets.values()) {
     list.sort((a, b) => {
+      if (prioritizeHighDollar) {
+        const ds = scoreHighDollarAssembly(b) - scoreHighDollarAssembly(a);
+        if (ds !== 0) return ds;
+      }
       if (sortByPrice) {
         const dp = Number(b.price_we_pull || 0) - Number(a.price_we_pull || 0);
         if (dp !== 0) return dp;
@@ -357,15 +385,15 @@ function pickBalancedVehicleShowcase(items, count = 6, { sortByPrice = false, ex
     });
   }
 
-  // Order vehicle families by catalog depth (largest fleets represented first, diversified across makes)
+  // Order active donor vehicles by their top high-dollar assembly value so flagship assemblies lead!
   const orderedFamilies = Array.from(buckets.entries())
-    .sort((a, b) => b[1].length - a[1].length)
+    .sort((a, b) => scoreHighDollarAssembly(b[1][0]) - scoreHighDollarAssembly(a[1][0]))
     .map(([, list]) => list);
 
   const picked = [];
   const usedSkus = new Set();
   let round = 0;
-  while (picked.length < count && round < 10) {
+  while (picked.length < count && round < 12) {
     let addedInRound = 0;
     for (const list of orderedFamilies) {
       if (picked.length >= count) break;
