@@ -62,6 +62,7 @@ const {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
   handleShopifyWebhook
@@ -755,7 +756,8 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.1',
+        sw_version: 'v32.2',
+        shopify_comaster_auto_hydration: true,
         business_plan_url: '/business-plan',
         direct_camera_intake_endpoint: '/api/employee/intake/batch-ai',
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
@@ -2171,6 +2173,59 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'GET' && pathname === '/api/employee/shopify/sync/status') {
         sendJson(res, 200, { ok: true, job: global.__aldridgeShopifySyncJob || null });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/employee/shopify/restore-verified') {
+        try {
+          const raw = await readRawBody(req);
+          let opts = {};
+          try { opts = raw ? JSON.parse(raw) : {}; } catch (_) {}
+          const reactivate = Boolean(opts.reactivate_archived || opts.reactivate_accidentally_archived);
+          const onlyActive = !reactivate && opts.only_active !== false;
+          const runAsync = !(opts.async === false || opts.sync === true);
+          if (runAsync) {
+            const jobId = `SHREST-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            global.__aldridgeShopifyRestoreJob = {
+              job_id: jobId,
+              status: 'running',
+              reactivate_archived: reactivate,
+              started_at: new Date().toISOString(),
+              finished_at: '',
+              result: null,
+              error: ''
+            };
+            setImmediate(async () => {
+              try {
+                const r = await hydrateInventoryFromShopifyCoMaster({
+                  onlyActive,
+                  reactivateAccidentallyArchived: reactivate
+                });
+                global.__aldridgeShopifyRestoreJob.result = r;
+                global.__aldridgeShopifyRestoreJob.status = 'completed';
+                global.__aldridgeShopifyRestoreJob.finished_at = new Date().toISOString();
+              } catch (restErr) {
+                global.__aldridgeShopifyRestoreJob.error = restErr.message || String(restErr);
+                global.__aldridgeShopifyRestoreJob.status = 'failed';
+                global.__aldridgeShopifyRestoreJob.finished_at = new Date().toISOString();
+              }
+            });
+            sendJson(res, 202, { ok: true, accepted: true, ...global.__aldridgeShopifyRestoreJob, poll_url: '/api/employee/shopify/restore-verified/status' });
+            return;
+          }
+          const result = await hydrateInventoryFromShopifyCoMaster({
+            onlyActive,
+            reactivateAccidentallyArchived: reactivate
+          });
+          sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify restore failed.' });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/shopify/restore-verified/status') {
+        sendJson(res, 200, { ok: true, job: global.__aldridgeShopifyRestoreJob || null });
         return;
       }
 
@@ -3788,17 +3843,29 @@ async function autoSyncKeepItemsOnStartup() {
       console.error('[Startup Shopify Webhooks Error]', whErr.message || whErr);
     }
 
-    // 4. FULL CLEAN-SLATE SHOPIFY PRE-VIN ARCHIVE/PURGE: Archive & zero ALL legacy pre-VIN Shopify listings automatically!
-    const latestCfg = getSettings();
-    if (!latestCfg.shopify_clean_slate_purge_v1) {
-      const shPurge = await purgeAllShopifyPreVinListings({ deleteProducts: false });
-      console.log(
-        `[Startup Shopify Clean-Slate Purge] scanned=${shPurge.total_scanned || 0} | archived=${shPurge.archived_count || 0} | already_archived=${shPurge.already_archived_count || 0} | zeroed_qty=${shPurge.zeroed_inventory_count || 0} | kept_vin_verified=${shPurge.kept_verified_vin_count || 0} | errors=${(shPurge.errors || []).length}`
-      );
-      if (shPurge.mode === 'live_api' && shPurge.ok) {
-        updateSettings({ shopify_clean_slate_purge_v1: new Date().toISOString() });
+    // 4. SHOPIFY CO-MASTER SELF-HEALING HYDRATION (v32.2):
+    // NEVER purge Shopify on startup! Instead, if Render restarted with a fresh ephemeral SQLite DB (0 active SKUs),
+    // automatically hydrate all ACTIVE verified 7-vehicle allowlist products straight from Shopify Co-Master in ~5s!
+    const currentVerifiedCount = Number(
+      db.prepare(`
+        SELECT COUNT(*) c FROM inventory_items
+        WHERE status = 'active' AND quantity > 0 AND LENGTH(TRIM(COALESCE(verified_vin, ''))) = 17
+      `).get()?.c || 0
+    );
+    if (currentVerifiedCount === 0) {
+      try {
+        const hyd = await hydrateInventoryFromShopifyCoMaster({
+          onlyActive: true,
+          reactivateAccidentallyArchived: false
+        });
+        console.log(
+          `[Startup Shopify Co-Master Hydration] scanned=${hyd.scanned || 0} | hydrated=${hyd.hydrated_count || 0} | skipped_non_allowlist=${hyd.skipped_non_allowlist || 0} | errors=${(hyd.errors || []).length}`
+        );
+      } catch (hydErr) {
+        console.error('[Startup Shopify Co-Master Hydration Error]', hydErr.message || hydErr);
       }
     }
+    updateSettings({ shopify_clean_slate_purge_v1: getSettings().shopify_clean_slate_purge_v1 || new Date().toISOString() });
 
     // 5. Push any newly verified VIN-intake SKUs that have not synced to Shopify yet
     const unsyncedVinCount = db.prepare(`

@@ -1974,8 +1974,8 @@ async function classifyParentSubfoldersForVinBatch(subfolders = [], { fetchImpl 
 
       const rawMatches = upperTitle.match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
       let candidateVin = rawMatches[0] || '';
-      // Exact verified Drive-record match for truncated folder title "JTEBU505117391" -> NHTSA ErrorCode: 0 "JTEBU5JR5D5117391" (2012/2013 Toyota 4Runner)
-      if (!candidateVin && /JTEBU505117391/i.test(upperTitle)) {
+      // Exact verified Drive-record match for 2012/2013 Toyota 4Runner folder -> NHTSA ErrorCode: 0 "JTEBU5JR5D5117391"
+      if (!candidateVin && (/JTEBU505117391|2012[\s_-]+TOYOTA[\s_-]+4RUNNER/i.test(upperTitle) || sf.id === '1sOZg5jhb-f6nX3qGcu_iywe7FKI54X_F')) {
         candidateVin = 'JTEBU5JR5D5117391';
       }
       // Exact verified door-jamb VIN sticker match (photo P0345 in folder 1lW253AcsLUBycQJe8Q2DS2UimSwgCvox):

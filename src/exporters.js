@@ -9,6 +9,8 @@ const {
   computeShippingClass,
   PERMANENTLY_BANNED_GHOST_VINS,
   PERMANENTLY_BANNED_SOLD_SKUS,
+  ACTIVE_DONOR_ALLOWLIST,
+  ALLOWED_ACTIVE_DONOR_VINS,
   DISPOSED_VEHICLE_TEXT_REGEX,
   validateVinStrict,
   isAllowedActiveDonorVehicle,
@@ -3071,7 +3073,7 @@ async function inspectLiveShopifyProducts(skus = []) {
  * Paginates ALL live products on the connected Shopify store and archives + zeros
  * every listing that does NOT correspond to an active verified VIN-intake SKU in SQLite.
  */
-async function purgeAllShopifyPreVinListings({ deleteProducts = false } = {}) {
+async function purgeAllShopifyPreVinListings({ deleteProducts = false, forceEmptyDb = false } = {}) {
   const settings = getSettings();
   const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
   if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
@@ -3098,6 +3100,23 @@ async function purgeAllShopifyPreVinListings({ deleteProducts = false } = {}) {
         AND COALESCE(intake_source, '') = 'vin_intake_pipeline'
     `).all().map((r) => r.sku)
   );
+
+  // SAFETY GUARD (v32.2): Never archive live Shopify products when local ephemeral SQLite is empty!
+  if (verifiedActiveSkus.size === 0 && !forceEmptyDb) {
+    return {
+      ok: true,
+      mode: 'aborted_empty_local_db_guard',
+      shop_domain: domain,
+      total_scanned: 0,
+      archived_count: 0,
+      deleted_count: 0,
+      already_archived_count: 0,
+      zeroed_inventory_count: 0,
+      kept_verified_vin_count: 0,
+      errors: [],
+      message: 'Safety guard aborted clean-slate Shopify purge because local SQLite has 0 verified active SKUs.'
+    };
+  }
 
   const liveProducts = [];
   let nextUrl = `https://${domain}/admin/api/2025-01/products.json?limit=250&fields=id,handle,title,status,variants`;
@@ -3227,6 +3246,462 @@ async function purgeAllShopifyPreVinListings({ deleteProducts = false } = {}) {
   };
 }
 
+/**
+ * SHOPIFY CO-MASTER SELF-HEALING HYDRATION & REACTIVATION (v32.2):
+ * Restores verified 7-Vehicle Allowlist products directly from Shopify (aldridgesales.myshopify.com)
+ * back into local SQLite on Render container cold-starts/deploys — ZERO data loss even on ephemeral disks!
+ * When reactivateAccidentallyArchived=true, also re-activates verified allowlist products that were
+ * accidentally tagged ARCHIVED-CLEAN-SLATE while keeping all non-allowlist/disposed products archived.
+ */
+async function hydrateInventoryFromShopifyCoMaster({
+  onlyActive = true,
+  reactivateAccidentallyArchived = false,
+  skipExisting = true
+} = {}) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return {
+      ok: false,
+      mode: 'not_configured',
+      scanned: 0,
+      hydrated_count: 0,
+      reactivated_on_shopify: 0,
+      errors: []
+    };
+  }
+
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+  const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
+
+  const query = `
+    query HydrateAllowlistProducts($cursor: String) {
+      products(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          handle
+          title
+          descriptionHtml
+          productType
+          vendor
+          status
+          tags
+          createdAt
+          updatedAt
+          images(first: 10) {
+            nodes { url altText }
+          }
+          variants(first: 1) {
+            nodes {
+              id
+              sku
+              price
+              inventoryQuantity
+              inventoryItem {
+                id
+                measurement {
+                  weight { value unit }
+                }
+              }
+            }
+          }
+          metafields(first: 25) {
+            nodes { namespace key value }
+          }
+        }
+      }
+    }
+  `;
+
+  const allNodes = [];
+  let cursor = null;
+  let pages = 0;
+  while (pages < 60) {
+    pages++;
+    const resp = await shopifyFetchWithRetry(
+      graphqlUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ query, variables: { cursor } })
+      },
+      { authMode: auth.authMode, settings, tokenRef }
+    );
+    if (!resp.ok) {
+      throw new Error(`Shopify GraphQL hydration scan failed (HTTP ${resp.status})`);
+    }
+    const payload = await resp.json();
+    const conn = payload?.data?.products;
+    const nodes = conn?.nodes || [];
+    for (const n of nodes) allNodes.push(n);
+    if (!conn?.pageInfo?.hasNextPage || !conn?.pageInfo?.endCursor) break;
+    cursor = conn.pageInfo.endCursor;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+
+  const stripHtmlToText = (html = '') =>
+    String(html || '')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const extractNumericId = (gid = '') => {
+    const m = String(gid || '').match(/(\d+)$/);
+    return m ? m[1] : '';
+  };
+
+  // Deduplicate by SKU and by (VIN + normalized title), keeping the newest/richest v32.1 product
+  const winnersByTitleKey = new Map();
+  let skippedNonAllowlist = 0;
+  let skippedArchived = 0;
+  let skippedNoPhoto = 0;
+
+  for (const node of allNodes) {
+    const statusUpper = String(node.status || '').toUpperCase();
+    const tags = Array.isArray(node.tags) ? node.tags : [];
+    const tagBlob = tags.join(', ');
+    const isCleanSlateVictim = statusUpper === 'ARCHIVED' && /ARCHIVED-CLEAN-SLATE/i.test(tagBlob);
+    const isActive = statusUpper === 'ACTIVE';
+
+    if (onlyActive && !isActive) {
+      skippedArchived++;
+      continue;
+    }
+    if (!isActive && !(reactivateAccidentallyArchived && isCleanSlateVictim)) {
+      skippedArchived++;
+      continue;
+    }
+
+    const v0 = (node.variants?.nodes || [])[0];
+    const sku = String(v0?.sku || '').trim().toUpperCase();
+    const qty = Number(v0?.inventoryQuantity ?? 0);
+    if (!sku || qty <= 0) {
+      skippedArchived++;
+      continue;
+    }
+
+    const meta = {};
+    for (const mf of node.metafields?.nodes || []) {
+      meta[`${mf.namespace}.${mf.key}`] = String(mf.value || '').trim();
+    }
+
+    let vin = String(meta['custom.donor_vin'] || '').trim().toUpperCase();
+    if (!vin) {
+      const vinTag = tags.find((t) => /^VIN:[A-HJ-NPR-Z0-9]{17}$/i.test(String(t || '').trim()));
+      if (vinTag) vin = String(vinTag).split(':')[1].trim().toUpperCase();
+    }
+    if (!vin || !ALLOWED_ACTIVE_DONOR_VINS.has(vin)) {
+      skippedNonAllowlist++;
+      continue;
+    }
+
+    const slot = ACTIVE_DONOR_ALLOWLIST.find((s) => s.vin === vin);
+    if (!slot) {
+      skippedNonAllowlist++;
+      continue;
+    }
+
+    const cleanTitle = cleanListingTitle(String(node.title || '').trim()).slice(0, 80);
+    const plainDesc = stripOffPlatformViolations(stripHtmlToText(node.descriptionHtml || '')).slice(0, 1200);
+    const productType = String(node.productType || 'Auto Parts').trim() || 'Auto Parts';
+    const fitYear = String(meta['custom.fitment_years'] || slot.years[0] || '').trim();
+    const allowCheck = isAllowedActiveDonorVehicle({
+      vin,
+      year: fitYear,
+      make: slot.make,
+      model: slot.model,
+      title: cleanTitle
+    });
+    if (!allowCheck.allowed) {
+      skippedNonAllowlist++;
+      continue;
+    }
+    if (
+      isGhostOrBannedInventoryItem({ sku, title: cleanTitle, verified_vin: vin }).blocked ||
+      !validatePartCompliance({ title: cleanTitle, category: productType, description: plainDesc }).compliant
+    ) {
+      skippedNonAllowlist++;
+      continue;
+    }
+
+    const photoUrls = (node.images?.nodes || [])
+      .map((img) => String(img?.url || '').trim())
+      .filter((u) => /^https?:\/\//i.test(u) && !isQrCardUrl(u) && !isGoogleDriveViewerUrl(u));
+    if (!photoUrls.length) {
+      skippedNoPhoto++;
+      continue;
+    }
+
+    const numericId = BigInt(extractNumericId(node.id) || '0');
+    const richnessScore =
+      (isActive ? 1000 : 0) +
+      (meta['custom.donor_vin'] ? 100 : 0) +
+      (meta['custom.oem_part_number'] ? 50 : 0) +
+      (meta['custom.packed_dimensions'] ? 25 : 0) +
+      (photoUrls.length * 2);
+
+    const normTitleKey = `${vin}|${cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
+    const existing = winnersByTitleKey.get(normTitleKey);
+    if (
+      !existing ||
+      richnessScore > existing.richnessScore ||
+      (richnessScore === existing.richnessScore && numericId > existing.numericId)
+    ) {
+      winnersByTitleKey.set(normTitleKey, {
+        node,
+        v0,
+        sku,
+        vin,
+        slot,
+        meta,
+        tags,
+        cleanTitle,
+        plainDesc,
+        productType,
+        fitYear,
+        photoUrls,
+        numericId,
+        isActive,
+        isCleanSlateVictim,
+        richnessScore
+      });
+    }
+  }
+
+  // Upsert donor_vehicles, vin_intake_sessions, and inventory_items into SQLite
+  const now = new Date().toISOString();
+  const donorIdByVin = new Map();
+  const sessionCodeByVin = new Map();
+  const existingSkusInDb = new Set(
+    db.prepare('SELECT UPPER(sku) AS sku FROM inventory_items').all().map((r) => r.sku)
+  );
+
+  let hydratedCount = 0;
+  let updatedCount = 0;
+  let reactivatedOnShopify = 0;
+  const errors = [];
+
+  for (const w of winnersByTitleKey.values()) {
+    try {
+      let donorId = donorIdByVin.get(w.vin);
+      if (!donorId) {
+        let donor = db.prepare('SELECT id FROM donor_vehicles WHERE UPPER(vin) = ?').get(w.vin);
+        if (!donor) {
+          const stockNum = `DON-${w.slot.years[0]}-${w.slot.make.slice(0, 3).toUpperCase()}-${w.vin.slice(-5)}`;
+          const dRes = db.prepare(`
+            INSERT INTO donor_vehicles (
+              org_id, stock_number, vin, year, make, model, trim, engine, transmission, drivetrain,
+              status, notes, created_at
+            ) VALUES (1, ?, ?, ?, ?, ?, '', '', 'Automatic', '', 'active', ?, ?)
+          `).run(
+            stockNum, w.vin, Number(w.slot.years[0] || 2010), w.slot.make, w.slot.model,
+            `Auto-hydrated from Shopify Co-Master (${domain})`, now
+          );
+          donorId = Number(dRes.lastInsertRowid);
+        } else {
+          donorId = Number(donor.id);
+        }
+        donorIdByVin.set(w.vin, donorId);
+      }
+
+      let sessionCode = sessionCodeByVin.get(w.vin);
+      if (!sessionCode) {
+        sessionCode = `VIN-SHP-${w.vin.slice(-6)}`;
+        const sess = db.prepare('SELECT session_code FROM vin_intake_sessions WHERE UPPER(session_code) = ?').get(sessionCode);
+        if (!sess) {
+          db.prepare(`
+            INSERT INTO vin_intake_sessions (
+              org_id, session_code, staff_name, vin, year, make, model,
+              donor_vehicle_id, status, created_at, updated_at
+            ) VALUES (1, ?, 'Shopify Co-Master Hydration', ?, ?, ?, ?, ?, 'active', ?, ?)
+          `).run(sessionCode, w.vin, Number(w.slot.years[0] || 2010), w.slot.make, w.slot.model, donorId, now, now);
+        }
+        sessionCodeByVin.set(w.vin, sessionCode);
+      }
+
+      // Parse weight & dimensions cleanly
+      let weightLbs = Number(w.v0?.inventoryItem?.measurement?.weight?.value || 0);
+      const weightUnit = String(w.v0?.inventoryItem?.measurement?.weight?.unit || 'POUNDS').toUpperCase();
+      if (weightUnit === 'GRAMS') weightLbs = Number((weightLbs / 453.59237).toFixed(2));
+      else if (weightUnit === 'KILOGRAMS') weightLbs = Number((weightLbs * 2.20462).toFixed(2));
+      else if (weightUnit === 'OUNCES') weightLbs = Number((weightLbs / 16).toFixed(2));
+
+      let lengthIn = 0;
+      let widthIn = 0;
+      let heightIn = 0;
+      const dimsMeta = String(w.meta['custom.packed_dimensions'] || w.meta['custom.package_dimensions'] || '');
+      const dimMatch = dimsMeta.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)/i);
+      if (dimMatch) {
+        lengthIn = Number(dimMatch[1]);
+        widthIn = Number(dimMatch[2]);
+        heightIn = Number(dimMatch[3]);
+      }
+      const fallbackDims = resolvePartDimensionsAndWeight(w.cleanTitle, w.productType);
+      if (!weightLbs || weightLbs <= 0) weightLbs = Number(fallbackDims.weight_lbs || 5);
+      if (!lengthIn || !widthIn || !heightIn) {
+        lengthIn = Number(fallbackDims.length_in || 12);
+        widthIn = Number(fallbackDims.width_in || 9);
+        heightIn = Number(fallbackDims.height_in || 6);
+      }
+
+      const shipClass =
+        /Local_Pickup_Only/i.test(w.meta['custom.fulfillment_type'] || '') || weightLbs >= 70
+          ? 'local_pickup_only'
+          : computeShippingClass(weightLbs, `${w.productType} ${w.cleanTitle}`, lengthIn, widthIn, heightIn);
+
+      const price = Math.max(15, Number(w.v0?.price || 45));
+      const laborRate = Number(settings.shop_labor_rate || 174.99);
+      const priceInstall = Number((price + laborRate).toFixed(2));
+      const oemMpn =
+        String(w.meta['custom.oem_part_number'] || w.meta['custom.oem_mpn'] || w.meta['mm-google-shopping.mpn'] || '').trim() ||
+        resolveStructuredOemMpn({ sku: w.sku, title: w.cleanTitle, fitment_years: w.fitYear, fitment_make: w.slot.make });
+      const binLoc =
+        String(w.meta['custom.bin_location'] || '').trim() ||
+        `${w.slot.model.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 8)}-${String(w.slot.years[0]).slice(-2)}-BAYB`;
+      const secTag = w.tags.find((t) => /^SEC:/i.test(String(t || '')));
+      const secCode = secTag ? String(secTag).replace(/^SEC:/i, '').trim() : generateSecurityCode();
+      const prodId = extractNumericId(w.node.id);
+      const varId = extractNumericId(w.v0?.id);
+      const invItemId = extractNumericId(w.v0?.inventoryItem?.id);
+
+      const channelsJson = JSON.stringify({
+        shopify: true,
+        shopify_marketplace_connect: true,
+        ebay_motors: true,
+        google_merchant: true,
+        meta_catalog: true,
+        crosslist: true
+      });
+
+      if (!existingSkusInDb.has(w.sku)) {
+        db.prepare(`
+          INSERT INTO inventory_items (
+            sku, title, category, condition, condition_id, brand, oem_part_number,
+            donor_vehicle_id, verified_vin, intake_session_id, intake_source,
+            fitment_years, fitment_make, fitment_model, description, defect_disclosure,
+            bin_location, security_mark_code, security_mark_verified, photos_json,
+            pull_status, allow_self_pull, price_self_pull, allow_we_pull, price_we_pull,
+            allow_pull_install, price_pull_install, install_labor_hours, quantity,
+            weight_lbs, length_in, width_in, height_in, shipping_class,
+            handling_fee, handling_days, channels_json,
+            shopify_product_id, shopify_variant_id, shopify_inventory_item_id,
+            status, created_at, updated_at
+          ) VALUES (
+            ?, ?, ?, 'Used - Tested Good', 3000, ?, ?,
+            ?, ?, ?, 'vin_intake_pipeline',
+            ?, ?, ?, ?, 'Tested OEM part — verified donor VIN.',
+            ?, ?, 1, ?,
+            'pulled', 0, ?, 1, ?,
+            1, ?, 1.0, 1,
+            ?, ?, ?, ?, ?,
+            10, 3, ?,
+            ?, ?, ?,
+            'active', ?, ?
+          )
+        `).run(
+          w.sku, w.cleanTitle, w.productType, w.slot.make.toUpperCase(), oemMpn,
+          donorId, w.vin, sessionCode,
+          w.fitYear || String(w.slot.years[0]), w.slot.make, w.slot.model,
+          w.plainDesc || `Verified OEM ${w.cleanTitle}.`,
+          binLoc, secCode, JSON.stringify(w.photoUrls),
+          price, price, priceInstall,
+          weightLbs, lengthIn, widthIn, heightIn, shipClass,
+          channelsJson,
+          prodId, varId, invItemId,
+          now, now
+        );
+        existingSkusInDb.add(w.sku);
+        hydratedCount++;
+      } else if (!skipExisting) {
+        db.prepare(`
+          UPDATE inventory_items
+          SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?,
+              photos_json = ?, status = 'active', quantity = 1, updated_at = ?
+          WHERE UPPER(sku) = ?
+        `).run(prodId, varId, invItemId, JSON.stringify(w.photoUrls), now, w.sku);
+        updatedCount++;
+      }
+
+      // If requested, reactivate verified allowlist products that were accidentally archived by ARCHIVED-CLEAN-SLATE
+      if (reactivateAccidentallyArchived && w.isCleanSlateVictim && prodId) {
+        const cleanTags = [
+          ...new Set([
+            ...w.tags.filter((t) => !/ARCHIVED-CLEAN-SLATE|PRE-VIN-PURGED|DISPOSED-FLEET-ARCHIVED/i.test(String(t || ''))),
+            w.fitYear || String(w.slot.years[0]),
+            `${w.fitYear || w.slot.years[0]} ${w.slot.make} ${w.slot.model}`,
+            w.slot.make,
+            w.slot.model,
+            `VIN:${w.vin}`,
+            `BIN:${binLoc}`,
+            `MPN:${oemMpn}`,
+            'Genuine OEM',
+            'Used OEM',
+            'Single-Unit-In-Stock',
+            shipClass === 'local_pickup_only' ? 'Local_Pickup_Only' : 'Parcel_Calculated'
+          ])
+        ].filter(Boolean).join(', ');
+
+        const putResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products/${prodId}.json`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              product: {
+                id: Number(prodId),
+                status: 'active',
+                tags: cleanTags
+              }
+            })
+          },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (putResp.ok) {
+          reactivatedOnShopify++;
+        } else {
+          errors.push(`reactivate ${w.sku} (${prodId}): HTTP ${putResp.status}`);
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    } catch (err) {
+      errors.push(`hydrate ${w.sku}: ${err.message}`);
+    }
+  }
+
+  logSync(
+    'inbound',
+    'shopify_comaster_hydration',
+    reactivateAccidentallyArchived ? 'restore_and_reactivate_verified' : 'startup_hydrate_verified',
+    'ALL',
+    errors.length ? 'partial' : 'success',
+    `Hydrated ${hydratedCount} verified 7-vehicle SKUs from ${domain} (scanned=${allNodes.length}, winners=${winnersByTitleKey.size}, reactivated_on_shopify=${reactivatedOnShopify}, skipped_non_allowlist=${skippedNonAllowlist}, skipped_archived=${skippedArchived}, errors=${errors.length}).`
+  );
+
+  return {
+    ok: errors.length === 0,
+    mode: 'live_api',
+    shop_domain: domain,
+    scanned: allNodes.length,
+    winners_count: winnersByTitleKey.size,
+    hydrated_count: hydratedCount,
+    updated_count: updatedCount,
+    reactivated_on_shopify: reactivatedOnShopify,
+    skipped_non_allowlist: skippedNonAllowlist,
+    skipped_archived: skippedArchived,
+    skipped_no_photo: skippedNoPhoto,
+    errors
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -3250,6 +3725,7 @@ module.exports = {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
   handleShopifyWebhook
