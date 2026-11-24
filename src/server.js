@@ -54,6 +54,7 @@ const {
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
+  buildCrosslistImagesZipBuffer,
   generateCraigslistCsv,
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
@@ -769,7 +770,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.12',
+        sw_version: 'v32.13',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -1628,11 +1629,50 @@ const server = http.createServer(async (req, res) => {
       '/api/exports/ebay_us.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/ebay_motors.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/vendoo.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'vendoo'), file: 'vendoo-bulk-import.csv' },
-      '/api/exports/crosslist.csv': { fn: (i, s, u) => generateVendooOrCrosslistCsv(i, s, u, 'crosslist'), file: 'crosslist-ebay-offerup-fb-import.csv' },
+      '/api/exports/crosslist.csv': {
+        fn: (i, s, u, opts) => generateVendooOrCrosslistCsv(i, s, u, 'crosslist', opts),
+        file: 'crosslist-ebay-offerup-fb-import.csv'
+      },
       '/api/exports/craigslist.csv': { fn: (i, s, u) => generateCraigslistCsv(i, s, u), file: 'craigslist-tacoma-98467-pts.csv' },
       '/api/exports/tiktok_shop.csv': { fn: (i, s, u) => generateTiktokShopCsv(i, s, u), file: 'tiktok-shop-bulk.csv' },
       '/api/exports/car_part_hollander.csv': { fn: (i) => generateCarPartHollanderCsv(i), file: 'car-part-hollander-interchange.csv' }
     };
+
+    if (method === 'GET' && pathname === '/api/exports/crosslist-images.zip') {
+      try {
+        const batch = Number(urlObj.searchParams.get('batch') || 0);
+        const size = Number(urlObj.searchParams.get('size') || 0);
+        const maxWidth = Number(urlObj.searchParams.get('width') || 800);
+        const forceRefresh = urlObj.searchParams.get('refresh') === '1';
+        const cacheKey = `${batch}:${size}:${maxWidth}`;
+        global.__aldridgeCrosslistZipCache = global.__aldridgeCrosslistZipCache || new Map();
+        const cached = global.__aldridgeCrosslistZipCache.get(cacheKey);
+        const nowMs = Date.now();
+
+        let pkg = cached && !forceRefresh && (nowMs - cached.ts) < 10 * 60 * 1000 ? cached.pkg : null;
+        if (!pkg) {
+          const items = db.prepare('SELECT * FROM inventory_items').all();
+          pkg = await buildCrosslistImagesZipBuffer(items, getSettings(), baseUrl, { batch, size, maxWidth });
+          if (pkg.zipBuffer.length < 120 * 1024 * 1024) {
+            global.__aldridgeCrosslistZipCache.set(cacheKey, { ts: nowMs, pkg });
+          }
+        }
+        const suffix = batch > 0 && size > 0 ? `-batch${batch}` : '';
+        logSync('outbound', 'crosslist', 'export_images_zip', batch > 0 ? `BATCH-${batch}` : 'ALL', pkg.errors.length ? 'partial' : 'success', `Built Crosslist images ZIP (${pkg.imageCount}/${pkg.expectedImages} images, ${(pkg.zipBuffer.length / (1024 * 1024)).toFixed(1)} MB, errors=${pkg.errors.length}).`);
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Length': String(pkg.zipBuffer.length),
+          'Content-Disposition': `attachment; filename="crosslist-images${suffix}.zip"`,
+          'X-Crosslist-Items': String(pkg.itemCount),
+          'X-Crosslist-Images': String(pkg.imageCount),
+          'X-Crosslist-Errors': String(pkg.errors.length)
+        });
+        res.end(pkg.zipBuffer);
+      } catch (err) {
+        sendJson(res, 500, { ok: false, error: err.message || 'Failed to build Crosslist images ZIP.' });
+      }
+      return;
+    }
 
     const stagedAuditExportMap = {
       '/api/exports/legacy-905-two-tier.csv': 'aldridge_905_legacy_two_tier_active_only.csv',
@@ -1657,12 +1697,17 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && exportMap[pathname]) {
       const items = db.prepare('SELECT * FROM inventory_items').all();
       const spec = exportMap[pathname];
-      logSync('outbound', spec.file.split('-')[0], 'export_feed_download', 'ALL', 'success', `Generated channel export ${spec.file} (${items.length} SKUs).`);
+      const batch = Number(urlObj.searchParams.get('batch') || 0);
+      const size = Number(urlObj.searchParams.get('size') || 0);
+      const fileName = (pathname === '/api/exports/crosslist.csv' && batch > 0 && size > 0)
+        ? `crosslist-import-batch${batch}.csv`
+        : spec.file;
+      logSync('outbound', spec.file.split('-')[0], 'export_feed_download', 'ALL', 'success', `Generated channel export ${fileName} (${items.length} SKUs).`);
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${spec.file}"`
+        'Content-Disposition': `attachment; filename="${fileName}"`
       });
-      res.end(spec.fn(items, getSettings(), baseUrl));
+      res.end(spec.fn(items, getSettings(), baseUrl, { batch, size }));
       return;
     }
 

@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const {
   db,
   DATA_DIR,
@@ -1002,12 +1003,164 @@ function mapColorToCrosslistEnum(rawColor = '') {
   return 'Black';
 }
 
-function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo') {
-  items = ensureDeduplicatedItems(items);
+function buildCrosslistImageFilename(sku, index) {
+  const safe = String(sku || 'ITEM').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'ITEM';
+  return `${safe}-${index + 1}.jpg`;
+}
+
+function selectMarketplaceSafeBatch(items, { batch = 0, size = 0 } = {}) {
+  const deduped = ensureDeduplicatedItems(items).filter(isMarketplaceSafeItem);
+  const b = Number(batch || 0);
+  const s = Number(size || 0);
+  if (b > 0 && s > 0) {
+    const start = (b - 1) * s;
+    return deduped.slice(start, start + s);
+  }
+  return deduped;
+}
+
+function buildZipStoreBuffer(entries = []) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(String(entry.name || 'file.jpg'), 'utf8');
+    const dataBuf = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data || '');
+    const crc = (zlib.crc32(dataBuf) >>> 0);
+    const size = dataBuf.length >>> 0;
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0x5821, 12);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(size, 18);
+    localHeader.writeUInt32LE(size, 22);
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+
+    localParts.push(localHeader, nameBuf, dataBuf);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0x5821, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(size, 20);
+    centralHeader.writeUInt32LE(size, 24);
+    centralHeader.writeUInt16LE(nameBuf.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset >>> 0, 42);
+
+    centralParts.push(centralHeader, nameBuf);
+    offset += 30 + nameBuf.length + size;
+  }
+
+  const centralBuf = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length >>> 0, 12);
+  eocd.writeUInt32LE(offset >>> 0, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralBuf, eocd]);
+}
+
+async function buildCrosslistImagesZipBuffer(items, settings, baseUrl, { batch = 0, size = 0, maxWidth = 800 } = {}) {
+  const safeItems = selectMarketplaceSafeBatch(items, { batch, size });
+  const resolvePhoto = (p) => resolveExportPhotoUrl(p, baseUrl, settings);
+
+  const tasks = [];
+  for (const item of safeItems) {
+    const photos = getValidPhotos(item);
+    photos.forEach((rawUrl, idx) => {
+      const fullUrl = resolvePhoto(rawUrl);
+      if (!fullUrl) return;
+      let fetchUrl = fullUrl;
+      if (/cdn\.shopify\.com/i.test(fetchUrl) && maxWidth > 0 && !/[?&]width=/.test(fetchUrl)) {
+        fetchUrl += (fetchUrl.includes('?') ? '&' : '?') + `width=${maxWidth}`;
+      }
+      tasks.push({
+        sku: item.sku,
+        name: buildCrosslistImageFilename(item.sku, idx),
+        url: fetchUrl,
+        fallbackUrl: fullUrl
+      });
+    });
+  }
+
+  const entries = [];
+  const errors = [];
+  const CONCURRENCY = 20;
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < tasks.length) {
+      const idx = cursor++;
+      const task = tasks[idx];
+      let buf = null;
+      let lastErr = '';
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const targetUrl = attempt < 2 ? task.url : task.fallbackUrl;
+        try {
+          const resp = await fetch(targetUrl, { headers: { Accept: 'image/*,*/*;q=0.8' } });
+          if (!resp.ok) {
+            lastErr = `HTTP ${resp.status}`;
+            await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+            continue;
+          }
+          const arrBuf = await resp.arrayBuffer();
+          buf = Buffer.from(arrBuf);
+          if (buf.length > 0) break;
+          lastErr = 'Empty response';
+        } catch (err) {
+          lastErr = err.message || String(err);
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+      if (buf && buf.length > 0) {
+        entries[idx] = { name: task.name, data: buf };
+      } else {
+        errors.push(`${task.name}: ${lastErr || 'download failed'}`);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(1, tasks.length)) }, () => worker()));
+  const validEntries = entries.filter(Boolean);
+  const zipBuffer = buildZipStoreBuffer(validEntries);
+
+  return {
+    zipBuffer,
+    itemCount: safeItems.length,
+    imageCount: validEntries.length,
+    expectedImages: tasks.length,
+    errors
+  };
+}
+
+function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo', opts = {}) {
+  const safeItems = selectMarketplaceSafeBatch(items, opts);
   const handlingFee = Number(settings.handling_fee_default || 10);
   const headers = mode === 'crosslist'
     ? [
-        'Title', 'Description', 'Price', 'Brand', 'Category id', 'Condition', 'Color', 'Quantity',
+        'Title', 'Description', 'Price', 'Brand', 'Category id', 'Condition', 'Color', 'Images', 'Quantity',
         'Shipping weight', 'Shipping weight unit',
         'Shipping height', 'Shipping width', 'Shipping length', 'Shipping Dimension Unit',
         'Tags', 'SKU', 'Who made', 'Accept offers', 'Is auction', 'Internal note', 'Photos'
@@ -1015,8 +1168,7 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
     : ['SKU', 'Title', 'Description', 'Brand', 'MPN', 'Condition', 'Price', 'Cost of Goods', 'Quantity', 'Weight_lb', 'Length', 'Width', 'Height', 'Shipping_Type', 'Handling_Fee_USD', 'Origin_Country', 'Primary_Image', 'Additional_Images', 'Storage_Bin_Notes'];
 
   const rows = [headers.join(',')];
-  for (const item of items) {
-    if (!isMarketplaceSafeItem(item)) continue;
+  for (const item of safeItems) {
     const title80 = cleanListingTitle(item.title || '').slice(0, 80);
     const dims = resolveExportDims(item);
     const tax = resolvePartTaxonomyAndMetafields({ ...item, title: title80, weight_lbs: dims.weight_lbs }, settings);
@@ -1025,6 +1177,7 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
     const imgUrl = photos[0] ? resolvePhoto(photos[0]) : '';
     const extraImgs = photos.slice(1).map(resolvePhoto).join('|');
     const allPhotosPipe = photos.map(resolvePhoto).filter(Boolean).join('|');
+    const zipImageNamesPipe = photos.map((_, idx) => buildCrosslistImageFilename(item.sku, idx)).join('|');
     const condOut = normalizeExportCondition(item.condition);
     const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
     const shippingPolicy = heavyPickupOnly ? 'Local_Pickup_Only' : 'Calculated_Parcel';
@@ -1071,6 +1224,7 @@ function generateVendooOrCrosslistCsv(items, settings, baseUrl, mode = 'vendoo')
         crosslistCategoryId,
         crosslistCondition,
         crosslistColor,
+        zipImageNamesPipe,
         1,
         weightOuncesInt,
         'Ounces',
@@ -4789,6 +4943,8 @@ module.exports = {
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
+  buildCrosslistImagesZipBuffer,
+  buildCrosslistImageFilename,
   generateCraigslistCsv,
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
