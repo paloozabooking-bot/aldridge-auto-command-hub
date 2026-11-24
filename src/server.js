@@ -62,6 +62,7 @@ const {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  syncAllNativeShippingToShopify,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
@@ -766,8 +767,9 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.3',
+        sw_version: 'v32.4',
         shopify_comaster_auto_hydration: true,
+        shopify_native_packed_dimensions: true,
         category_book_time_labor_matrix: true,
         non_part_vin_sticker_filter: true,
         business_plan_url: '/business-plan',
@@ -775,6 +777,7 @@ const server = http.createServer(async (req, res) => {
         ai_batch_intake_endpoint: '/api/employee/intake/batch-ai',
         master_batch_endpoint: '/api/employee/intake/batch-ai-master',
         employee_shopify_sync_endpoint: '/api/employee/shopify/sync',
+        shopify_shipping_sync_endpoint: '/api/employee/shopify/sync-shipping',
         decode_vin_media_endpoint: '/api/employee/intake/decode-vin-media',
         vin_vehicle_intake_endpoint: '/api/employee/intake/vehicle',
         parts_aggregator_endpoint: '/api/parts-aggregator/search',
@@ -2185,6 +2188,75 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'GET' && pathname === '/api/employee/shopify/sync/status') {
         sendJson(res, 200, { ok: true, job: global.__aldridgeShopifySyncJob || null });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/employee/shopify/sync-shipping') {
+        try {
+          const rawStr = (await readRawBody(req)) || '{}';
+          let opts = {};
+          try { opts = rawStr ? JSON.parse(rawStr) : {}; } catch (_) {}
+          const limit = Number(opts.limit || 0);
+          const skus = Array.isArray(opts.skus) ? opts.skus : [];
+          const runAsync = Boolean(opts.async === true || opts.async === 'true');
+          if (runAsync) {
+            const jobId = `SHSHIP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+            global.__aldridgeShopifyShippingJob = {
+              job_id: jobId,
+              status: 'running',
+              started_at: new Date().toISOString(),
+              finished_at: '',
+              progress: {
+                total_active: 0,
+                processed: 0,
+                updated_count: 0,
+                packed_dimensions_saved: 0,
+                weight_saved: 0,
+                origin_saved: 0,
+                local_pickup_only_count: 0,
+                errors_count: 0
+              },
+              result: null,
+              error: ''
+            };
+            setImmediate(async () => {
+              try {
+                const r = await syncAllNativeShippingToShopify({
+                  limit,
+                  skus,
+                  onProgress: (p) => {
+                    if (global.__aldridgeShopifyShippingJob) {
+                      global.__aldridgeShopifyShippingJob.progress = p;
+                    }
+                  }
+                });
+                global.__aldridgeShopifyShippingJob.result = r;
+                global.__aldridgeShopifyShippingJob.status = 'completed';
+                global.__aldridgeShopifyShippingJob.finished_at = new Date().toISOString();
+              } catch (shipErr) {
+                global.__aldridgeShopifyShippingJob.error = shipErr.message || String(shipErr);
+                global.__aldridgeShopifyShippingJob.status = 'failed';
+                global.__aldridgeShopifyShippingJob.finished_at = new Date().toISOString();
+              }
+            });
+            sendJson(res, 202, {
+              ok: true,
+              accepted: true,
+              ...global.__aldridgeShopifyShippingJob,
+              poll_url: '/api/employee/shopify/sync-shipping/status'
+            });
+            return;
+          }
+          const result = await syncAllNativeShippingToShopify({ limit, skus });
+          sendJson(res, 200, result);
+        } catch (err) {
+          sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Shopify native shipping sync failed.' });
+        }
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/employee/shopify/sync-shipping/status') {
+        sendJson(res, 200, { ok: true, job: global.__aldridgeShopifyShippingJob || null });
         return;
       }
 

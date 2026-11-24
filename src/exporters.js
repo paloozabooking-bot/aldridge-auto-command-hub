@@ -677,7 +677,9 @@ function generateShopifyCsv(items, settings, baseUrl) {
   items = ensureDeduplicatedItems(items);
   const headers = [
     'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Published',
-    'Option1 Name', 'Option1 Value', 'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker',
+    'Option1 Name', 'Option1 Value', 'Variant SKU', 'Variant Grams', 'Variant Weight Unit',
+    'Packed product length', 'Packed product width', 'Packed product height', 'Packed product dimension unit',
+    'Variant Country/Region of Origin', 'Variant Inventory Tracker',
     'Variant Inventory Qty', 'Variant Inventory Policy', 'Variant Fulfillment Service',
     'Variant Price', 'Variant Requires Shipping', 'Variant Taxable', 'Image Src', 'Image Position', 'Image Alt Text',
     'SEO Title', 'SEO Description',
@@ -739,6 +741,12 @@ function generateShopifyCsv(items, settings, baseUrl) {
       'Default Title',
       item.sku,
       grams,
+      'lb',
+      dims.length_in,
+      dims.width_in,
+      dims.height_in,
+      'in',
+      tax.countryCodeOfOrigin,
       'shopify',
       1,
       'deny',
@@ -1428,6 +1436,315 @@ async function shopifyFetchWithRetry(url, options, { authMode, settings, tokenRe
   return resp;
 }
 
+const SHOPIFY_SHIPPING_GRAPHQL_VERSION = '2027-01';
+let _cachedPackedDimSchema = null;
+
+async function resolvePackedDimensionsSchema({ domain, tokenRef, authMode, settings }) {
+  if (_cachedPackedDimSchema) return _cachedPackedDimSchema;
+  const fallback = { apiVersion: SHOPIFY_SHIPPING_GRAPHQL_VERSION, inchUnit: 'INCHES', enumValues: ['INCHES', 'CENTIMETERS'], introspected: false };
+  try {
+    const resp = await shopifyFetchWithRetry(
+      `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `query PackedDimsEnum {
+            dimUnit: __type(name: "InventoryItemPackedDimensionsUnit") {
+              name
+              enumValues { name }
+            }
+            measInput: __type(name: "InventoryItemMeasurementInput") {
+              name
+              inputFields { name }
+            }
+          }`
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      const enumValues = (data?.data?.dimUnit?.enumValues || []).map((e) => e.name).filter(Boolean);
+      const measFields = (data?.data?.measInput?.inputFields || []).map((f) => f.name).filter(Boolean);
+      const inchUnit = enumValues.find((v) => /^INCHES?$/i.test(v)) || enumValues.find((v) => /^IN$/i.test(v)) || 'INCHES';
+      _cachedPackedDimSchema = {
+        apiVersion: SHOPIFY_SHIPPING_GRAPHQL_VERSION,
+        inchUnit,
+        enumValues,
+        hasPackedDimensions: measFields.includes('packedDimensions'),
+        introspected: true
+      };
+      return _cachedPackedDimSchema;
+    }
+  } catch (_) {}
+  return fallback;
+}
+
+/**
+ * Writes native Shopify Shipping card fields directly via Admin GraphQL 2027-01:
+ *  - Packed product size (length × width × height in inches) via inventoryItem.measurement.packedDimensions
+ *  - Weight (lb) via inventoryItem.measurement.weight
+ *  - Country/Region of origin (ISO-2 decoded from 17-char donor VIN WMI) via inventoryItem.countryCodeOfOrigin
+ * Uses productVariantsBulkUpdate (write_products) with inventoryItemUpdate fallback/reinforcement.
+ */
+async function syncVariantNativeShippingGraphql({
+  domain,
+  tokenRef,
+  authMode,
+  settings,
+  productId,
+  variantId = '',
+  inventoryItemId = '',
+  item = {},
+  dims = null,
+  heavyPickupOnly = null
+}) {
+  const resolvedDims = dims || resolveExportDims(item);
+  const isHeavy = heavyPickupOnly !== null ? Boolean(heavyPickupOnly) : isHeavyLocalPickupItem(item, settings);
+  const countryCode = resolveCountryOfOrigin(item);
+  const lengthIn = Math.max(1, Number(Number(resolvedDims.length_in || 10).toFixed(2)));
+  const widthIn = Math.max(1, Number(Number(resolvedDims.width_in || 8).toFixed(2)));
+  const heightIn = Math.max(1, Number(Number(resolvedDims.height_in || 6).toFixed(2)));
+  const weightLbs = Math.max(0.1, Number(Number(resolvedDims.weight_lbs || 4).toFixed(2)));
+  const schema = await resolvePackedDimensionsSchema({ domain, tokenRef, authMode, settings });
+  const graphqlUrl = `https://${domain}/admin/api/${schema.apiVersion}/graphql.json`;
+
+  const out = {
+    ok: false,
+    api_version: schema.apiVersion,
+    inch_unit: schema.inchUnit,
+    country_code_of_origin: countryCode,
+    requires_shipping: !isHeavy,
+    weight_lbs: weightLbs,
+    target_dimensions: { length: lengthIn, width: widthIn, height: heightIn, unit: schema.inchUnit },
+    weight_saved: false,
+    packed_dimensions_saved: false,
+    origin_saved: false,
+    packed_dimensions: null,
+    native_weight: null,
+    live_country_code_of_origin: '',
+    method: '',
+    warnings: [],
+    error: ''
+  };
+
+  const applySavedInventoryItem = (invItem) => {
+    if (!invItem) return;
+    const savedWeight = invItem.measurement?.weight || null;
+    const savedDims = invItem.measurement?.packedDimensions || null;
+    const savedOrigin = String(invItem.countryCodeOfOrigin || '').trim().toUpperCase();
+    if (savedWeight && Number(savedWeight.value) > 0) {
+      out.weight_saved = true;
+      out.native_weight = savedWeight;
+    }
+    if (savedDims && Number(savedDims.length) > 0 && Number(savedDims.width) > 0 && Number(savedDims.height) > 0) {
+      out.packed_dimensions_saved = true;
+      out.packed_dimensions = savedDims;
+    }
+    if (savedOrigin) {
+      out.origin_saved = true;
+      out.live_country_code_of_origin = savedOrigin;
+    }
+  };
+
+  const runVariantsBulkUpdate = async (invInput) => {
+    const resp = await shopifyFetchWithRetry(
+      graphqlUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `mutation UpdateVariantNativeShipping($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+              productVariants {
+                id
+                inventoryItem {
+                  id
+                  tracked
+                  requiresShipping
+                  countryCodeOfOrigin
+                  measurement {
+                    weight { value unit }
+                    packedDimensions { length width height unit }
+                  }
+                }
+              }
+              userErrors { field message }
+            }
+          }`,
+          variables: {
+            productId: `gid://shopify/Product/${productId}`,
+            variants: [
+              {
+                id: `gid://shopify/ProductVariant/${variantId}`,
+                inventoryItem: invInput
+              }
+            ]
+          }
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      return { ok: false, err: `HTTP ${resp.status}: ${txt.slice(0, 180)}`, userErrors: [], gqlErrors: [] };
+    }
+    const data = await resp.json();
+    const gqlErrors = data?.errors || [];
+    const userErrors = data?.data?.productVariantsBulkUpdate?.userErrors || [];
+    const savedVariant = data?.data?.productVariantsBulkUpdate?.productVariants?.[0] || null;
+    if (savedVariant?.inventoryItem) applySavedInventoryItem(savedVariant.inventoryItem);
+    const ok = gqlErrors.length === 0 && userErrors.length === 0 && Boolean(savedVariant);
+    return {
+      ok,
+      savedVariant,
+      gqlErrors,
+      userErrors,
+      err: ok ? '' : JSON.stringify(gqlErrors.length ? gqlErrors : userErrors).slice(0, 260)
+    };
+  };
+
+  const runInventoryItemUpdate = async (invGid, invInput) => {
+    const resp = await shopifyFetchWithRetry(
+      graphqlUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `mutation UpdateInventoryItemNativeShipping($id: ID!, $input: InventoryItemInput!) {
+            inventoryItemUpdate(id: $id, input: $input) {
+              inventoryItem {
+                id
+                tracked
+                requiresShipping
+                countryCodeOfOrigin
+                measurement {
+                  weight { value unit }
+                  packedDimensions { length width height unit }
+                }
+              }
+              userErrors { field message }
+            }
+          }`,
+          variables: { id: invGid, input: invInput }
+        })
+      },
+      { authMode, settings, tokenRef }
+    );
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      return { ok: false, err: `HTTP ${resp.status}: ${txt.slice(0, 180)}` };
+    }
+    const data = await resp.json();
+    const gqlErrors = data?.errors || [];
+    const userErrors = data?.data?.inventoryItemUpdate?.userErrors || [];
+    const invItem = data?.data?.inventoryItemUpdate?.inventoryItem || null;
+    if (invItem) applySavedInventoryItem(invItem);
+    const ok = gqlErrors.length === 0 && userErrors.length === 0 && Boolean(invItem);
+    return {
+      ok,
+      invItem,
+      gqlErrors,
+      userErrors,
+      err: ok ? '' : JSON.stringify(gqlErrors.length ? gqlErrors : userErrors).slice(0, 260)
+    };
+  };
+
+  const fullMeasurement = {
+    weight: { value: weightLbs, unit: 'POUNDS' },
+    packedDimensions: { length: lengthIn, width: widthIn, height: heightIn, unit: schema.inchUnit }
+  };
+
+  // 1. Primary path: productVariantsBulkUpdate (works under write_products scope)
+  let resolvedInvItemGid = inventoryItemId
+    ? (String(inventoryItemId).startsWith('gid://') ? String(inventoryItemId) : `gid://shopify/InventoryItem/${inventoryItemId}`)
+    : '';
+
+  if (productId && variantId) {
+    try {
+      const primaryInput = {
+        tracked: true,
+        requiresShipping: !isHeavy,
+        countryCodeOfOrigin: countryCode,
+        measurement: fullMeasurement
+      };
+      let bulkRes = await runVariantsBulkUpdate(primaryInput);
+      if (bulkRes.savedVariant?.inventoryItem?.id) {
+        resolvedInvItemGid = bulkRes.savedVariant.inventoryItem.id;
+      }
+
+      // If Shopify rejects packedDimensions on non-shipping/local-pickup items, retry keeping weight + origin cleanly
+      if (!bulkRes.ok && isHeavy && /packed|dimension|requires.?shipping|physical/i.test(bulkRes.err || '')) {
+        out.warnings.push(`local_pickup_packed_dims_note: ${bulkRes.err}`);
+        bulkRes = await runVariantsBulkUpdate({
+          tracked: true,
+          requiresShipping: false,
+          countryCodeOfOrigin: countryCode,
+          measurement: { weight: { value: weightLbs, unit: 'POUNDS' } }
+        });
+      }
+
+      // If countryCodeOfOrigin caused a scope/field rejection in bulk update, still guarantee measurement (packedDimensions + weight) saves
+      if (!bulkRes.ok && /countryCodeOfOrigin|access denied|write_inventory/i.test(bulkRes.err || '')) {
+        out.warnings.push(`bulk_origin_fallback: ${bulkRes.err}`);
+        const measOnlyRes = await runVariantsBulkUpdate({
+          tracked: true,
+          requiresShipping: !isHeavy,
+          measurement: fullMeasurement
+        });
+        if (measOnlyRes.ok) {
+          out.method = 'productVariantsBulkUpdate(measurement)';
+        } else if (isHeavy && /packed|dimension|requires.?shipping|physical/i.test(measOnlyRes.err || '')) {
+          await runVariantsBulkUpdate({
+            tracked: true,
+            requiresShipping: false,
+            measurement: { weight: { value: weightLbs, unit: 'POUNDS' } }
+          });
+          out.method = 'productVariantsBulkUpdate(weight_local_pickup)';
+        } else {
+          out.warnings.push(`bulk_measurement_err: ${measOnlyRes.err}`);
+        }
+      } else if (bulkRes.ok) {
+        out.method = 'productVariantsBulkUpdate';
+      } else {
+        out.warnings.push(`bulk_shipping_err: ${bulkRes.err}`);
+      }
+    } catch (err) {
+      out.warnings.push(`bulk_shipping_exception: ${err.message}`);
+    }
+  }
+
+  // 2. Reinforcement / fallback via inventoryItemUpdate if origin or packedDimensions is still missing
+  const needsOriginOrDims = !out.origin_saved || (!isHeavy && !out.packed_dimensions_saved) || !out.weight_saved;
+  if (needsOriginOrDims && resolvedInvItemGid) {
+    try {
+      const invPayload = {
+        tracked: true,
+        requiresShipping: !isHeavy,
+        countryCodeOfOrigin: countryCode,
+        measurement: isHeavy && !out.packed_dimensions_saved
+          ? { weight: { value: weightLbs, unit: 'POUNDS' } }
+          : fullMeasurement
+      };
+      const invRes = await runInventoryItemUpdate(resolvedInvItemGid, invPayload);
+      if (invRes.ok) {
+        out.method = out.method ? `${out.method}+inventoryItemUpdate` : 'inventoryItemUpdate';
+      } else if (invRes.err) {
+        out.warnings.push(`inventoryItemUpdate: ${invRes.err}`);
+      }
+    } catch (err) {
+      out.warnings.push(`inventoryItemUpdate_exception: ${err.message}`);
+    }
+  }
+
+  out.ok = out.weight_saved && (out.packed_dimensions_saved || isHeavy) && out.origin_saved;
+  if (!out.ok) {
+    out.error = out.warnings.join(' | ') || 'Native shipping update incomplete';
+  }
+  return out;
+}
+
 async function syncShopifyProductGraphqlAndOrigin({
   domain,
   tokenRef,
@@ -1441,10 +1758,14 @@ async function syncShopifyProductGraphqlAndOrigin({
   publications = []
 }) {
   const countryCode = resolveCountryOfOrigin(item);
+  const dims = resolveExportDims(item);
+  const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
   const resolvedTaxGid = await resolveLiveShopifyTaxonomyGid({ domain, tokenRef, authMode, settings, tax });
   const results = {
     country_code_of_origin: countryCode,
     origin_updated: false,
+    packed_dimensions_updated: false,
+    weight_updated: false,
     category_updated: false,
     seo_updated: false,
     category_gid: resolvedTaxGid,
@@ -1454,33 +1775,25 @@ async function syncShopifyProductGraphqlAndOrigin({
     warnings: []
   };
 
-  // 1. Set Country of Origin (strictly decoded from Donor VIN WMI) on Shopify InventoryItem (REST)
-  if (inventoryItemId) {
-    try {
-      const invResp = await shopifyFetchWithRetry(
-        `https://${domain}/admin/api/2025-01/inventory_items/${inventoryItemId}.json`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            inventory_item: {
-              id: Number(inventoryItemId),
-              country_code_of_origin: countryCode,
-              tracked: true
-            }
-          })
-        },
-        { authMode, settings, tokenRef }
-      );
-      if (invResp.ok) {
-        results.origin_updated = true;
-      } else {
-        const txt = await invResp.text().catch(() => '');
-        results.warnings.push(`origin HTTP ${invResp.status}: ${txt.slice(0, 120)}`);
-      }
-    } catch (err) {
-      results.warnings.push(`origin err: ${err.message}`);
-    }
+  // 1. Native Shipping fields: Packed product size (L×W×H in), Weight (lb), and VIN-decoded Country of Origin via GraphQL 2027-01
+  const shippingRes = await syncVariantNativeShippingGraphql({
+    domain,
+    tokenRef,
+    authMode,
+    settings,
+    productId,
+    variantId,
+    inventoryItemId,
+    item,
+    dims,
+    heavyPickupOnly
+  });
+  results.origin_updated = Boolean(shippingRes.origin_saved);
+  results.packed_dimensions_updated = Boolean(shippingRes.packed_dimensions_saved);
+  results.weight_updated = Boolean(shippingRes.weight_saved);
+  results.packed_dimensions = shippingRes.packed_dimensions || null;
+  if (shippingRes.warnings?.length) {
+    results.warnings.push(...shippingRes.warnings);
   }
 
   // 2. Assign Shopify Standard Product Taxonomy Category + High-Intent SEO Title (<=70) & Meta Description (<=155) via GraphQL
@@ -2973,22 +3286,13 @@ async function inspectLiveShopifyProducts(skus = []) {
     const v = (p.variants || [])[0] || {};
 
     let countryOfOrigin = '';
-    if (v.inventory_item_id) {
-      const invResp = await shopifyFetchWithRetry(
-        `https://${domain}/admin/api/2025-01/inventory_items/${v.inventory_item_id}.json`,
-        { method: 'GET', headers: { Accept: 'application/json' } },
-        { authMode: auth.authMode, settings, tokenRef }
-      );
-      if (invResp.ok) {
-        const invData = await invResp.json();
-        countryOfOrigin = invData?.inventory_item?.country_code_of_origin || '';
-      }
-    }
-
+    let packedDimensions = null;
+    let nativeWeight = null;
+    let gqlInventoryItem = null;
     let category = null;
     const metafields = {};
     const gqlResp = await shopifyFetchWithRetry(
-      `https://${domain}/admin/api/2025-01/graphql.json`,
+      `https://${domain}/admin/api/${SHOPIFY_SHIPPING_GRAPHQL_VERSION}/graphql.json`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -2997,6 +3301,22 @@ async function inspectLiveShopifyProducts(skus = []) {
             product(id: $id) {
               id
               category { id fullName }
+              variants(first: 1) {
+                nodes {
+                  id
+                  sku
+                  inventoryItem {
+                    id
+                    tracked
+                    requiresShipping
+                    countryCodeOfOrigin
+                    measurement {
+                      weight { value unit }
+                      packedDimensions { length width height unit }
+                    }
+                  }
+                }
+              }
               metafields(first: 30) {
                 edges { node { namespace key value } }
               }
@@ -3010,10 +3330,27 @@ async function inspectLiveShopifyProducts(skus = []) {
     if (gqlResp.ok) {
       const gqlData = await gqlResp.json();
       category = gqlData?.data?.product?.category || null;
+      gqlInventoryItem = gqlData?.data?.product?.variants?.nodes?.[0]?.inventoryItem || null;
+      if (gqlInventoryItem) {
+        countryOfOrigin = String(gqlInventoryItem.countryCodeOfOrigin || '').trim().toUpperCase();
+        packedDimensions = gqlInventoryItem.measurement?.packedDimensions || null;
+        nativeWeight = gqlInventoryItem.measurement?.weight || null;
+      }
       for (const edge of gqlData?.data?.product?.metafields?.edges || []) {
         if (edge?.node) {
           metafields[`${edge.node.namespace}.${edge.node.key}`] = edge.node.value;
         }
+      }
+    }
+    if (!countryOfOrigin && v.inventory_item_id) {
+      const invResp = await shopifyFetchWithRetry(
+        `https://${domain}/admin/api/2025-01/inventory_items/${v.inventory_item_id}.json`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        { authMode: auth.authMode, settings, tokenRef }
+      );
+      if (invResp.ok) {
+        const invData = await invResp.json();
+        countryOfOrigin = invData?.inventory_item?.country_code_of_origin || '';
       }
     }
 
@@ -3038,6 +3375,8 @@ async function inspectLiveShopifyProducts(skus = []) {
       sku,
       found: true,
       shopify_product_id: String(p.id),
+      shopify_variant_id: String(v.id || ''),
+      shopify_inventory_item_id: String(v.inventory_item_id || ''),
       handle: p.handle,
       status: p.status,
       title: p.title,
@@ -3045,6 +3384,8 @@ async function inspectLiveShopifyProducts(skus = []) {
       product_type: p.product_type,
       category,
       country_code_of_origin: countryOfOrigin,
+      packed_dimensions: packedDimensions,
+      native_weight: nativeWeight,
       variants_count: Array.isArray(p.variants) ? p.variants.length : 0,
       price: v.price,
       inventory_quantity: v.inventory_quantity,
@@ -3704,6 +4045,180 @@ async function hydrateInventoryFromShopifyCoMaster({
   };
 }
 
+/**
+ * FAST NATIVE SHIPPING SYNC PASS (GraphQL 2027-01):
+ * Writes item-specific native Packed product size (L × W × H in inches), Weight (lb),
+ * and VIN-WMI Country of Origin directly to every active allowlisted variant's Shipping card
+ * on Shopify via productVariantsBulkUpdate (and inventoryItemUpdate fallback/reinforcement).
+ */
+async function syncAllNativeShippingToShopify({ limit = 0, skus = [], onProgress = null } = {}) {
+  const settings = getSettings();
+  const auth = await resolveShopifyAccessToken(settings, { forceRefresh: true });
+  if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') {
+    return {
+      ok: false,
+      mode: 'not_configured',
+      message: 'Shopify Admin API credentials not configured in this environment.',
+      errors: ['Shopify Admin API credentials not configured']
+    };
+  }
+
+  const domain = auth.shopDomain;
+  const tokenRef = { token: auth.token };
+  const schema = await resolvePackedDimensionsSchema({ domain, tokenRef, authMode: auth.authMode, settings });
+
+  const allDbItems = db.prepare('SELECT * FROM inventory_items').all();
+  let targetItems = ensureDeduplicatedItems(allDbItems.filter(isMarketplaceSafeItem));
+
+  const skuFilter = Array.isArray(skus)
+    ? new Set(skus.map((s) => String(s || '').trim().toUpperCase()).filter(Boolean))
+    : new Set();
+  if (skuFilter.size > 0) {
+    targetItems = targetItems.filter((i) => skuFilter.has(String(i.sku || '').trim().toUpperCase()));
+  }
+  const lim = Number(limit || 0);
+  if (lim > 0) {
+    targetItems = targetItems.slice(0, lim);
+  }
+
+  let processed = 0;
+  let updatedCount = 0;
+  let packedDimsSaved = 0;
+  let weightSaved = 0;
+  let originSaved = 0;
+  let localPickupCount = 0;
+  const sampleResults = [];
+  const errors = [];
+
+  const emitProgress = () => {
+    if (typeof onProgress === 'function') {
+      onProgress({
+        total_active: targetItems.length,
+        processed,
+        updated_count: updatedCount,
+        packed_dimensions_saved: packedDimsSaved,
+        weight_saved: weightSaved,
+        origin_saved: originSaved,
+        local_pickup_only_count: localPickupCount,
+        errors_count: errors.length
+      });
+    }
+  };
+
+  for (const item of targetItems) {
+    const sku = String(item.sku || '').trim();
+    const dims = resolveExportDims(item);
+    const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+    if (heavyPickupOnly) localPickupCount++;
+
+    let productId = String(item.shopify_product_id || '').trim();
+    let variantId = String(item.shopify_variant_id || '').trim();
+    let inventoryItemId = String(item.shopify_inventory_item_id || '').trim();
+
+    // Resolve live Shopify IDs by handle/SKU if missing in SQLite
+    if (!productId || !variantId) {
+      try {
+        const handle = sku.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const lookupResp = await shopifyFetchWithRetry(
+          `https://${domain}/admin/api/2025-01/products.json?handle=${encodeURIComponent(handle)}&limit=1`,
+          { method: 'GET', headers: { Accept: 'application/json' } },
+          { authMode: auth.authMode, settings, tokenRef }
+        );
+        if (lookupResp.ok) {
+          const lData = await lookupResp.json();
+          const prod = lData?.products?.[0];
+          const v = prod?.variants?.[0];
+          if (prod?.id) productId = String(prod.id);
+          if (v?.id) variantId = String(v.id);
+          if (v?.inventory_item_id) inventoryItemId = String(v.inventory_item_id);
+          if (productId && variantId) {
+            db.prepare(`
+              UPDATE inventory_items
+              SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?, updated_at = ?
+              WHERE id = ?
+            `).run(productId, variantId, inventoryItemId, new Date().toISOString(), item.id);
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!productId || !variantId) {
+      processed++;
+      errors.push(`${sku}: Missing Shopify product_id/variant_id`);
+      emitProgress();
+      continue;
+    }
+
+    const res = await syncVariantNativeShippingGraphql({
+      domain,
+      tokenRef,
+      authMode: auth.authMode,
+      settings,
+      productId,
+      variantId,
+      inventoryItemId,
+      item,
+      dims,
+      heavyPickupOnly
+    });
+
+    processed++;
+    if (res.weight_saved) weightSaved++;
+    if (res.packed_dimensions_saved) packedDimsSaved++;
+    if (res.origin_saved) originSaved++;
+    if (res.ok) {
+      updatedCount++;
+    } else {
+      errors.push(`${sku}: ${res.error || 'shipping update failed'}`);
+    }
+
+    if (sampleResults.length < 10) {
+      sampleResults.push({
+        sku,
+        shopify_product_id: productId,
+        requires_shipping: res.requires_shipping,
+        weight_saved: res.weight_saved,
+        packed_dimensions_saved: res.packed_dimensions_saved,
+        origin_saved: res.origin_saved,
+        packed_dimensions: res.packed_dimensions,
+        native_weight: res.native_weight,
+        country_code_of_origin: res.live_country_code_of_origin || res.country_code_of_origin,
+        method: res.method,
+        warnings: res.warnings
+      });
+    }
+
+    emitProgress();
+    await new Promise((r) => setTimeout(r, 240));
+  }
+
+  logSync(
+    'outbound',
+    'shopify_native_shipping',
+    'graphql_2027_01_shipping_sync',
+    'ALL',
+    errors.length ? 'partial' : 'success',
+    `Shopify native Shipping sync (${schema.apiVersion}) on ${domain}: processed=${processed}/${targetItems.length}, updated=${updatedCount}, packed_dims_saved=${packedDimsSaved}, weight_saved=${weightSaved}, origin_saved=${originSaved}, local_pickup=${localPickupCount}, errors=${errors.length}.`
+  );
+
+  return {
+    ok: errors.length === 0,
+    mode: 'live_api',
+    api_version: schema.apiVersion,
+    schema,
+    shop_domain: domain,
+    total_active: targetItems.length,
+    processed,
+    updated_count: updatedCount,
+    packed_dimensions_saved: packedDimsSaved,
+    weight_saved: weightSaved,
+    origin_saved: originSaved,
+    local_pickup_only_count: localPickupCount,
+    sample_results: sampleResults,
+    errors
+  };
+}
+
 module.exports = {
   parseCsv,
   getValidPhotos,
@@ -3727,6 +4242,7 @@ module.exports = {
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,
+  syncAllNativeShippingToShopify,
   hydrateInventoryFromShopifyCoMaster,
   purgeAllShopifyPreVinListings,
   pushSingleItemToShopify,
