@@ -4149,7 +4149,16 @@ function renderCraigslistTrackerList() {
 
   const filter = state.clTrackerFilter || 'unposted';
   const searchVal = (document.getElementById('cl-tracker-search')?.value || '').trim().toLowerCase();
-  let filtered = filter === 'posted' ? postedItems : filter === 'all' ? queue : unpostedItems;
+  let filtered =
+    filter === 'posted'
+      ? postedItems
+      : filter === 'heavy'
+      ? unpostedItems.filter((q) => Boolean(q.heavy_local_pickup))
+      : filter === 'high150'
+      ? unpostedItems.filter((q) => Number(q.price_int || q.price || 0) >= 150)
+      : filter === 'all'
+      ? queue
+      : unpostedItems;
   if (searchVal) {
     filtered = filtered.filter((q) =>
       String(q.sku || '').toLowerCase().includes(searchVal) ||
@@ -4169,6 +4178,7 @@ function renderCraigslistTrackerList() {
   const rowsHtml = visible.map((q) => {
     const isPosted = Boolean(q.posted_craigslist);
     const priceInt = q.price_int || Math.round(Number(q.price || 0));
+    const installInt = Math.round(Number(q.install_price || 0));
     const photosLen = Array.isArray(q.photos) ? q.photos.length : 0;
     const postedStamp = q.posted_at ? String(q.posted_at).replace('T', ' ').slice(0, 16) : '';
     return `
@@ -4177,8 +4187,9 @@ function renderCraigslistTrackerList() {
           <div class="cl-tracker-item-title" title="${esc(q.cl_title || q.title)}">${esc(q.cl_title || q.title)}</div>
           <div class="cl-tracker-item-meta">
             <span class="mono" style="font-weight:700;color:var(--text-primary);">${esc(q.sku)}</span>
-            <span>$${priceInt}</span>
+            <span><strong>$${priceInt}</strong>${installInt > priceInt ? ` (Inst $${installInt})` : ''}</span>
             <span>📷 ${photosLen}</span>
+            ${q.heavy_local_pickup ? `<span style="color:#b45309;font-weight:700;">📦 Heavy Local</span>` : ''}
             ${isPosted
               ? `<span style="color:#15803d;font-weight:700;">✓ Posted${postedStamp ? ` (${esc(postedStamp)})` : ''}</span>`
               : `<span>Unposted</span>`
@@ -4326,7 +4337,7 @@ async function launchNextCraigslistQueueItemUi() {
       box.style.display = 'block';
       box.innerHTML = `
         <strong>🚗 Opened Craigslist Tacoma Dealer Auto Parts (<code>tac</code> → <code>fsd</code> → <code>ptd</code> • ZIP 98467) for <code>${esc(nextItem.sku)}</code> — ${esc(nextItem.cl_title || nextItem.title)} ($${nextItem.price_int || Math.round(Number(nextItem.price || 0))})</strong><br/>
-        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code> (v2.1.0)</a> is installed in Tampermonkey.</span>
+        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code> (v2.2.0)</a> is installed in Tampermonkey.</span>
       `;
     }
   } catch (err) {

@@ -1154,7 +1154,7 @@
 
           <!-- Donor Vehicle Garage Quick Add + Internal Work Order Part Pull -->
           <div class="surface-card">
-            <h3 style="margin-top:0;">14-Car Reconciled Donor Fleet &amp; Shop Bay Part Pull</h3>
+            <h3 style="margin-top:0;">Active Verified Donor Fleet &amp; Shop Bay Part Pull</h3>
             <form id="donor-add-form" style="margin-bottom:1rem;padding-bottom:0.9rem;border-bottom:1px solid var(--border-light);">
               <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
                 <input type="text" id="donor-vin-input" class="input mono" maxlength="17" required placeholder="Enter 17-Digit Donor VIN (e.g. 5TFHW5F12AX134337)" />
@@ -1236,12 +1236,12 @@
 
               <div class="cl-action-row">
                 <button type="button" class="btn btn-dark btn-sm" id="btn-cl-launch-next" onclick="launchNextCraigslistQueueItemUi()">▶ Launch Next Unposted Part</button>
-                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.1.0)</a>
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.2.0)</a>
                 <a href="/api/exports/craigslist.csv" download="craigslist-tacoma-98467-ptd.csv" class="btn btn-outline btn-sm">⬇ CL CSV</a>
               </div>
 
               <div class="cl-setup-hint">
-                <strong>1-Click Setup:</strong> Install Tampermonkey (Chrome/Edge/Brave), click <strong>Install / Update Auto-Fill Script</strong>, then click <strong>Launch Next Unposted Part</strong>. The script auto-advances <code>tac</code> → <strong>For Sale By Dealer</strong> → <strong>Auto Parts</strong>, fills all fields, attaches Shopify CDN photos via <code>GM_xmlhttpRequest</code> + <code>DataTransfer</code>, and auto-loads the next unposted SKU after Publish.
+                <strong>1-Click Setup:</strong> Install Tampermonkey (Chrome/Edge/Brave), click <strong>Install / Update Auto-Fill Script</strong>, then click <strong>Launch Next Unposted Part</strong>. Sorted highest-value first — auto-advances <code>tac</code> → <strong>For Sale By Dealer</strong> → <strong>Auto Parts</strong>, fills all fields + Turnkey Bay Install upsell, attaches Shopify CDN photos via <code>GM_xmlhttpRequest</code> + <code>DataTransfer</code>, and auto-loads the next unposted SKU after Publish.
               </div>
 
               <!-- Live Posted-SKU Progress Bar & Stats -->
@@ -1259,6 +1259,8 @@
               <div class="cl-tracker-controls">
                 <div class="cl-filter-pills" role="tablist" aria-label="Craigslist SKU filter">
                   <button type="button" class="cl-pill active" data-cl-filter="unposted" onclick="setCraigslistTrackerFilter('unposted')">Unposted</button>
+                  <button type="button" class="cl-pill" data-cl-filter="heavy" onclick="setCraigslistTrackerFilter('heavy')">Heavy Pickup</button>
+                  <button type="button" class="cl-pill" data-cl-filter="high150" onclick="setCraigslistTrackerFilter('high150')">$150+</button>
                   <button type="button" class="cl-pill" data-cl-filter="posted" onclick="setCraigslistTrackerFilter('posted')">Posted</button>
                   <button type="button" class="cl-pill" data-cl-filter="all" onclick="setCraigslistTrackerFilter('all')">All</button>
                 </div>
@@ -1973,7 +1975,7 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=32.14"></script>
+  <script src="/app.js?v=32.15"></script>
   <script src="/storefront-menu.js?v=30.0"></script>
   <script src="/sourcing-storefront.js?v=30.0"></script>
   <script src="/vin-aggregator-ui.js?v=30.0"></script>
