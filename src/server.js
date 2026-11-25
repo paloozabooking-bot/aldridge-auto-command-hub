@@ -2141,6 +2141,9 @@ const server = http.createServer(async (req, res) => {
         `Crosslist Auto-Sync verified ${activeSafe.length} single-variant OEM SKUs (${soldDelisted.length} sold/delisted excluded, ${qrLeakCount} QR cards leaked — 100% isolated). Ready for eBay aabcas, OfferUp, FB Marketplace, Google Merchant XML, Meta CSV & Craigslist Tacoma pts.`
       );
 
+      const cfg = getSettings();
+      const top200Enabled = getTop200Config(cfg).enabled;
+      const top200Plan = computeTop200Plan(null, cfg, { baseUrl });
       const batchSize = 250;
       const totalBatches = Math.max(1, Math.ceil(activeSafe.length / batchSize));
       const crosslistBatches = Array.from({ length: totalBatches }, (_, idx) => {
@@ -2153,26 +2156,33 @@ const server = http.createServer(async (req, res) => {
           start: startItem,
           end: endItem,
           count: Math.max(0, endItem - startItem + 1),
-          csv_url: `${baseUrl}/api/exports/crosslist.csv?batch=${batchNum}&size=${batchSize}`,
-          images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip?batch=${batchNum}&size=${batchSize}`
+          csv_url: `${baseUrl}/api/exports/crosslist.csv?tier=all&batch=${batchNum}&size=${batchSize}`,
+          images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip?tier=all&batch=${batchNum}&size=${batchSize}`
         };
       });
 
       sendJson(res, 200, {
         ok: true,
         synced_at: now,
+        top200_strategy_enabled: top200Enabled,
+        top200_count: top200Plan.summary.top200_count,
+        overflow_count: top200Plan.summary.overflow_count,
         ready_skus: activeSafe.length,
         sold_delisted_skus: soldDelisted.length,
         qr_excluded_verified: qrLeakCount === 0,
         qr_leak_count: qrLeakCount,
         shopify_webhook_url: `${baseUrl}/api/webhooks/shopify`,
-        crosslist_csv_url: `${baseUrl}/api/exports/crosslist.csv`,
-        crosslist_images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip`,
+        crosslist_top200_csv_url: `${baseUrl}/api/exports/crosslist.csv?tier=top200`,
+        crosslist_top200_images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip?tier=top200`,
+        crosslist_cleanup_script_url: `${baseUrl}/crosslist-cleanup.user.js`,
+        crosslist_csv_url: `${baseUrl}/api/exports/crosslist.csv?tier=${top200Enabled ? 'top200' : 'all'}`,
+        crosslist_images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip?tier=${top200Enabled ? 'top200' : 'all'}`,
         crosslist_batches: crosslistBatches,
-        ebay_us_csv_url: `${baseUrl}/api/exports/ebay_us.csv`,
+        ebay_us_csv_url: `${baseUrl}/api/exports/ebay_us.csv?tier=${top200Enabled ? 'top200' : 'all'}`,
+        ebay_end_overflow_csv_url: `${baseUrl}/api/exports/ebay_us_end_overflow.csv`,
         google_merchant_xml_url: `${baseUrl}/api/feeds/google-merchant.xml`,
         meta_catalog_csv_url: `${baseUrl}/api/feeds/meta-catalog.csv`,
-        craigslist_csv_url: `${baseUrl}/api/exports/craigslist.csv`,
+        craigslist_csv_url: `${baseUrl}/api/exports/craigslist.csv?tier=${top200Enabled ? 'top200' : 'all'}`,
         craigslist_queue_url: `${baseUrl}/api/craigslist/queue`,
         craigslist_userscript_url: `${baseUrl}/craigslist-autofill.user.js`,
         shopify_sync: shopifySyncResult

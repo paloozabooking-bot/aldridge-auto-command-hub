@@ -3965,45 +3965,61 @@ function renderCrosslistBatchDownloadsUi(totalActiveCount) {
   const badge = document.getElementById('crosslist-batch-count-badge');
   if (!host) return;
 
-  const total = Math.max(0, Number(totalActiveCount || 0));
+  const top200Count = Number(state.top200Plan?.summary?.top200_count || Math.min(200, Number(totalActiveCount || 200)));
+  const totalCatalog = Math.max(0, Number(state.data?.inventory?.filter((i) => i.status === 'active' && Number(i.quantity || 0) > 0).length || totalActiveCount || 0));
   const batchSize = 250;
-  const totalBatches = Math.max(1, Math.ceil(total / batchSize));
+  const totalBatches = Math.max(1, Math.ceil(totalCatalog / batchSize));
 
   if (badge) {
-    badge.textContent = total > 0 ? `${total} SKUs • ${totalBatches} Batch${totalBatches === 1 ? '' : 'es'}` : '250/batch';
+    badge.textContent = `Top ${top200Count} (1 Batch) • ${totalCatalog} Active`;
   }
 
   const rows = [];
   rows.push(`
-    <div class="cl-batch-row is-full">
+    <div class="cl-batch-row is-full" style="border-color:#2563eb;background:rgba(37,99,235,0.06);">
       <div>
-        <div class="cl-batch-title">Full Catalog (${total} Active SKUs)</div>
-        <div class="cl-batch-sub">All active verified single-variant OEM parts in 1 CSV + 1 Images ZIP</div>
+        <div class="cl-batch-title">🎯 Top-${top200Count} Strategy Single Batch (Recommended for Crosslist Cap)</div>
+        <div class="cl-batch-sub">Fits Crosslist's 200–250 cap in 1 upload (<code>tier=top200</code> — high-ticket local + fast parcel movers)</div>
       </div>
       <div class="cl-batch-btns">
-        <a href="/api/exports/crosslist.csv" download="crosslist-ebay-offerup-fb-import.csv" class="btn btn-dark btn-sm">⬇ Full CSV</a>
-        <a href="/api/exports/crosslist-images.zip" download="crosslist-images.zip" class="btn btn-primary btn-sm" onclick="notifyCrosslistZipDownload('Full Crosslist Images ZIP (${total} SKUs)')">📦 Full Images ZIP</a>
+        <a href="/api/exports/crosslist.csv?tier=top200" download="crosslist-top200-ebay-offerup-fb.csv" class="btn btn-primary btn-sm">⬇ Top-200 CSV</a>
+        <a href="/api/exports/crosslist-images.zip?tier=top200" download="crosslist-images-top200.zip" class="btn btn-dark btn-sm" onclick="notifyCrosslistZipDownload('Crosslist Top-200 Images ZIP (${top200Count} SKUs)')">📦 Top-200 ZIP</a>
       </div>
     </div>
   `);
 
-  for (let b = 1; b <= totalBatches; b++) {
-    const startItem = (b - 1) * batchSize + 1;
-    const endItem = total > 0 ? Math.min(total, b * batchSize) : b * batchSize;
-    const count = total > 0 ? Math.max(0, endItem - startItem + 1) : batchSize;
-    const rangeLabel = total > 0 ? `Items ${startItem}–${endItem} (${count} SKUs)` : `Up to ${batchSize} SKUs`;
-    rows.push(`
-      <div class="cl-batch-row is-batch">
-        <div>
-          <div class="cl-batch-title">Batch ${b} — ${rangeLabel}</div>
-          <div class="cl-batch-sub">250-item Crosslist bulk import pair (<code>batch=${b}&amp;size=${batchSize}</code>)</div>
-        </div>
-        <div class="cl-batch-btns">
-          <a href="/api/exports/crosslist.csv?batch=${b}&amp;size=${batchSize}" download="crosslist-import-batch${b}.csv" class="btn btn-outline btn-sm">⬇ Batch ${b} CSV</a>
-          <a href="/api/exports/crosslist-images.zip?batch=${b}&amp;size=${batchSize}" download="crosslist-images-batch${b}.zip" class="btn btn-dark btn-sm" onclick="notifyCrosslistZipDownload('Crosslist Batch ${b} Images ZIP (${rangeLabel})')">📦 Batch ${b} ZIP</a>
-        </div>
+  rows.push(`
+    <div class="cl-batch-row is-full">
+      <div>
+        <div class="cl-batch-title">All Active Catalog (${totalCatalog} Active SKUs)</div>
+        <div class="cl-batch-sub">Unfiltered active catalog in 1 CSV + 1 Images ZIP (<code>tier=all</code>)</div>
       </div>
-    `);
+      <div class="cl-batch-btns">
+        <a href="/api/exports/crosslist.csv?tier=all" download="crosslist-ebay-offerup-fb-import.csv" class="btn btn-outline btn-sm">⬇ All Active CSV</a>
+        <a href="/api/exports/crosslist-images.zip?tier=all" download="crosslist-images.zip" class="btn btn-outline btn-sm" onclick="notifyCrosslistZipDownload('Full Crosslist Images ZIP (${totalCatalog} SKUs)')">📦 All Active ZIP</a>
+      </div>
+    </div>
+  `);
+
+  if (totalCatalog > batchSize) {
+    for (let b = 1; b <= totalBatches; b++) {
+      const startItem = (b - 1) * batchSize + 1;
+      const endItem = totalCatalog > 0 ? Math.min(totalCatalog, b * batchSize) : b * batchSize;
+      const count = totalCatalog > 0 ? Math.max(0, endItem - startItem + 1) : batchSize;
+      const rangeLabel = totalCatalog > 0 ? `Items ${startItem}–${endItem} (${count} SKUs)` : `Up to ${batchSize} SKUs`;
+      rows.push(`
+        <div class="cl-batch-row is-batch">
+          <div>
+            <div class="cl-batch-title">Full-Catalog Batch ${b} — ${rangeLabel}</div>
+            <div class="cl-batch-sub">250-item pair (<code>tier=all&amp;batch=${b}&amp;size=${batchSize}</code>)</div>
+          </div>
+          <div class="cl-batch-btns">
+            <a href="/api/exports/crosslist.csv?tier=all&amp;batch=${b}&amp;size=${batchSize}" download="crosslist-import-batch${b}.csv" class="btn btn-outline btn-sm">⬇ Batch ${b} CSV</a>
+            <a href="/api/exports/crosslist-images.zip?tier=all&amp;batch=${b}&amp;size=${batchSize}" download="crosslist-images-batch${b}.zip" class="btn btn-dark btn-sm" onclick="notifyCrosslistZipDownload('Crosslist Batch ${b} Images ZIP (${rangeLabel})')">📦 Batch ${b} ZIP</a>
+          </div>
+        </div>
+      `);
+    }
   }
 
   host.innerHTML = rows.join('');
