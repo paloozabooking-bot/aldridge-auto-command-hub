@@ -46,6 +46,9 @@ const {
 const { generateAllPolicies } = require('./policies');
 const {
   getValidPhotos,
+  resolveExportPhotoUrl,
+  cleanListingTitle,
+  normalizeExportCondition,
   importInventoryCsv,
   generateMasterImportTemplateCsv,
   generateShopifyCsv,
@@ -770,7 +773,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.13',
+        sw_version: 'v32.14',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -802,33 +805,78 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Automated Craigslist Tacoma/Pierce County (pts — $0 Auto Parts, ZIP 98467) Bulk Queue & Auto-Fill Endpoints
+    // Automated Craigslist Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts (ptd, ZIP 98467) Bulk Queue & Auto-Fill Endpoints
     if (method === 'GET' && pathname === '/api/craigslist/queue') {
+      const cfg = getSettings();
+      const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
       const donorMap = buildDonorMap();
       const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
         .all()
         .filter((r) => getValidPhotos(r).length > 0 && validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
         .map((r) => hydrateInventoryItem(r, donorMap))
         .filter((r) => isAllowedActiveDonorVehicle(r).allowed);
-      const queue = rows.map((i) => ({
-        sku: i.sku,
-        title: i.title,
-        price: Number(i.price_we_pull || 0),
-        install_price: Number(i.price_pull_install || i.price_we_pull || 0),
-        zip: '98467',
-        category: 'pts',
-        fee: '$0',
-        posted_craigslist: Boolean(i.channels?.craigslist_posted),
-        launch_url: `https://post.craigslist.org/c/sea?lang=en&cc=us#aldridge_sku=${encodeURIComponent(i.sku)}&hub=${encodeURIComponent(baseUrl)}`
-      }));
+      const queue = rows.map((i) => {
+        const tax = resolvePartTaxonomyAndMetafields(i, cfg);
+        const cleanPhotos = getValidPhotos(i).filter((u) => !isQrCardUrl(u));
+        const photoUrls = cleanPhotos
+          .map((p) => resolveExportPhotoUrl(p, canonicalBase, cfg))
+          .filter(Boolean)
+          .slice(0, 24);
+        const cleanTitle = cleanListingTitle(i.title || '').trim();
+        const clTitle =
+          `${cleanTitle} (OEM Tested — Tacoma)`.length <= 70
+            ? `${cleanTitle} (OEM Tested — Tacoma)`
+            : `${cleanTitle} — Tacoma`.length <= 70
+            ? `${cleanTitle} — Tacoma`
+            : cleanTitle.slice(0, 70).trim();
+        const priceInt = Math.max(1, Math.round(Number(i.price_we_pull || 0)));
+        const condNorm = normalizeExportCondition(i.condition) === 'New' ? 'new' : 'good';
+        const ymm = tax.customLabel0 || [i.fitment_years, i.fitment_make, i.fitment_model].filter(Boolean).join(' ').trim();
+        const clBody = renderLocalMarketplacePacket(i, cfg);
+        return {
+          sku: i.sku,
+          title: i.title,
+          cl_title: clTitle,
+          price: Number(i.price_we_pull || 0),
+          price_int: priceInt,
+          install_price: Number(i.price_pull_install || i.price_we_pull || 0),
+          condition: condNorm,
+          condition_raw: i.condition || 'Used',
+          brand: tax.brand || i.brand || 'OEM',
+          mpn: tax.mpn || '',
+          mpn_or_fitment: tax.mpn || ymm || '',
+          ymm,
+          cl_body: clBody,
+          zip: cfg.zip || '98467',
+          geographic_area: `${cfg.city_display || 'University Place / Tacoma'} ${cfg.state || 'WA'} ${cfg.zip || '98467'}`,
+          street: cfg.street_address || '5115 66th St W, Bldg B',
+          cross_street: 'Bridgeport Way W',
+          city: 'University Place',
+          state: cfg.state || 'WA',
+          phone: cfg.phone || '(253) 245-4206',
+          contact_name: cfg.business_name || "Aldridge Auto's",
+          email: cfg.email || 'service@aldridgeautosupply.com',
+          subarea: 'tac',
+          posting_type: 'fsd',
+          category: 'ptd',
+          photos: photoUrls,
+          photo_urls: photoUrls,
+          posted_craigslist: Boolean(i.channels?.craigslist_posted),
+          posted_at: i.channels?.craigslist_posted_at || null,
+          craigslist_url: i.channels?.craigslist_url || null,
+          craigslist_post_id: i.channels?.craigslist_post_id || null,
+          launch_url: `https://post.craigslist.org/c/sea?lang=en&cc=us#aldridge_sku=${encodeURIComponent(i.sku)}&hub=${encodeURIComponent(canonicalBase)}`
+        };
+      });
       const postedCount = queue.filter((q) => q.posted_craigslist).length;
       sendJson(res, 200, {
-        target: 'seattle.craigslist.org -> Tacoma/Pierce County (tac) -> auto parts - by owner (pts, $0 fee, ZIP 98467)',
-        userscript_url: `${baseUrl}/craigslist-autofill.user.js`,
-        csv_export_url: `${baseUrl}/api/exports/craigslist.csv`,
-        zip: '98467',
-        category: 'pts',
-        fee: '$0',
+        target: 'seattle.craigslist.org -> Tacoma/Pierce County (tac) -> for sale by dealer -> auto parts (ptd, ZIP 98467)',
+        userscript_url: `${canonicalBase}/craigslist-autofill.user.js`,
+        csv_export_url: `${canonicalBase}/api/exports/craigslist.csv`,
+        zip: cfg.zip || '98467',
+        subarea: 'tac',
+        posting_type: 'fsd',
+        category: 'ptd',
         count: queue.length,
         posted_count: postedCount,
         remaining_count: queue.length - postedCount,
@@ -847,18 +895,24 @@ const server = http.createServer(async (req, res) => {
       }
       const item = hydrateInventoryItem(row);
       const cfg = getSettings();
+      const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
       const tax = resolvePartTaxonomyAndMetafields(item, cfg);
       const reviewThumbsDir = path.join(PUBLIC_DIR, 'review-thumbs');
       const cleanPhotos = getValidPhotos(row);
       const photoDataUrls = [];
+      const photoUrls = [];
       for (const p of cleanPhotos) {
         if (isQrCardUrl(p)) continue;
+        const resolvedUrl = resolveExportPhotoUrl(p, canonicalBase, cfg);
+        if (resolvedUrl) photoUrls.push(resolvedUrl);
         if (p.startsWith('/uploads/')) {
           const abs = path.join(UPLOADS_DIR, path.basename(p));
           if (fs.existsSync(abs)) {
             const ext = path.extname(abs).toLowerCase();
             const mime = MIME_TYPES[ext] || 'image/jpeg';
             photoDataUrls.push(`data:${mime};base64,${fs.readFileSync(abs).toString('base64')}`);
+          } else if (resolvedUrl) {
+            photoDataUrls.push(resolvedUrl);
           }
         } else if (p.startsWith('/review-thumbs/')) {
           const abs = path.join(reviewThumbsDir, path.basename(p));
@@ -866,25 +920,49 @@ const server = http.createServer(async (req, res) => {
             const ext = path.extname(abs).toLowerCase();
             const mime = MIME_TYPES[ext] || 'image/jpeg';
             photoDataUrls.push(`data:${mime};base64,${fs.readFileSync(abs).toString('base64')}`);
+          } else if (resolvedUrl) {
+            photoDataUrls.push(resolvedUrl);
           }
         } else if (/^https?:\/\//i.test(p)) {
           photoDataUrls.push(p);
         }
       }
       const clBody = renderLocalMarketplacePacket(row, cfg);
+      const cleanTitle = cleanListingTitle(item.title || '').trim();
+      const clTitle =
+        `${cleanTitle} (OEM Tested — Tacoma)`.length <= 70
+          ? `${cleanTitle} (OEM Tested — Tacoma)`
+          : `${cleanTitle} — Tacoma`.length <= 70
+          ? `${cleanTitle} — Tacoma`
+          : cleanTitle.slice(0, 70).trim();
+      const ymm = tax.customLabel0 || [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim();
       sendJson(res, 200, {
         sku: item.sku,
         sold: false,
-        cl_title: `${item.title} (OEM Tested — University Place / Tacoma)`.slice(0, 70),
+        cl_title: clTitle,
         price_int: Math.max(1, Math.round(Number(item.price_we_pull || 0))),
+        condition: normalizeExportCondition(item.condition) === 'New' ? 'new' : 'good',
+        condition_raw: item.condition || 'Used',
         zip: cfg.zip || '98467',
-        category: 'pts',
-        fee: '$0',
-        brand: tax.brand,
-        mpn_or_fitment: tax.mpn || tax.customLabel0,
-        ymm: tax.customLabel0,
+        geographic_area: `${cfg.city_display || 'University Place / Tacoma'} ${cfg.state || 'WA'} ${cfg.zip || '98467'}`,
+        street: cfg.street_address || '5115 66th St W, Bldg B',
+        cross_street: 'Bridgeport Way W',
+        city: 'University Place',
+        state: cfg.state || 'WA',
+        phone: cfg.phone || '(253) 245-4206',
+        contact_name: cfg.business_name || "Aldridge Auto's",
+        email: cfg.email || 'service@aldridgeautosupply.com',
+        subarea: 'tac',
+        posting_type: 'fsd',
+        category: 'ptd',
+        brand: tax.brand || item.brand || 'OEM',
+        mpn: tax.mpn || '',
+        mpn_or_fitment: tax.mpn || ymm || '',
+        ymm,
         cl_body: clBody,
-        photo_data_urls: photoDataUrls
+        photos: photoUrls.slice(0, 24),
+        photo_urls: photoUrls.slice(0, 24),
+        photo_data_urls: photoDataUrls.slice(0, 24)
       });
       return;
     }
@@ -894,15 +972,32 @@ const server = http.createServer(async (req, res) => {
       const row = db.prepare('SELECT * FROM inventory_items WHERE sku = ?').get(String(b.sku || ''));
       if (!row) return sendJson(res, 404, { error: 'SKU not found' });
       const ch = JSON.parse(row.channels_json || '{}');
-      ch.craigslist_posted = true;
-      ch.craigslist_posted_at = new Date().toISOString();
+      const postedFlag = b.posted !== false;
+      ch.craigslist_posted = postedFlag;
+      ch.craigslist_posted_at = postedFlag ? new Date().toISOString() : null;
+      if (b.craigslist_url) ch.craigslist_url = String(b.craigslist_url).trim();
+      if (b.craigslist_post_id) ch.craigslist_post_id = String(b.craigslist_post_id).trim();
       db.prepare('UPDATE inventory_items SET channels_json = ?, updated_at = ? WHERE id = ?').run(
         JSON.stringify(ch),
         new Date().toISOString(),
         row.id
       );
-      logSync('outbound', 'craigslist_tacoma_pts', 'auto_fill_posted', row.sku, 'success', `Marked ${row.sku} posted to seattle.craigslist.org Tacoma/Pierce County auto parts (pts, $0 fee, ZIP 98467).`);
-      sendJson(res, 200, { ok: true, sku: row.sku, craigslist_posted: true });
+      logSync(
+        'outbound',
+        'craigslist_tacoma_ptd',
+        postedFlag ? 'auto_fill_posted' : 'auto_fill_unmarked',
+        row.sku,
+        'success',
+        `${postedFlag ? 'Marked' : 'Unmarked'} ${row.sku} on seattle.craigslist.org Tacoma/Pierce County auto parts (by dealer, ZIP 98467)${ch.craigslist_post_id ? ` [postId=${ch.craigslist_post_id}]` : ''}.`
+      );
+      sendJson(res, 200, {
+        ok: true,
+        sku: row.sku,
+        craigslist_posted: ch.craigslist_posted,
+        craigslist_posted_at: ch.craigslist_posted_at,
+        craigslist_url: ch.craigslist_url || null,
+        craigslist_post_id: ch.craigslist_post_id || null
+      });
       return;
     }
 
