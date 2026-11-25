@@ -85,6 +85,9 @@ function switchStaffTab(tabId) {
   if (tabId === 'staff-review' && typeof ensureReviewGalleryLoaded === 'function') {
     ensureReviewGalleryLoaded();
   }
+  if (tabId === 'staff-sync' && typeof loadCraigslistHubQueueUi === 'function') {
+    loadCraigslistHubQueueUi(false);
+  }
 }
 
 /* ==================== MASTER RENDER ==================== */
@@ -1351,28 +1354,42 @@ function renderSyncAndChecklists() {
     `;
   }
 
+  const allInv = state.data?.inventory || [];
+  const soldCount = allInv.filter((i) => i.status === 'sold' || Number(i.quantity || 0) <= 0).length;
+  const clPostedCount = state.clQueueData
+    ? Number(state.clQueueData.posted_count || 0)
+    : allInv.filter((i) => i.status === 'active' && Number(i.quantity || 0) > 0 && i.channels?.craigslist_posted).length;
+  const clTotalCount = state.clQueueData ? Number(state.clQueueData.count || totalActive) : totalActive;
+  const clRemainingCount = Math.max(0, clTotalCount - clPostedCount);
+
   const clBadges = document.getElementById('crosslist-auto-sync-badges');
   if (clBadges) {
-    const soldCount = (state.inventory || []).filter((i) => i.status === 'sold' || Number(i.quantity || 0) <= 0).length;
-    const clPostedCount = (state.inventory || []).filter((i) => i.status === 'active' && Number(i.quantity || 0) > 0 && i.channels?.craigslist_posted).length;
     clBadges.innerHTML = `
       <span class="badge badge-ok">Crosslist Ready: ${totalActive} Single-Variant SKUs (Qty=1)</span>
-      <span class="badge badge-ok">QR Cards Excluded: Crosslist • eBay • Google • Meta • CL</span>
+      <span class="badge badge-ok">QR Cards Excluded: 0 Leaks</span>
       <span class="badge badge-ok">Sold/Auto-Delisted Excluded: ${soldCount}</span>
-      <span class="badge badge-warn">Craigslist Tacoma pts ($0 • 98467): ${totalActive - clPostedCount} Remaining (${clPostedCount} Posted)</span>
+      <span class="badge ${clRemainingCount === 0 && clTotalCount > 0 ? 'badge-ok' : 'badge-warn'}">Craigslist Tacoma (tac/ptd): ${clPostedCount} Posted • ${clRemainingCount} Remaining</span>
     `;
   }
 
+  if (typeof renderCrosslistBatchDownloadsUi === 'function') {
+    renderCrosslistBatchDownloadsUi(totalActive);
+  }
+  if (typeof renderCraigslistTrackerList === 'function' && state.clQueueData) {
+    renderCraigslistTrackerList();
+  }
+
   const feedRows = [
-    { label: `1. Clean ${totalActive}-SKU Single-Variant Shopify CSV (1 Variant • Shop Install Callout + Direct App/Site Links)`, url: feeds.shopify_csv, type: 'download' },
-    { label: `2. Crosslist Bulk Import CSV (eBay aabcas + OfferUp + Facebook Marketplace • ${totalActive} Single-Variant Photo SKUs)`, url: feeds.crosslist_csv || '/api/exports/crosslist.csv', type: 'download' },
-    { label: `3. Craigslist Tacoma/Pierce County pts CSV ($0 Fee • ZIP 98467 • 5115 66th St W Bldg B • ${totalActive} SKUs)`, url: feeds.craigslist_csv || '/api/exports/craigslist.csv', type: 'download' },
-    { label: `4. Standard eBay US Seller Hub CSV (ebay.com aabcas • 100% Policy-Compliant Zero Off-eBay Links • ${totalActive} SKUs)`, url: feeds.ebay_us_csv || feeds.ebay_motors_csv, type: 'download' },
-    { label: `5. Google Merchant Center & Local Inventory XML (${totalActive} Verified Photo SKUs w/ L×W×H + Weight)`, url: feeds.google_merchant_xml, type: 'copy_url' },
-    { label: `6. Meta Commerce Catalog CSV (Facebook Business Page Shop & Marketplace Feed • ${totalActive} Photo SKUs)`, url: feeds.meta_catalog_csv, type: 'copy_url' },
-    { label: `7. Vendoo Single-Variant Export CSV (${totalActive} Photo SKUs w/ Exact Weight & L×W×H)`, url: feeds.vendoo_csv, type: 'download' },
-    { label: `8. TikTok Shop Parcel Auto Parts CSV ($0 Monthly Fee • ${parcelActive} Parcel Photo SKUs Only)`, url: feeds.tiktok_shop_csv, type: 'download' },
-    { label: '9. Shopify Co-Master Inbound Webhook URL (orders/create & products/update Auto-Zero)', url: feeds.shopify_webhook_endpoint, type: 'copy_url' }
+    { label: `1. Clean ${totalActive}-SKU Single-Variant Shopify CSV (1 Variant • Shop Install Callout + Direct App/Site Links)`, url: feeds.shopify_csv, type: 'download', btnLabel: 'Download CSV' },
+    { label: `2. Crosslist Official Bulk Import CSV (Car & Truck Parts UUIDs • ${totalActive} Single-Variant Photo SKUs)`, url: feeds.crosslist_csv || '/api/exports/crosslist.csv', type: 'download', btnLabel: 'Download CSV' },
+    { label: `3. Crosslist Matching Images ZIP (Full Catalog • ${totalActive} SKUs — also available in 250-item batches above)`, url: feeds.crosslist_images_zip || '/api/exports/crosslist-images.zip', type: 'download', btnLabel: 'Download ZIP' },
+    { label: `4. Craigslist Tacoma/Pierce County Dealer Auto Parts CSV (tac / fsd / ptd • ZIP 98467 • ${totalActive} SKUs)`, url: feeds.craigslist_csv || '/api/exports/craigslist.csv', type: 'download', btnLabel: 'Download CSV' },
+    { label: `5. Standard eBay US Seller Hub CSV (ebay.com aabcas • 100% Policy-Compliant Zero Off-eBay Links • ${totalActive} SKUs)`, url: feeds.ebay_us_csv || feeds.ebay_motors_csv, type: 'download', btnLabel: 'Download CSV' },
+    { label: `6. Google Merchant Center & Local Inventory XML (${totalActive} Verified Photo SKUs w/ L×W×H + Weight)`, url: feeds.google_merchant_xml, type: 'copy_url' },
+    { label: `7. Meta Commerce Catalog CSV (Facebook Business Page Shop & Marketplace Feed • ${totalActive} Photo SKUs)`, url: feeds.meta_catalog_csv, type: 'copy_url' },
+    { label: `8. Vendoo Single-Variant Export CSV (${totalActive} Photo SKUs w/ Exact Weight & L×W×H)`, url: feeds.vendoo_csv, type: 'download', btnLabel: 'Download CSV' },
+    { label: `9. TikTok Shop Parcel Auto Parts CSV ($0 Monthly Fee • ${parcelActive} Parcel Photo SKUs Only)`, url: feeds.tiktok_shop_csv, type: 'download', btnLabel: 'Download CSV' },
+    { label: '10. Shopify Co-Master Inbound Webhook URL (orders/create & products/update Auto-Zero)', url: feeds.shopify_webhook_endpoint, type: 'copy_url' }
   ];
 
   document.getElementById('sync-feeds-list').innerHTML = feedRows.map((f) => `
@@ -1382,7 +1399,7 @@ function renderSyncAndChecklists() {
         <span class="mono" style="font-size:0.73rem;color:var(--text-muted);word-break:break-all;">${esc(f.url)}</span>
       </div>
       ${f.type === 'download'
-        ? `<a href="${esc(f.url)}" class="btn btn-dark btn-sm" style="white-space:nowrap;">Download CSV</a>`
+        ? `<a href="${esc(f.url)}" class="btn btn-dark btn-sm" style="white-space:nowrap;">${esc(f.btnLabel || 'Download')}</a>`
         : `<button type="button" class="btn btn-outline btn-sm" style="white-space:nowrap;" onclick="copyFeedUrl('${esc(f.url)}')">Copy Live URL</button>`
       }
     </div>
@@ -3934,6 +3951,299 @@ function bindReviewGalleryEvents() {
   });
 }
 
+function notifyCrosslistZipDownload(label) {
+  if (typeof showToast === 'function') {
+    showToast(`Building ${label} — your browser download will start automatically in a few seconds...`);
+  }
+}
+
+function renderCrosslistBatchDownloadsUi(totalActiveCount) {
+  const host = document.getElementById('crosslist-batch-downloads');
+  const badge = document.getElementById('crosslist-batch-count-badge');
+  if (!host) return;
+
+  const total = Math.max(0, Number(totalActiveCount || 0));
+  const batchSize = 250;
+  const totalBatches = Math.max(1, Math.ceil(total / batchSize));
+
+  if (badge) {
+    badge.textContent = total > 0 ? `${total} SKUs • ${totalBatches} Batch${totalBatches === 1 ? '' : 'es'}` : '250/batch';
+  }
+
+  const rows = [];
+  rows.push(`
+    <div class="cl-batch-row is-full">
+      <div>
+        <div class="cl-batch-title">Full Catalog (${total} Active SKUs)</div>
+        <div class="cl-batch-sub">All active verified single-variant OEM parts in 1 CSV + 1 Images ZIP</div>
+      </div>
+      <div class="cl-batch-btns">
+        <a href="/api/exports/crosslist.csv" download="crosslist-ebay-offerup-fb-import.csv" class="btn btn-dark btn-sm">⬇ Full CSV</a>
+        <a href="/api/exports/crosslist-images.zip" download="crosslist-images.zip" class="btn btn-primary btn-sm" onclick="notifyCrosslistZipDownload('Full Crosslist Images ZIP (${total} SKUs)')">📦 Full Images ZIP</a>
+      </div>
+    </div>
+  `);
+
+  for (let b = 1; b <= totalBatches; b++) {
+    const startItem = (b - 1) * batchSize + 1;
+    const endItem = total > 0 ? Math.min(total, b * batchSize) : b * batchSize;
+    const count = total > 0 ? Math.max(0, endItem - startItem + 1) : batchSize;
+    const rangeLabel = total > 0 ? `Items ${startItem}–${endItem} (${count} SKUs)` : `Up to ${batchSize} SKUs`;
+    rows.push(`
+      <div class="cl-batch-row is-batch">
+        <div>
+          <div class="cl-batch-title">Batch ${b} — ${rangeLabel}</div>
+          <div class="cl-batch-sub">250-item Crosslist bulk import pair (<code>batch=${b}&amp;size=${batchSize}</code>)</div>
+        </div>
+        <div class="cl-batch-btns">
+          <a href="/api/exports/crosslist.csv?batch=${b}&amp;size=${batchSize}" download="crosslist-import-batch${b}.csv" class="btn btn-outline btn-sm">⬇ Batch ${b} CSV</a>
+          <a href="/api/exports/crosslist-images.zip?batch=${b}&amp;size=${batchSize}" download="crosslist-images-batch${b}.zip" class="btn btn-dark btn-sm" onclick="notifyCrosslistZipDownload('Crosslist Batch ${b} Images ZIP (${rangeLabel})')">📦 Batch ${b} ZIP</a>
+        </div>
+      </div>
+    `);
+  }
+
+  host.innerHTML = rows.join('');
+}
+
+async function loadCraigslistHubQueueUi(forceRefresh = false) {
+  if (state.clQueueLoading) return;
+  if (state.clQueueData && !forceRefresh) {
+    renderCraigslistTrackerList();
+    return;
+  }
+
+  state.clQueueLoading = true;
+  const refreshBtn = document.getElementById('btn-cl-refresh-queue');
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '⏳';
+  }
+  try {
+    const res = await fetch('/api/craigslist/queue', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.clQueueData = data;
+    renderCraigslistTrackerList();
+    // Refresh header badges & batch counts with live queue count
+    if (typeof renderCrosslistBatchDownloadsUi === 'function' && Number(data.count || 0) > 0) {
+      renderCrosslistBatchDownloadsUi(data.count);
+    }
+    const clBadges = document.getElementById('crosslist-auto-sync-badges');
+    if (clBadges && state.data) {
+      const allInv = state.data.inventory || [];
+      const soldCount = allInv.filter((i) => i.status === 'sold' || Number(i.quantity || 0) <= 0).length;
+      const total = Number(data.count || 0);
+      const posted = Number(data.posted_count || 0);
+      const remaining = Math.max(0, Number(data.remaining_count ?? (total - posted)));
+      clBadges.innerHTML = `
+        <span class="badge badge-ok">Crosslist Ready: ${total} Single-Variant SKUs (Qty=1)</span>
+        <span class="badge badge-ok">QR Cards Excluded: 0 Leaks</span>
+        <span class="badge badge-ok">Sold/Auto-Delisted Excluded: ${soldCount}</span>
+        <span class="badge ${remaining === 0 && total > 0 ? 'badge-ok' : 'badge-warn'}">Craigslist Tacoma (tac/ptd): ${posted} Posted • ${remaining} Remaining</span>
+      `;
+    }
+  } catch (err) {
+    const listEl = document.getElementById('cl-tracker-list');
+    if (listEl) {
+      listEl.innerHTML = `<div style="padding:0.7rem;color:#b91c1c;font-size:0.79rem;font-weight:600;">Could not load /api/craigslist/queue: ${esc(err.message || String(err))}</div>`;
+    }
+  } finally {
+    state.clQueueLoading = false;
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '🔄 Sync';
+    }
+  }
+}
+
+function setCraigslistTrackerFilter(filter) {
+  state.clTrackerFilter = filter || 'unposted';
+  document.querySelectorAll('.cl-pill[data-cl-filter]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.clFilter === state.clTrackerFilter);
+  });
+  renderCraigslistTrackerList();
+}
+
+function renderCraigslistTrackerList() {
+  const data = state.clQueueData;
+  const summaryEl = document.getElementById('cl-progress-summary');
+  const nextUpEl = document.getElementById('cl-next-up-card');
+  const listEl = document.getElementById('cl-tracker-list');
+  const launchBtn = document.getElementById('btn-cl-launch-next');
+  if (!summaryEl || !listEl || !data) return;
+
+  const queue = Array.isArray(data.queue) ? data.queue : [];
+  const total = queue.length;
+  const postedItems = queue.filter((q) => Boolean(q.posted_craigslist));
+  const unpostedItems = queue.filter((q) => !q.posted_craigslist);
+  const postedCount = postedItems.length;
+  const remainingCount = unpostedItems.length;
+  const pct = total > 0 ? Math.round((postedCount / total) * 100) : 0;
+
+  summaryEl.innerHTML = `
+    <div class="cl-progress-meta">
+      <div class="cl-progress-stats">
+        <span>Posted: <strong style="color:#15803d;">${postedCount}</strong></span>
+        <span>Remaining: <strong style="color:#b45309;">${remainingCount}</strong></span>
+        <span>Total Queue: <strong>${total}</strong></span>
+      </div>
+      <strong style="color:${pct === 100 && total > 0 ? '#15803d' : 'var(--text-primary)'};">${pct}% Complete</strong>
+    </div>
+    <div class="cl-progress-track">
+      <div class="cl-progress-fill" style="width:${pct}%;"></div>
+    </div>
+  `;
+
+  const clBadges = document.getElementById('crosslist-auto-sync-badges');
+  if (clBadges) {
+    const allInv = state.data?.inventory || [];
+    const soldCount = allInv.filter((i) => i.status === 'sold' || Number(i.quantity || 0) <= 0).length;
+    clBadges.innerHTML = `
+      <span class="badge badge-ok">Crosslist Ready: ${total} Single-Variant SKUs (Qty=1)</span>
+      <span class="badge badge-ok">QR Cards Excluded: 0 Leaks</span>
+      <span class="badge badge-ok">Sold/Auto-Delisted Excluded: ${soldCount}</span>
+      <span class="badge ${remainingCount === 0 && total > 0 ? 'badge-ok' : 'badge-warn'}">Craigslist Tacoma (tac/ptd): ${postedCount} Posted • ${remainingCount} Remaining</span>
+    `;
+  }
+
+  // Update filter pill counts
+  const pillUnposted = document.querySelector('.cl-pill[data-cl-filter="unposted"]');
+  const pillPosted = document.querySelector('.cl-pill[data-cl-filter="posted"]');
+  const pillAll = document.querySelector('.cl-pill[data-cl-filter="all"]');
+  if (pillUnposted) pillUnposted.textContent = `Unposted (${remainingCount})`;
+  if (pillPosted) pillPosted.textContent = `Posted (${postedCount})`;
+  if (pillAll) pillAll.textContent = `All (${total})`;
+
+  const nextItem = unpostedItems[0] || null;
+  if (launchBtn) {
+    launchBtn.textContent = nextItem
+      ? `▶ Launch Next (${nextItem.sku} • $${nextItem.price_int || Math.round(Number(nextItem.price || 0))})`
+      : '✅ All Queue SKUs Posted';
+  }
+
+  if (nextUpEl) {
+    if (nextItem) {
+      const photoCount = Array.isArray(nextItem.photos) ? nextItem.photos.length : 0;
+      nextUpEl.style.display = 'flex';
+      nextUpEl.innerHTML = `
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:0.71rem;font-weight:800;color:#b45309;letter-spacing:0.03em;">UP NEXT IN AUTO-POST QUEUE</div>
+          <div style="font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(nextItem.cl_title || nextItem.title)}">
+            <span class="mono">${esc(nextItem.sku)}</span> — ${esc(nextItem.cl_title || nextItem.title)}
+          </div>
+          <div style="font-size:0.73rem;color:var(--text-secondary);">
+            $${esc(nextItem.price_int || Math.round(Number(nextItem.price || 0)))} • 📷 ${photoCount} Shopify CDN photo${photoCount === 1 ? '' : 's'} • Tacoma (tac / fsd / ptd)
+          </div>
+        </div>
+        <div style="display:flex;gap:0.35rem;flex-shrink:0;">
+          <a href="${esc(nextItem.launch_url)}" target="_blank" rel="noopener" class="btn btn-dark btn-sm">Post ↗</a>
+          <button type="button" class="btn btn-outline btn-sm" onclick="toggleCraigslistSkuPostedUi('${esc(nextItem.sku)}', true)">✓ Mark Posted</button>
+        </div>
+      `;
+    } else {
+      nextUpEl.style.display = 'flex';
+      nextUpEl.innerHTML = `<strong style="color:#15803d;">🎉 Queue Complete — All ${total} active verified SKUs are marked posted on Craigslist Tacoma!</strong>`;
+    }
+  }
+
+  const filter = state.clTrackerFilter || 'unposted';
+  const searchVal = (document.getElementById('cl-tracker-search')?.value || '').trim().toLowerCase();
+  let filtered = filter === 'posted' ? postedItems : filter === 'all' ? queue : unpostedItems;
+  if (searchVal) {
+    filtered = filtered.filter((q) =>
+      String(q.sku || '').toLowerCase().includes(searchVal) ||
+      String(q.title || '').toLowerCase().includes(searchVal) ||
+      String(q.cl_title || '').toLowerCase().includes(searchVal) ||
+      String(q.ymm || '').toLowerCase().includes(searchVal)
+    );
+  }
+
+  if (!filtered.length) {
+    listEl.innerHTML = `<div style="padding:0.75rem;text-align:center;font-size:0.79rem;color:var(--text-muted);">No ${esc(filter)} SKUs match your filter.</div>`;
+    return;
+  }
+
+  const maxShow = 60;
+  const visible = filtered.slice(0, maxShow);
+  const rowsHtml = visible.map((q) => {
+    const isPosted = Boolean(q.posted_craigslist);
+    const priceInt = q.price_int || Math.round(Number(q.price || 0));
+    const photosLen = Array.isArray(q.photos) ? q.photos.length : 0;
+    const postedStamp = q.posted_at ? String(q.posted_at).replace('T', ' ').slice(0, 16) : '';
+    return `
+      <div class="cl-tracker-item ${isPosted ? 'is-posted' : ''}">
+        <div class="cl-tracker-item-info">
+          <div class="cl-tracker-item-title" title="${esc(q.cl_title || q.title)}">${esc(q.cl_title || q.title)}</div>
+          <div class="cl-tracker-item-meta">
+            <span class="mono" style="font-weight:700;color:var(--text-primary);">${esc(q.sku)}</span>
+            <span>$${priceInt}</span>
+            <span>📷 ${photosLen}</span>
+            ${isPosted
+              ? `<span style="color:#15803d;font-weight:700;">✓ Posted${postedStamp ? ` (${esc(postedStamp)})` : ''}</span>`
+              : `<span>Unposted</span>`
+            }
+            ${q.craigslist_url ? `<a href="${esc(q.craigslist_url)}" target="_blank" rel="noopener" style="color:var(--brand-amber);font-weight:700;">View Ad ↗</a>` : ''}
+          </div>
+        </div>
+        <div class="cl-tracker-item-actions">
+          <a href="${esc(q.launch_url)}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="padding:0.25rem 0.5rem;font-size:0.73rem;">Post ↗</a>
+          ${isPosted
+            ? `<button type="button" class="btn btn-outline btn-sm" style="padding:0.25rem 0.5rem;font-size:0.73rem;" onclick="toggleCraigslistSkuPostedUi('${esc(q.sku)}', false)">↺ Unmark</button>`
+            : `<button type="button" class="btn btn-dark btn-sm" style="padding:0.25rem 0.5rem;font-size:0.73rem;" onclick="toggleCraigslistSkuPostedUi('${esc(q.sku)}', true)">✓ Posted</button>`
+          }
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const overflowNote = filtered.length > maxShow
+    ? `<div style="padding:0.45rem;text-align:center;font-size:0.74rem;color:var(--text-muted);">Showing first ${maxShow} of ${filtered.length} SKUs — use search above to locate any SKU instantly.</div>`
+    : '';
+
+  listEl.innerHTML = rowsHtml + overflowNote;
+}
+
+async function toggleCraigslistSkuPostedUi(sku, postedBool) {
+  if (!sku) return;
+  try {
+    const res = await fetch('/api/craigslist/mark-posted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku, posted: Boolean(postedBool) })
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) {
+      throw new Error(out.error || `HTTP ${res.status}`);
+    }
+    if (state.clQueueData && Array.isArray(state.clQueueData.queue)) {
+      const target = state.clQueueData.queue.find((q) => q.sku === sku);
+      if (target) {
+        target.posted_craigslist = Boolean(out.craigslist_posted);
+        target.posted_at = out.craigslist_posted_at || null;
+      }
+      state.clQueueData.posted_count = state.clQueueData.queue.filter((q) => q.posted_craigslist).length;
+      state.clQueueData.remaining_count = state.clQueueData.queue.length - state.clQueueData.posted_count;
+    }
+    if (state.data && Array.isArray(state.data.inventory)) {
+      const invItem = state.data.inventory.find((i) => i.sku === sku);
+      if (invItem) {
+        invItem.channels = invItem.channels || {};
+        invItem.channels.craigslist_posted = Boolean(out.craigslist_posted);
+        invItem.channels.craigslist_posted_at = out.craigslist_posted_at || null;
+      }
+    }
+    renderCraigslistTrackerList();
+    if (typeof showToast === 'function') {
+      showToast(postedBool ? `Marked ${sku} as posted on Craigslist Tacoma!` : `Unmarked ${sku} — back in Craigslist auto-post queue.`);
+    }
+  } catch (err) {
+    if (typeof showToast === 'function') {
+      showToast(`Craigslist status update failed: ${err.message || err}`);
+    }
+  }
+}
+
 async function runCrosslistAutoSyncUi() {
   const btn = document.getElementById('btn-crosslist-auto-sync');
   const box = document.getElementById('crosslist-auto-sync-result');
@@ -3952,6 +4262,12 @@ async function runCrosslistAutoSyncUi() {
     if (!res.ok || !data.ok) {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
+    const batchLinks = Array.isArray(data.crosslist_batches)
+      ? data.crosslist_batches.map((b) => `
+          <a href="${esc(b.csv_url)}" download="crosslist-import-batch${b.batch}.csv" class="btn btn-outline btn-sm">⬇ Batch ${b.batch} CSV (${b.start}–${b.end})</a>
+          <a href="${esc(b.images_zip_url)}" download="crosslist-images-batch${b.batch}.zip" class="btn btn-outline btn-sm" onclick="notifyCrosslistZipDownload('Batch ${b.batch} Images ZIP')">📦 Batch ${b.batch} ZIP</a>
+        `).join('')
+      : '';
     if (box) {
       box.style.display = 'block';
       box.innerHTML = `
@@ -3959,27 +4275,22 @@ async function runCrosslistAutoSyncUi() {
           ✅ Crosslist Auto-Sync Complete — ${data.ready_skus} Active Single-Variant OEM SKUs Ready (${data.sold_delisted_skus} Sold/Delisted Excluded • ${data.qr_leak_count} QR Cards Leaked)
         </div>
         <div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;">
-          <a href="${esc(data.crosslist_csv_url || '/api/exports/crosslist.csv')}" download="aldridge_crosslist_ebay_offerup_fb_sync.csv" class="btn btn-primary btn-sm">⬇ Crosslist CSV (eBay aabcas + OfferUp + FB)</a>
-          <a href="${esc(data.ebay_us_csv_url || '/api/exports/ebay_us.csv')}" download="aldridge_ebay_us_aabcas.csv" class="btn btn-outline btn-sm">⬇ eBay US aabcas CSV</a>
-          <a href="${esc(data.craigslist_csv_url || '/api/exports/craigslist.csv')}" download="aldridge_craigslist_tacoma_98467_pts.csv" class="btn btn-outline btn-sm">⬇ Craigslist Tacoma pts CSV</a>
+          <a href="${esc(data.crosslist_csv_url || '/api/exports/crosslist.csv')}" download="crosslist-ebay-offerup-fb-import.csv" class="btn btn-primary btn-sm">⬇ Full Crosslist CSV</a>
+          <a href="${esc(data.crosslist_images_zip_url || '/api/exports/crosslist-images.zip')}" download="crosslist-images.zip" class="btn btn-dark btn-sm" onclick="notifyCrosslistZipDownload('Full Crosslist Images ZIP')">📦 Full Images ZIP</a>
+          ${batchLinks}
+          <a href="${esc(data.craigslist_userscript_url || '/craigslist-autofill.user.js')}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">⚙ Install CL Auto-Fill Script</a>
           <button type="button" class="btn btn-outline btn-sm" onclick="copyFeedUrl('${esc(data.google_merchant_xml_url)}')">📋 Google Merchant XML</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="copyFeedUrl('${esc(data.meta_catalog_csv_url)}')">📋 Meta Catalog CSV</button>
         </div>
       `;
     }
-    // Trigger automatic download of the freshly verified Crosslist CSV
-    const a = document.createElement('a');
-    a.href = data.crosslist_csv_url || '/api/exports/crosslist.csv';
-    a.download = 'aldridge_crosslist_ebay_offerup_fb_sync.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
 
     if (typeof loadBootstrap === 'function') {
       await loadBootstrap();
     }
+    await loadCraigslistHubQueueUi(true);
     if (typeof showToast === 'function') {
-      showToast(`Crosslist Auto-Sync verified ${data.ready_skus} SKUs (0 QR cards leaked) — CSV downloaded!`);
+      showToast(`Verified ${data.ready_skus} active SKUs (0 QR cards leaked) — all Crosslist CSV/ZIP & Craigslist exports ready!`);
     }
   } catch (err) {
     if (box) {
@@ -3989,7 +4300,7 @@ async function runCrosslistAutoSyncUi() {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = origLabel || '⚡ Run 1-Click Crosslist Auto-Sync & Download CSV';
+      btn.textContent = origLabel || '⚡ Verify & Sync All Channels';
     }
   }
 }
@@ -3997,14 +4308,16 @@ async function runCrosslistAutoSyncUi() {
 async function launchNextCraigslistQueueItemUi() {
   const box = document.getElementById('crosslist-auto-sync-result');
   try {
-    const res = await fetch('/api/craigslist/queue');
+    const res = await fetch('/api/craigslist/queue', { cache: 'no-store' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    const nextItem = (data.queue || []).find((q) => !q.posted_craigslist) || (data.queue || [])[0];
+    state.clQueueData = data;
+    renderCraigslistTrackerList();
+    const nextItem = (data.queue || []).find((q) => !q.posted_craigslist) || null;
     if (!nextItem) {
       if (box) {
         box.style.display = 'block';
-        box.innerHTML = '<strong>All active SKUs have already been posted to Craigslist Tacoma pts!</strong>';
+        box.innerHTML = `<strong style="color:#15803d;">🎉 All ${data.count} active SKUs are already marked posted to Craigslist Tacoma (tac / fsd / ptd)!</strong>`;
       }
       return;
     }
@@ -4012,8 +4325,8 @@ async function launchNextCraigslistQueueItemUi() {
     if (box) {
       box.style.display = 'block';
       box.innerHTML = `
-        <strong>🚗 Opened Craigslist Tacoma pts ($0 • ZIP 98467) for <code>${esc(nextItem.sku)}</code> — ${esc(nextItem.title)} ($${nextItem.price})</strong><br/>
-        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code></a> is active in Tampermonkey/Violentmonkey.</span>
+        <strong>🚗 Opened Craigslist Tacoma Dealer Auto Parts (<code>tac</code> → <code>fsd</code> → <code>ptd</code> • ZIP 98467) for <code>${esc(nextItem.sku)}</code> — ${esc(nextItem.cl_title || nextItem.title)} ($${nextItem.price_int || Math.round(Number(nextItem.price || 0))})</strong><br/>
+        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code> (v2.1.0)</a> is installed in Tampermonkey.</span>
       `;
     }
   } catch (err) {
@@ -4023,5 +4336,6 @@ async function launchNextCraigslistQueueItemUi() {
     }
   }
 }
+
 
 

@@ -623,7 +623,10 @@ const server = http.createServer(async (req, res) => {
           ebay_motors_csv: `${baseUrl}/api/exports/ebay_motors.csv`,
           vendoo_csv: `${baseUrl}/api/exports/vendoo.csv`,
           crosslist_csv: `${baseUrl}/api/exports/crosslist.csv`,
+          crosslist_images_zip: `${baseUrl}/api/exports/crosslist-images.zip`,
           craigslist_csv: `${baseUrl}/api/exports/craigslist.csv`,
+          craigslist_queue: `${baseUrl}/api/craigslist/queue`,
+          craigslist_userscript: `${baseUrl}/craigslist-autofill.user.js`,
           tiktok_shop_csv: `${baseUrl}/api/exports/tiktok_shop.csv`,
           master_import_template_csv: `${baseUrl}/api/templates/master-import.csv`,
           shopify_webhook_endpoint: `${baseUrl}/api/webhooks/shopify`
@@ -1894,6 +1897,23 @@ const server = http.createServer(async (req, res) => {
         `Crosslist Auto-Sync verified ${activeSafe.length} single-variant OEM SKUs (${soldDelisted.length} sold/delisted excluded, ${qrLeakCount} QR cards leaked — 100% isolated). Ready for eBay aabcas, OfferUp, FB Marketplace, Google Merchant XML, Meta CSV & Craigslist Tacoma pts.`
       );
 
+      const batchSize = 250;
+      const totalBatches = Math.max(1, Math.ceil(activeSafe.length / batchSize));
+      const crosslistBatches = Array.from({ length: totalBatches }, (_, idx) => {
+        const batchNum = idx + 1;
+        const startItem = idx * batchSize + 1;
+        const endItem = Math.min(activeSafe.length, batchNum * batchSize);
+        return {
+          batch: batchNum,
+          size: batchSize,
+          start: startItem,
+          end: endItem,
+          count: Math.max(0, endItem - startItem + 1),
+          csv_url: `${baseUrl}/api/exports/crosslist.csv?batch=${batchNum}&size=${batchSize}`,
+          images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip?batch=${batchNum}&size=${batchSize}`
+        };
+      });
+
       sendJson(res, 200, {
         ok: true,
         synced_at: now,
@@ -1903,6 +1923,8 @@ const server = http.createServer(async (req, res) => {
         qr_leak_count: qrLeakCount,
         shopify_webhook_url: `${baseUrl}/api/webhooks/shopify`,
         crosslist_csv_url: `${baseUrl}/api/exports/crosslist.csv`,
+        crosslist_images_zip_url: `${baseUrl}/api/exports/crosslist-images.zip`,
+        crosslist_batches: crosslistBatches,
         ebay_us_csv_url: `${baseUrl}/api/exports/ebay_us.csv`,
         google_merchant_xml_url: `${baseUrl}/api/feeds/google-merchant.xml`,
         meta_catalog_csv_url: `${baseUrl}/api/feeds/meta-catalog.csv`,

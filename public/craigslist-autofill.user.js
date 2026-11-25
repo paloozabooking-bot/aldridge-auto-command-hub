@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts Bulk Auto-Poster
 // @namespace    https://aldridgeautosupply.com/
-// @version      2.0.0
+// @version      2.1.0
 // @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills every field from aldridgeautosupply.com/api/craigslist/queue, attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, tracks posted SKUs in Tampermonkey + Hub, and auto-loads the next unposted part after publish.
 // @author       Aldridge Auto's
 // @match        https://post.craigslist.org/*
@@ -22,7 +22,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2.0.0';
+  const SCRIPT_VERSION = '2.1.0';
   const DEFAULT_HUB = 'https://aldridgeautosupply.com';
   const START_POST_URL = 'https://post.craigslist.org/c/sea?lang=en&cc=us';
   const MAX_CL_PHOTOS = 24;
@@ -441,7 +441,9 @@
 
   async function loadQueue(hubOrigin, forceRefresh = false) {
     if (cachedQueueState && !forceRefresh) return cachedQueueState;
-    syncUnsyncedPostedToServer(hubOrigin).catch(() => {});
+    try {
+      await syncUnsyncedPostedToServer(hubOrigin);
+    } catch (_) {}
 
     const res = await apiGetJson(`${hubOrigin}/api/craigslist/queue`);
     if (!res.ok || !res.data || !Array.isArray(res.data.queue)) {
@@ -451,7 +453,7 @@
     const skippedSet = new Set(getSkippedList());
     const queue = res.data.queue;
 
-    // Mirror server-confirmed posted SKUs into Tampermonkey storage so local stats stay in sync
+    // Two-way mirror with server-confirmed posted/unmarked status
     let mapUpdated = false;
     for (const q of queue) {
       if (q.posted_craigslist && !postedMap[q.sku]) {
@@ -461,6 +463,9 @@
           postId: q.craigslist_post_id || null,
           syncedToServer: true
         };
+        mapUpdated = true;
+      } else if (!q.posted_craigslist && postedMap[q.sku] && postedMap[q.sku].syncedToServer === true) {
+        delete postedMap[q.sku];
         mapUpdated = true;
       }
     }
@@ -618,8 +623,15 @@
 
   function getRadioLabelText(radio) {
     const label = radio.closest('label') || (radio.id ? document.querySelector(`label[for="${CSS.escape(radio.id)}"]`) : null);
+    if (label && (label.innerText || label.textContent || '').trim()) {
+      return (label.innerText || label.textContent || '').trim().toLowerCase();
+    }
     const parent = radio.closest('li, .selection-list-item, .radio-option, p, div');
-    return ((label?.innerText || parent?.innerText || radio.value || '') + '').trim().toLowerCase();
+    if (parent && parent.querySelectorAll('input[type="radio"]').length === 1) {
+      return (parent.innerText || parent.textContent || '').trim().toLowerCase();
+    }
+    const nextTxt = (radio.nextSibling?.textContent || '').trim();
+    return (nextTxt || radio.value || '').trim().toLowerCase();
   }
 
   function findSubmitButton(form, preferredTextRegex = null) {
@@ -670,16 +682,11 @@
   }
 
   function countUploadedThumbnails() {
-    const selectors = [
-      '.images .imgbox',
-      '#thumbs .imgbox',
-      '.thumbs .imgbox',
-      'figure.imgbox',
-      '.images img[src*="images.craigslist.org"]',
-      '#uploader img[src*="images.craigslist.org"]'
-    ];
-    const nodes = document.querySelectorAll(selectors.join(','));
-    return nodes.length;
+    // Prefer unique .imgbox containers so nested <img> tags are never double-counted
+    const boxes = document.querySelectorAll('.images .imgbox, #thumbs .imgbox, .thumbs .imgbox, figure.imgbox');
+    if (boxes.length > 0) return boxes.length;
+    const imgs = document.querySelectorAll('.images img[src*="images.craigslist.org"], #uploader img[src*="images.craigslist.org"], #thumbs img');
+    return imgs.length;
   }
 
   function isImageUploadBusy() {
