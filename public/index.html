@@ -1202,6 +1202,92 @@
 
       <!-- STAFF TAB 3: MULTI-PLATFORM SYNC, FEEDS, CHECKLISTS & POLICIES -->
       <div class="staff-section" id="staff-sync">
+        <!-- Automated Top-200 Multi-Platform Deployment Strategy Command Center -->
+        <div class="surface-card" style="margin-bottom:1.35rem;border-left:4px solid #ea580c;" id="top200-deployment-panel">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:0.8rem;">
+            <div style="flex:1;min-width:260px;">
+              <div class="eyebrow-label" style="color:#ea580c;">PLATFORM ITEM-LIMIT OPTIMIZER • HIGHEST VALUE + FAST-SELL PARCEL VELOCITY</div>
+              <h3 style="margin:0.15rem 0 0.35rem;">🎯 Automated Top-200 Deployment Strategy (Activate Top 200 • Deactivate / Delete Overflow)</h3>
+              <p style="margin:0 0 0.55rem;font-size:0.83rem;color:var(--text-secondary);">
+                Ranks all active OEM parts by <strong>price + shippable parcel velocity</strong> so you capture high-ticket local assemblies (<strong>$150–$3,500</strong>) AND fast-selling parcel OEM parts (ECMs, clusters, headlights, mirrors, alternators, ABS pumps) inside strict 200-item platform caps. Hand-pick/pin any reserve item below and deploy across all channels in 1 click.
+              </p>
+              <div id="top200-summary-badges" style="display:flex;gap:0.45rem;flex-wrap:wrap;font-size:0.76rem;">
+                <span class="badge badge-warn">Loading Top-200 strategy plan...</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:290px;">
+              <div style="display:flex;gap:0.45rem;align-items:center;">
+                <label style="font-size:0.76rem;font-weight:700;white-space:nowrap;">Cap:</label>
+                <input type="number" id="top200-limit-input" class="input mono" value="200" min="10" max="500" style="width:78px;padding:0.3rem 0.45rem;" />
+                <label style="font-size:0.76rem;display:flex;align-items:center;gap:0.3rem;cursor:pointer;">
+                  <input type="checkbox" id="top200-parcel-boost-chk" checked onchange="saveTop200SettingsUi()" />
+                  Smart Parcel Velocity
+                </label>
+              </div>
+              <select id="top200-shopify-mode" class="select" style="font-size:0.79rem;">
+                <option value="draft">Shopify Overflow: Deactivate → DRAFT (Safe — keeps 294 reserve)</option>
+                <option value="tag_only">Shopify Overflow: Tag-Only (Keep 494 Active; External Feeds = Top 200)</option>
+                <option value="delete">Shopify Overflow: Permanent DELETE (Irreversible!)</option>
+              </select>
+              <button type="button" id="btn-run-top200-deploy" class="btn btn-primary btn-sm" onclick="runTop200DeploymentUi()">🚀 Execute Top-200 Deployment (Shopify + All Feeds)</button>
+            </div>
+          </div>
+
+          <div id="top200-deploy-progress" style="display:none;margin-bottom:0.8rem;padding:0.65rem 0.85rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);font-size:0.81rem;"></div>
+
+          <!-- Per-Platform Automated Actions (Respecting Platform-Specific Item Limits) -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.65rem;margin-bottom:0.85rem;">
+            <div style="padding:0.7rem 0.8rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);">
+              <div style="font-size:0.72rem;font-weight:800;color:#dc2626;letter-spacing:0.03em;">CROSSLIST (INACTIVE/DRAFTS COUNT TOWARD CAP!)</div>
+              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Delete Overflow + Upload Single Top-200 Batch</div>
+              <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+                <a href="/crosslist-cleanup.user.js" target="_blank" rel="noopener" class="btn btn-dark btn-sm" style="font-size:0.74rem;">🧹 Install Auto-Deleter Script</a>
+                <a href="/api/exports/crosslist.csv?tier=top200" download="crosslist-top200-ebay-offerup-fb.csv" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⬇ Top-200 CSV</a>
+                <a href="/api/exports/crosslist-images.zip?tier=top200" download="crosslist-images-top200.zip" class="btn btn-outline btn-sm" style="font-size:0.74rem;" onclick="notifyCrosslistZipDownload('Top-200 Crosslist Images ZIP')">📦 Top-200 ZIP</a>
+              </div>
+            </div>
+
+            <div style="padding:0.7rem 0.8rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);">
+              <div style="font-size:0.72rem;font-weight:800;color:#1d4ed8;letter-spacing:0.03em;">EBAY US (AABCAS — ENDED DOES NOT COUNT!)</div>
+              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">End 294 Overflow + Upload Top 200 Active</div>
+              <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+                <a href="/api/exports/ebay_us_end_overflow.csv" download="ebay-us-aabcas-end-overflow.csv" class="btn btn-dark btn-sm" style="font-size:0.74rem;">🛑 End-Overflow CSV</a>
+                <a href="/api/exports/ebay_us.csv?tier=top200" download="ebay-us-standard-aabcas-top200.csv" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⬇ Top-200 Active CSV</a>
+              </div>
+            </div>
+
+            <div style="padding:0.7rem 0.8rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);">
+              <div style="font-size:0.72rem;font-weight:800;color:#b45309;letter-spacing:0.03em;">CRAIGSLIST TACOMA (TAC → FSD → PTD)</div>
+              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Auto-Post Top 200 + Clean Overflow Ads</div>
+              <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⚡ CL Script v2.3.0</a>
+                <button type="button" class="btn btn-dark btn-sm" style="font-size:0.74rem;" onclick="launchNextCraigslistQueueItemUi()">▶ Launch Top-200 CL</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pick & Choose Interactive Top-200 vs Overflow Reserve Roster -->
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+            <div class="cl-filter-pills" role="tablist" aria-label="Top 200 roster filter">
+              <button type="button" class="cl-pill active" data-t200-tab="top200" onclick="setTop200TabUi('top200')">Top 200 Active</button>
+              <button type="button" class="cl-pill" data-t200-tab="overflow" onclick="setTop200TabUi('overflow')">Overflow Reserve (Pin Fast-Sellers)</button>
+              <button type="button" class="cl-pill" data-t200-tab="pinned" onclick="setTop200TabUi('pinned')">Pinned / Swapped</button>
+            </div>
+            <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+              <select id="top200-ship-filter" class="select" style="font-size:0.78rem;padding:0.28rem 0.45rem;" onchange="renderTop200RosterUi()">
+                <option value="all">All Shipping Types</option>
+                <option value="parcel">Parcel Shippable Only</option>
+                <option value="local">Local Pickup Only</option>
+              </select>
+              <input type="search" id="top200-roster-search" class="input" style="max-width:220px;font-size:0.79rem;padding:0.3rem 0.55rem;" placeholder="Search SKU / part / vehicle..." oninput="renderTop200RosterUi()" />
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadTop200PlanUi(true)">🔄</button>
+            </div>
+          </div>
+          <div id="top200-roster-list" class="cl-tracker-list" style="max-height:310px;">
+            <div style="padding:0.75rem;text-align:center;font-size:0.8rem;color:var(--text-muted);">Loading ranked Top-200 &amp; Overflow roster...</div>
+          </div>
+        </div>
+
         <!-- Urgent Account Unblocks & Dead-End Guardrails from Operational Audit -->
         <div class="surface-card" style="margin-bottom:1.35rem;border-left:4px solid var(--brand-amber);" id="audit-command-panel"></div>
 
@@ -1236,7 +1322,7 @@
 
               <div class="cl-action-row">
                 <button type="button" class="btn btn-dark btn-sm" id="btn-cl-launch-next" onclick="launchNextCraigslistQueueItemUi()">▶ Launch Next Unposted Part</button>
-                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.2.0)</a>
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.3.0)</a>
                 <a href="/api/exports/craigslist.csv" download="craigslist-tacoma-98467-ptd.csv" class="btn btn-outline btn-sm">⬇ CL CSV</a>
               </div>
 
@@ -1975,7 +2061,7 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=32.15"></script>
+  <script src="/app.js?v=32.16"></script>
   <script src="/storefront-menu.js?v=30.0"></script>
   <script src="/sourcing-storefront.js?v=30.0"></script>
   <script src="/vin-aggregator-ui.js?v=30.0"></script>

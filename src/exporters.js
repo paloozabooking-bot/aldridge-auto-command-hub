@@ -3883,7 +3883,7 @@ async function hydrateInventoryFromShopifyCoMaster({
   const tokenRef = { token: auth.token };
   const graphqlUrl = `https://${domain}/admin/api/2025-01/graphql.json`;
 
-  const onlyActiveFilter = onlyActive && !reactivateAccidentallyArchived ? 'status:active' : null;
+  const onlyActiveFilter = onlyActive && !reactivateAccidentallyArchived ? 'status:active OR tag:Overflow_294_Reserve' : null;
   const query = `
     query HydrateAllowlistProducts($cursor: String, $queryFilter: String) {
       products(first: 100, after: $cursor, query: $queryFilter) {
@@ -3991,12 +3991,13 @@ async function hydrateInventoryFromShopifyCoMaster({
     const tagBlob = tags.join(', ');
     const isCleanSlateVictim = statusUpper === 'ARCHIVED' && /ARCHIVED-CLEAN-SLATE/i.test(tagBlob);
     const isActive = statusUpper === 'ACTIVE';
+    const isOverflowReserveDraft = statusUpper === 'DRAFT' && tags.includes('Overflow_294_Reserve');
 
-    if (onlyActive && !isActive) {
+    if (onlyActive && !isActive && !isOverflowReserveDraft) {
       skippedArchived++;
       continue;
     }
-    if (!isActive && !(reactivateAccidentallyArchived && isCleanSlateVictim)) {
+    if (!isActive && !isOverflowReserveDraft && !(reactivateAccidentallyArchived && isCleanSlateVictim)) {
       skippedArchived++;
       continue;
     }
@@ -4063,7 +4064,7 @@ async function hydrateInventoryFromShopifyCoMaster({
 
     const numericId = BigInt(extractNumericId(node.id) || '0');
     const richnessScore =
-      (isActive ? 1000 : 0) +
+      (isActive ? 1000 : isOverflowReserveDraft ? 500 : 0) +
       (meta['custom.donor_vin'] ? 100 : 0) +
       (meta['custom.oem_part_number'] ? 50 : 0) +
       (meta['custom.packed_dimensions'] ? 25 : 0) +
@@ -4083,6 +4084,7 @@ async function hydrateInventoryFromShopifyCoMaster({
         vin,
         slot,
         meta,
+        isOverflowReserveDraft,
         tags,
         cleanTitle,
         plainDesc,
@@ -4207,13 +4209,15 @@ async function hydrateInventoryFromShopifyCoMaster({
       const varId = extractNumericId(w.v0?.id);
       const invItemId = extractNumericId(w.v0?.inventoryItem?.id);
 
+      const hydratedStatus = w.isOverflowReserveDraft ? 'draft' : 'active';
       const channelsJson = JSON.stringify({
         shopify: true,
-        shopify_marketplace_connect: true,
-        ebay_motors: true,
-        google_merchant: true,
-        meta_catalog: true,
-        crosslist: true
+        shopify_marketplace_connect: !w.isOverflowReserveDraft,
+        ebay_motors: !w.isOverflowReserveDraft,
+        google_merchant: !w.isOverflowReserveDraft,
+        meta_catalog: !w.isOverflowReserveDraft,
+        crosslist: !w.isOverflowReserveDraft,
+        top200_selected: !w.isOverflowReserveDraft
       });
 
       if (!existingSkusInDb.has(w.sku)) {
@@ -4239,7 +4243,7 @@ async function hydrateInventoryFromShopifyCoMaster({
             ?, ?, ?, ?, ?,
             10, 3, ?,
             ?, ?, ?,
-            'active', ?, ?
+            ?, ?, ?
           )
         `).run(
           w.sku, w.cleanTitle, w.productType, w.slot.make.toUpperCase(), oemMpn,
@@ -4251,7 +4255,7 @@ async function hydrateInventoryFromShopifyCoMaster({
           weightLbs, lengthIn, widthIn, heightIn, shipClass,
           channelsJson,
           prodId, varId, invItemId,
-          now, now
+          hydratedStatus, now, now
         );
         existingSkusInDb.add(w.sku);
         hydratedCount++;
@@ -4259,9 +4263,9 @@ async function hydrateInventoryFromShopifyCoMaster({
         db.prepare(`
           UPDATE inventory_items
           SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?,
-              photos_json = ?, status = 'active', quantity = 1, updated_at = ?
+              photos_json = ?, status = ?, quantity = 1, updated_at = ?
           WHERE UPPER(sku) = ?
-        `).run(prodId, varId, invItemId, JSON.stringify(w.photoUrls), now, w.sku);
+        `).run(prodId, varId, invItemId, JSON.stringify(w.photoUrls), hydratedStatus, now, w.sku);
         updatedCount++;
       }
 
@@ -4995,6 +4999,7 @@ module.exports = {
   renderLocalMarketplacePacket,
   renderCraigslistDescription,
   resolveShopifyAccessToken,
+  shopifyFetchWithRetry,
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
   syncAllToShopifyCoMaster,

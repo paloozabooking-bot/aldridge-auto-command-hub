@@ -1372,6 +1372,9 @@ function renderSyncAndChecklists() {
     `;
   }
 
+  if (typeof loadTop200PlanUi === 'function') {
+    loadTop200PlanUi(false).catch(() => {});
+  }
   if (typeof renderCrosslistBatchDownloadsUi === 'function') {
     renderCrosslistBatchDownloadsUi(totalActive);
   }
@@ -4337,7 +4340,7 @@ async function launchNextCraigslistQueueItemUi() {
       box.style.display = 'block';
       box.innerHTML = `
         <strong>🚗 Opened Craigslist Tacoma Dealer Auto Parts (<code>tac</code> → <code>fsd</code> → <code>ptd</code> • ZIP 98467) for <code>${esc(nextItem.sku)}</code> — ${esc(nextItem.cl_title || nextItem.title)} ($${nextItem.price_int || Math.round(Number(nextItem.price || 0))})</strong><br/>
-        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code> (v2.2.0)</a> is installed in Tampermonkey.</span>
+        <span style="color:var(--text-secondary);">Queue Status: ${data.remaining_count} remaining • ${data.posted_count} posted • Make sure <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener"><code>craigslist-autofill.user.js</code> (v2.3.0)</a> is installed in Tampermonkey.</span>
       `;
     }
   } catch (err) {
@@ -4347,6 +4350,293 @@ async function launchNextCraigslistQueueItemUi() {
     }
   }
 }
+
+// ---------- Automated Top-200 Multi-Platform Deployment Strategy UI ----------
+let top200PollTimer = null;
+
+async function loadTop200PlanUi(forceRefresh = false) {
+  const listEl = document.getElementById('top200-roster-list');
+  if (!listEl) return;
+  if (state.top200Plan && !forceRefresh) {
+    renderTop200RosterUi();
+    return;
+  }
+  try {
+    const res = await fetch('/api/deployment/top200', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.top200Plan = data;
+
+    const limInp = document.getElementById('top200-limit-input');
+    if (limInp && data.config?.limit) limInp.value = String(data.config.limit);
+    const boostChk = document.getElementById('top200-parcel-boost-chk');
+    if (boostChk) boostChk.checked = data.config?.prefer_parcel_velocity !== false;
+    const modeSel = document.getElementById('top200-shopify-mode');
+    if (modeSel && data.config?.shopify_overflow_mode) modeSel.value = data.config.shopify_overflow_mode;
+
+    renderTop200RosterUi();
+    if (data.active_job && data.active_job.status === 'running') {
+      pollTop200DeployStatusUi();
+    } else if (data.active_job) {
+      renderTop200DeployProgressUi(data.active_job);
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div style="padding:0.75rem;color:#b91c1c;font-weight:700;">❌ Could not load Top-200 strategy plan: ${esc(err.message || String(err))}</div>`;
+  }
+}
+
+function setTop200TabUi(tab) {
+  state.top200Tab = tab || 'top200';
+  document.querySelectorAll('[data-t200-tab]').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-t200-tab') === state.top200Tab);
+  });
+  renderTop200RosterUi();
+}
+
+function renderTop200RosterUi() {
+  const data = state.top200Plan;
+  const badgesEl = document.getElementById('top200-summary-badges');
+  const listEl = document.getElementById('top200-roster-list');
+  if (!data || !listEl) return;
+
+  const s = data.summary || {};
+  if (badgesEl) {
+    badgesEl.innerHTML = `
+      <span class="badge badge-ok">Top ${s.top200_count || 0} Value: $${Number(s.top200_value || 0).toLocaleString()} (${s.top200_value_share_pct || 0}% of Catalog)</span>
+      <span class="badge badge-ok">Parcel Fast-Sellers: ${s.top200_parcel || 0}</span>
+      <span class="badge badge-warn">High-Ticket Local ($150–$${s.top200_max_price || 3500}): ${s.top200_local || 0}</span>
+      <span class="badge badge-warn">Overflow Reserve: ${s.overflow_count || 0} SKUs ($${Number(s.overflow_value || 0).toLocaleString()})</span>
+      ${s.pinned_count ? `<span class="badge badge-ok">📌 Pinned: ${s.pinned_count}</span>` : ''}
+      ${s.excluded_count ? `<span class="badge badge-warn">✕ Swapped Out: ${s.excluded_count}</span>` : ''}
+    `;
+  }
+
+  const tab = state.top200Tab || 'top200';
+  const shipFilter = document.getElementById('top200-ship-filter')?.value || 'all';
+  const qStr = (document.getElementById('top200-roster-search')?.value || '').trim().toLowerCase();
+
+  let rows =
+    tab === 'overflow'
+      ? (data.overflow || [])
+      : tab === 'pinned'
+      ? [...(data.top200 || []).filter((x) => x.pinned), ...(data.overflow || []).filter((x) => x.excluded)]
+      : (data.top200 || []);
+
+  if (shipFilter === 'parcel') rows = rows.filter((x) => !x.heavy_local_pickup);
+  if (shipFilter === 'local') rows = rows.filter((x) => x.heavy_local_pickup);
+  if (qStr) {
+    rows = rows.filter(
+      (x) =>
+        String(x.sku || '').toLowerCase().includes(qStr) ||
+        String(x.title || '').toLowerCase().includes(qStr) ||
+        String(x.ymm || '').toLowerCase().includes(qStr) ||
+        String(x.reason || '').toLowerCase().includes(qStr)
+    );
+  }
+
+  if (!rows.length) {
+    listEl.innerHTML = '<div style="padding:0.75rem;text-align:center;font-size:0.79rem;color:var(--text-muted);">No items match this filter.</div>';
+    return;
+  }
+
+  const visible = rows.slice(0, 80);
+  listEl.innerHTML =
+    visible
+      .map((item) => {
+        const isTop = item.tier === 'top200';
+        const actionBtn = isTop
+          ? item.pinned
+            ? `<button type="button" class="btn btn-outline btn-sm" style="padding:0.24rem 0.5rem;font-size:0.72rem;" onclick="toggleTop200SkuOverrideUi('unpin', '${esc(item.sku)}')">Unpin</button>`
+            : `<button type="button" class="btn btn-outline btn-sm" style="padding:0.24rem 0.5rem;font-size:0.72rem;" onclick="toggleTop200SkuOverrideUi('exclude', '${esc(item.sku)}')">✕ Swap Out</button>`
+          : item.excluded
+          ? `<button type="button" class="btn btn-dark btn-sm" style="padding:0.24rem 0.5rem;font-size:0.72rem;" onclick="toggleTop200SkuOverrideUi('include', '${esc(item.sku)}')">↺ Restore</button>`
+          : `<button type="button" class="btn btn-primary btn-sm" style="padding:0.24rem 0.5rem;font-size:0.72rem;" onclick="toggleTop200SkuOverrideUi('pin', '${esc(item.sku)}')">📌 Pin to Top 200</button>`;
+
+        return `
+          <div class="cl-tracker-item ${isTop ? '' : 'is-posted'}">
+            <div class="cl-tracker-item-info">
+              <div class="cl-tracker-item-title" title="${esc(item.title)}">
+                <span class="mono" style="color:var(--brand-amber);font-weight:800;">#${item.rank}</span> ${esc(item.title)}
+              </div>
+              <div class="cl-tracker-item-meta">
+                <span class="mono" style="font-weight:700;color:var(--text-primary);">${esc(item.sku)}</span>
+                <span><strong>$${item.price_int}</strong></span>
+                <span>${item.heavy_local_pickup ? '📦 Heavy Local' : '📬 Parcel Shippable'}</span>
+                <span style="color:var(--text-secondary);">${esc(item.reason)} (Score ${Math.round(item.score)})</span>
+              </div>
+            </div>
+            <div class="cl-tracker-item-actions">${actionBtn}</div>
+          </div>
+        `;
+      })
+      .join('') +
+    (rows.length > visible.length
+      ? `<div style="padding:0.45rem;text-align:center;font-size:0.74rem;color:var(--text-muted);">Showing top ${visible.length} of ${rows.length} items — use search above to find &amp; pin any SKU.</div>`
+      : '');
+}
+
+async function saveTop200SettingsUi() {
+  const limit = Number(document.getElementById('top200-limit-input')?.value || 200);
+  const preferParcel = Boolean(document.getElementById('top200-parcel-boost-chk')?.checked);
+  const mode = document.getElementById('top200-shopify-mode')?.value || 'draft';
+  try {
+    const res = await fetch('/api/deployment/top200/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit, prefer_parcel_velocity: preferParcel, shopify_overflow_mode: mode })
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    await loadTop200PlanUi(true);
+    if (typeof showToast === 'function') showToast(`Updated Top-${out.config.limit} strategy ranking!`);
+  } catch (err) {
+    if (typeof showToast === 'function') showToast(`Config error: ${err.message}`);
+  }
+}
+
+async function toggleTop200SkuOverrideUi(action, sku) {
+  const payload = {};
+  if (action === 'pin') payload.pin_sku = sku;
+  if (action === 'unpin') payload.unpin_sku = sku;
+  if (action === 'exclude') payload.exclude_sku = sku;
+  if (action === 'include') payload.include_sku = sku;
+
+  try {
+    const res = await fetch('/api/deployment/top200/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    await loadTop200PlanUi(true);
+    if (typeof showToast === 'function') {
+      showToast(
+        action === 'pin'
+          ? `📌 Pinned ${sku} into Top 200!`
+          : action === 'exclude'
+          ? `Moved ${sku} to Overflow Reserve (promoted #201).`
+          : `Updated Top-200 override for ${sku}.`
+      );
+    }
+  } catch (err) {
+    if (typeof showToast === 'function') showToast(`Override error: ${err.message}`);
+  }
+}
+
+function renderTop200DeployProgressUi(job) {
+  const box = document.getElementById('top200-deploy-progress');
+  if (!box || !job) return;
+  box.style.display = 'block';
+  const pct = job.total_items > 0 ? Math.min(100, Math.round((job.processed / job.total_items) * 100)) : 100;
+  const done = job.status === 'completed';
+  const failed = job.status === 'error';
+  box.innerHTML = `
+    <div style="font-weight:700;color:${failed ? '#b91c1c' : done ? '#15803d' : '#b45309'};margin-bottom:0.35rem;">
+      ${failed ? '❌ Deployment Error' : done ? '✅ Top-200 Multi-Platform Deployment Complete!' : `⏳ Deploying Top-${job.top200_count} Strategy to Shopify &amp; All Feeds (${job.processed}/${job.total_items} • ${pct}%)...`}
+    </div>
+    <div style="font-size:0.78rem;color:var(--text-secondary);">
+      Mode: <code>${esc(job.overflow_action)}</code> •
+      Hub Active: <strong>${job.sqlite_activated}</strong> •
+      Hub Overflow (${job.overflow_action === 'delete' ? 'Deleted' : 'Draft'}): <strong>${job.overflow_action === 'delete' ? job.sqlite_deleted : job.sqlite_deactivated}</strong> •
+      Shopify Activated: <strong>${job.shopify_activated}</strong> •
+      Shopify Deactivated: <strong>${job.shopify_deactivated}</strong> •
+      Shopify Deleted: <strong>${job.shopify_deleted}</strong> •
+      Errors: <strong>${(job.errors || []).length}</strong>
+    </div>
+  `;
+}
+
+function pollTop200DeployStatusUi() {
+  if (top200PollTimer) clearInterval(top200PollTimer);
+  top200PollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/deployment/top200/status', { cache: 'no-store' });
+      const data = await res.json();
+      if (data.job) {
+        renderTop200DeployProgressUi(data.job);
+        if (data.job.status !== 'running') {
+          clearInterval(top200PollTimer);
+          top200PollTimer = null;
+          const btn = document.getElementById('btn-run-top200-deploy');
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 Execute Top-200 Deployment (Shopify + All Feeds)';
+          }
+          await loadTop200PlanUi(true);
+          if (typeof loadCraigslistHubQueueUi === 'function') await loadCraigslistHubQueueUi(true);
+          if (typeof loadBootstrap === 'function') await loadBootstrap();
+        }
+      }
+    } catch (_) {}
+  }, 2000);
+}
+
+async function runTop200DeploymentUi() {
+  const limit = Number(document.getElementById('top200-limit-input')?.value || 200);
+  const mode = document.getElementById('top200-shopify-mode')?.value || 'draft';
+  let confirmDelete = '';
+
+  if (mode === 'delete') {
+    const typed = window.prompt('WARNING: This will PERMANENTLY DELETE all overflow items from Shopify and SQLite! Type DELETE_OVERFLOW to confirm:');
+    if (typed !== 'DELETE_OVERFLOW') {
+      if (typeof showToast === 'function') showToast('Permanent delete cancelled.');
+      return;
+    }
+    confirmDelete = 'DELETE_OVERFLOW';
+  } else {
+    const desc =
+      mode === 'draft'
+        ? `Activate your Top ${limit} items on Shopify + all feeds, and deactivate the remaining overflow items to Shopify DRAFT (safe reserve)?`
+        : `Tag your Top ${limit} items on Shopify (keeping all active on Shopify) and restrict Crosslist, eBay, Craigslist, Google & Meta feeds to Top ${limit}?`;
+    if (!window.confirm(desc)) return;
+  }
+
+  const btn = document.getElementById('btn-run-top200-deploy');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Deploying Top-200 Strategy...';
+  }
+
+  try {
+    const res = await fetch('/api/deployment/top200/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        limit,
+        overflow_action: mode,
+        confirm_delete: confirmDelete,
+        enable_top200_mode: true
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (data.job) {
+      renderTop200DeployProgressUi(data.job);
+      if (data.job.status === 'running') {
+        pollTop200DeployStatusUi();
+      } else {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '🚀 Execute Top-200 Deployment (Shopify + All Feeds)';
+        }
+        await loadTop200PlanUi(true);
+        if (typeof loadBootstrap === 'function') await loadBootstrap();
+      }
+    }
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🚀 Execute Top-200 Deployment (Shopify + All Feeds)';
+    }
+    const box = document.getElementById('top200-deploy-progress');
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `<span style="color:#b91c1c;font-weight:700;">❌ Top-200 Deployment Error: ${esc(err.message || String(err))}</span>`;
+    }
+  }
+}
+
 
 
 

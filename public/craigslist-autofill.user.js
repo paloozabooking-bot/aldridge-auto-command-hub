@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts Bulk Auto-Poster
 // @namespace    https://aldridgeautosupply.com/
-// @version      2.2.0
-// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills every field from aldridgeautosupply.com/api/craigslist/queue (sorted highest-value first with Heavy/Vehicle filters), attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, syncs posted SKUs across Render restarts, and auto-loads the next unposted part after publish.
+// @version      2.3.0
+// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills Top-200 strategy listings from aldridgeautosupply.com/api/craigslist/queue, attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, syncs posted SKUs across Render restarts, auto-loads next unposted part after publish, and cleans overflow ads on accounts.craigslist.org.
 // @author       Aldridge Auto's
 // @match        https://post.craigslist.org/*
 // @match        https://seattle.craigslist.org/*
@@ -22,7 +22,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2.2.0';
+  const SCRIPT_VERSION = '2.3.0';
   const DEFAULT_HUB = 'https://aldridgeautosupply.com';
   const START_POST_URL = 'https://post.craigslist.org/c/sea?lang=en&cc=us';
   const MAX_CL_PHOTOS = 24;
@@ -381,8 +381,8 @@
   let cachedQueueState = null;
 
   function getQueueFilter() {
-    const v = String(gmGet(GM_KEYS.QUEUE_FILTER, 'all') || 'all');
-    return ['all', 'heavy', 'high150'].includes(v) ? v : 'all';
+    const v = String(gmGet(GM_KEYS.QUEUE_FILTER, 'top200') || 'top200');
+    return ['top200', 'all', 'heavy', 'high150'].includes(v) ? v : 'top200';
   }
 
   function getVehicleFilter() {
@@ -487,6 +487,7 @@
     const qFilter = getQueueFilter();
     const vFilter = getVehicleFilter();
     const params = new URLSearchParams();
+    params.set('tier', qFilter === 'all' ? 'all' : 'top200');
     params.set('sort', qFilter === 'heavy' ? 'heavy_first' : 'price_desc');
     if (qFilter === 'heavy') params.set('heavy_only', '1');
     if (qFilter === 'high150') params.set('min_price', '150');
@@ -870,9 +871,10 @@
         </div>
         <div style="display:flex;gap:5px;margin-bottom:7px;">
           <select id="ald-sel-qfilter" style="flex:1;background:#13233f;color:#f8fafc;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:11px;">
-            <option value="all"${qFilter === 'all' ? ' selected' : ''}>All Parts ($↓ High First)</option>
-            <option value="heavy"${qFilter === 'heavy' ? ' selected' : ''}>Heavy Local Pickup Only</option>
-            <option value="high150"${qFilter === 'high150' ? ' selected' : ''}>High-Ticket ($150+)</option>
+            <option value="top200"${qFilter === 'top200' ? ' selected' : ''}>Top 200 Strategy ($↓)</option>
+            <option value="heavy"${qFilter === 'heavy' ? ' selected' : ''}>Top 200 Heavy Local Only</option>
+            <option value="high150"${qFilter === 'high150' ? ' selected' : ''}>Top 200 High-Ticket ($150+)</option>
+            <option value="all"${qFilter === 'all' ? ' selected' : ''}>All 494 Parts ($↓)</option>
           </select>
           <select id="ald-sel-vfilter" style="flex:1;background:#13233f;color:#f8fafc;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:11px;">
             <option value="">All Donor Vehicles</option>
@@ -1326,8 +1328,48 @@
       return;
     }
 
-    // Don't hijack normal accounts.craigslist.org browsing when not post-publish
+    // On accounts.craigslist.org dashboard (when logged in): scan for non-Top-200 overflow ads & offer 1-click delete
     if (host === 'accounts.craigslist.org') {
+      if (document.querySelector('input[type="password"]')) return;
+      const postingRows = Array.from(document.querySelectorAll('table.accthp_postings tbody tr, tr.posting-row'));
+      if (!postingRows.length) return;
+      try {
+        const planRes = await apiGetJson(`${hubOrigin}/api/deployment/top200`);
+        if (!planRes.ok || !planRes.data) return;
+        const overflowTitles = new Set(
+          (planRes.data.overflow || []).map((x) => String(x.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40)).filter((t) => t.length >= 16)
+        );
+        const overflowSkus = new Set((planRes.data.overflow_skus || []).map((s) => String(s).toUpperCase()));
+        const overflowRows = [];
+        for (const tr of postingRows) {
+          const rowTxt = (tr.innerText || '').trim();
+          const normRow = rowTxt.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          const skuHit = Array.from(overflowSkus).some((sku) => rowTxt.toUpperCase().includes(sku));
+          const titleHit = !skuHit && Array.from(overflowTitles).some((t) => normRow.includes(t));
+          const delBtn = tr.querySelector('form[action*="delete"] input[type="submit"], form[action*="delete"] button, input[value="delete"], button[value="delete"]');
+          if ((skuHit || titleHit) && delBtn) {
+            tr.style.outline = '2px solid #dc2626';
+            tr.style.backgroundColor = 'rgba(220,38,38,0.08)';
+            overflowRows.push({ tr, delBtn });
+          }
+        }
+        updateHud({
+          status: overflowRows.length
+            ? `Found ${overflowRows.length} non-Top-200 Overflow ad(s) highlighted in red on your CL dashboard.`
+            : `✅ Craigslist dashboard clean — 0 non-Top-200 overflow ads detected.`,
+          statusType: overflowRows.length ? 'warn' : 'success',
+          extraHtml: overflowRows.length
+            ? `<button id="ald-btn-cl-del-overflow" style="width:100%;background:#dc2626;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;margin-bottom:6px;">🗑 Delete Next Overflow Ad (${overflowRows.length} found)</button>`
+            : '',
+          onExtraBind: () => {
+            document.getElementById('ald-btn-cl-del-overflow')?.addEventListener('click', () => {
+              if (!overflowRows.length) return;
+              if (!window.confirm(`Delete highlighted non-Top-200 overflow ad from Craigslist? (${overflowRows.length} found on page)`)) return;
+              overflowRows[0].delBtn.click();
+            });
+          }
+        });
+      } catch (_) {}
       return;
     }
 

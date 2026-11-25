@@ -77,6 +77,15 @@ const {
   handleShopifyWebhook
 } = require('./exporters');
 const { resolveCategoryBookTimeLabor, enrichAllActiveInventoryInDb, deduplicateCatalog, findCatalogDuplicateGroups, auditCatalogIntegrity, stripDriveUrlsFromPublicText } = require('./catalog-enrichment');
+const {
+  getTop200Config,
+  updateTop200Config,
+  computeTop200Plan,
+  filterItemsByDeploymentTier,
+  generateEbayEndOverflowCsv,
+  getTop200DeployJobStatus,
+  runTop200DeploymentJob
+} = require('./top200-strategy');
 const { renderExecutiveBusinessPlanHtml } = require('./business-plan');
 const {
   MEMBERSHIP_TIERS,
@@ -387,8 +396,8 @@ const server = http.createServer(async (req, res) => {
     const method = req.method.toUpperCase();
     const baseUrl = getBaseUrl(req);
 
-    // CORS preflight for Craigslist Tacoma Auto-Fill UserScript (/api/craigslist/*)
-    if (pathname.startsWith('/api/craigslist/')) {
+    // CORS preflight for Craigslist & Crosslist Auto-Fill/Cleanup UserScripts (/api/craigslist/*, /api/deployment/*)
+    if (pathname.startsWith('/api/craigslist/') || pathname.startsWith('/api/deployment/')) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -626,6 +635,12 @@ const server = http.createServer(async (req, res) => {
           vendoo_csv: `${baseUrl}/api/exports/vendoo.csv`,
           crosslist_csv: `${baseUrl}/api/exports/crosslist.csv`,
           crosslist_images_zip: `${baseUrl}/api/exports/crosslist-images.zip`,
+          crosslist_top200_csv: `${baseUrl}/api/exports/crosslist.csv?tier=top200`,
+          crosslist_top200_images_zip: `${baseUrl}/api/exports/crosslist-images.zip?tier=top200`,
+          crosslist_cleanup_script: `${baseUrl}/crosslist-cleanup.user.js`,
+          ebay_top200_csv: `${baseUrl}/api/exports/ebay_us.csv?tier=top200`,
+          ebay_end_overflow_csv: `${baseUrl}/api/exports/ebay_us_end_overflow.csv`,
+          top200_deployment_url: `${baseUrl}/api/deployment/top200`,
           craigslist_csv: `${baseUrl}/api/exports/craigslist.csv`,
           craigslist_queue: `${baseUrl}/api/craigslist/queue`,
           craigslist_userscript: `${baseUrl}/craigslist-autofill.user.js`,
@@ -778,7 +793,10 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.15',
+        sw_version: 'v32.16',
+        top200_deployment_endpoint: '/api/deployment/top200',
+        crosslist_cleanup_script: '/crosslist-cleanup.user.js',
+        top200_strategy_enabled: getTop200Config(cfg).enabled,
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -815,16 +833,18 @@ const server = http.createServer(async (req, res) => {
       const cfg = getSettings();
       const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
       const sortMode = String(urlObj.searchParams.get('sort') || 'price_desc').toLowerCase();
+      const tierParam = String(urlObj.searchParams.get('tier') || 'auto').toLowerCase();
       const heavyOnly = urlObj.searchParams.get('heavy_only') === '1' || urlObj.searchParams.get('heavy_only') === 'true';
       const minPrice = Math.max(0, Number(urlObj.searchParams.get('min_price') || 0));
       const vehicleFilter = String(urlObj.searchParams.get('vehicle') || '').trim().toLowerCase();
 
       const donorMap = buildDonorMap();
-      const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
+      const rawRows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
         .all()
         .filter((r) => getValidPhotos(r).length > 0 && validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
         .map((r) => hydrateInventoryItem(r, donorMap))
         .filter((r) => isAllowedActiveDonorVehicle(r).allowed);
+      const rows = filterItemsByDeploymentTier(rawRows, cfg, tierParam);
 
       const allMapped = rows.map((i) => {
         const tax = resolvePartTaxonomyAndMetafields(i, cfg);
@@ -1085,6 +1105,114 @@ const server = http.createServer(async (req, res) => {
         logSync('inbound', 'craigslist_tacoma_ptd', 'sync_posted_bulk', 'BATCH', 'success', `Reconciled ${syncedCount} posted Craigslist SKU(s) from Tampermonkey storage.`);
       }
       sendJson(res, 200, { ok: true, synced_count: syncedCount, synced_skus: syncedSkus });
+      return;
+    }
+
+    // Automated Top-200 Multi-Platform Deployment Strategy Endpoints
+    if (method === 'GET' && pathname === '/api/deployment/top200') {
+      const cfg = getSettings();
+      const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
+      const limitParam = Number(urlObj.searchParams.get('limit') || 0);
+      const plan = computeTop200Plan(null, cfg, { limit: limitParam || undefined, baseUrl: canonicalBase });
+      const stripRow = ({ row: _row, ...rest }) => rest;
+      sendJson(res, 200, {
+        ok: true,
+        config: plan.config,
+        summary: plan.summary,
+        platform_matrix: plan.platform_matrix,
+        active_job: getTop200DeployJobStatus(),
+        downloads: {
+          crosslist_top200_csv: `${canonicalBase}/api/exports/crosslist.csv?tier=top200`,
+          crosslist_top200_images_zip: `${canonicalBase}/api/exports/crosslist-images.zip?tier=top200`,
+          crosslist_cleanup_script: `${canonicalBase}/crosslist-cleanup.user.js`,
+          ebay_top200_csv: `${canonicalBase}/api/exports/ebay_us.csv?tier=top200`,
+          ebay_end_overflow_csv: `${canonicalBase}/api/exports/ebay_us_end_overflow.csv`,
+          craigslist_top200_queue: `${canonicalBase}/api/craigslist/queue?tier=top200`,
+          craigslist_top200_csv: `${canonicalBase}/api/exports/craigslist.csv?tier=top200`,
+          craigslist_userscript: `${canonicalBase}/craigslist-autofill.user.js`,
+          google_merchant_top200_xml: `${canonicalBase}/api/feeds/google-merchant.xml?tier=top200`,
+          meta_top200_csv: `${canonicalBase}/api/feeds/meta-catalog.csv?tier=top200`
+        },
+        top200_skus: plan.top200.map((x) => x.sku),
+        overflow_skus: plan.overflow.map((x) => x.sku),
+        top200: plan.top200.map(stripRow),
+        overflow: plan.overflow.map(stripRow)
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/deployment/top200/config') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const nextCfg = updateTop200Config(b);
+      if (global.__aldridgeCrosslistZipCache) {
+        global.__aldridgeCrosslistZipCache.clear();
+      }
+      const plan = computeTop200Plan(null, getSettings(), { baseUrl: resolvePublicAppBaseUrl(getSettings()) || baseUrl });
+      const stripRow = ({ row: _row, ...rest }) => rest;
+      sendJson(res, 200, {
+        ok: true,
+        config: nextCfg,
+        summary: plan.summary,
+        top200: plan.top200.map(stripRow),
+        overflow: plan.overflow.map(stripRow)
+      });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/deployment/top200/status') {
+      sendJson(res, 200, {
+        ok: true,
+        config: getTop200Config(),
+        job: getTop200DeployJobStatus()
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/deployment/top200/deploy') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const overflowAction = String(b.overflow_action || b.overflowAction || 'draft').toLowerCase();
+      const confirmDelete = String(b.confirm_delete || b.confirmDelete || '').trim();
+      const limitVal = b.limit ? Number(b.limit) : null;
+      const enableMode = b.enable_top200_mode !== false;
+      const runSync = Boolean(b.sync === true || urlObj.searchParams.get('sync') === '1');
+
+      if (overflowAction === 'delete' && confirmDelete !== 'DELETE_OVERFLOW') {
+        sendJson(res, 400, {
+          ok: false,
+          error: 'Permanent Shopify overflow deletion requires confirm_delete: "DELETE_OVERFLOW".'
+        });
+        return;
+      }
+
+      const existingJob = getTop200DeployJobStatus();
+      if (existingJob && existingJob.status === 'running') {
+        sendJson(res, 202, { ok: true, already_running: true, job: existingJob });
+        return;
+      }
+
+      if (runSync) {
+        const result = await runTop200DeploymentJob({
+          overflowAction,
+          confirmDelete,
+          limit: limitVal,
+          enableTop200Mode: enableMode
+        });
+        sendJson(res, 200, { ok: true, job: result });
+        return;
+      }
+
+      // Kick off async so Render HTTP never times out while updating 494 Shopify products via GraphQL
+      runTop200DeploymentJob({
+        overflowAction,
+        confirmDelete,
+        limit: limitVal,
+        enableTop200Mode: enableMode
+      }).catch((err) => {
+        console.error('[Top200 Deploy Job Error]', err);
+      });
+      // Give Phase 1 (SQLite update) a brief tick to populate activeDeployJob
+      await new Promise((r) => setTimeout(r, 80));
+      sendJson(res, 202, { ok: true, started: true, job: getTop200DeployJobStatus() });
       return;
     }
 
@@ -1785,26 +1913,44 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Live Multi-Platform Feeds & Bulk Exporters
+    // Live Multi-Platform Feeds & Bulk Exporters (all support ?tier=top200 | ?tier=all | default auto)
     if (method === 'GET' && (pathname === '/api/feeds/google-merchant.xml' || pathname === '/api/exports/google-merchant.xml')) {
-      const items = db.prepare('SELECT * FROM inventory_items').all();
+      const cfg = getSettings();
+      const tier = String(urlObj.searchParams.get('tier') || 'auto').toLowerCase();
+      const items = filterItemsByDeploymentTier(db.prepare('SELECT * FROM inventory_items').all(), cfg, tier);
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
-      res.end(generateGoogleMerchantXml(items, getSettings(), baseUrl));
+      res.end(generateGoogleMerchantXml(items, cfg, baseUrl));
       return;
     }
 
     if (method === 'GET' && (pathname === '/api/feeds/meta.csv' || pathname === '/api/feeds/meta-catalog.csv' || pathname === '/api/exports/meta.csv' || pathname === '/api/exports/meta-commerce.csv')) {
-      const items = db.prepare('SELECT * FROM inventory_items').all();
+      const cfg = getSettings();
+      const tier = String(urlObj.searchParams.get('tier') || 'auto').toLowerCase();
+      const items = filterItemsByDeploymentTier(db.prepare('SELECT * FROM inventory_items').all(), cfg, tier);
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'inline; filename="meta-catalog-feed.csv"'
       });
-      res.end(generateMetaCatalogCsv(items, getSettings(), baseUrl));
+      res.end(generateMetaCatalogCsv(items, cfg, baseUrl));
+      return;
+    }
+
+    // 1-Click eBay Seller Hub Deactivation CSV (*Action=End) for all non-Top-200 Overflow SKUs
+    if (method === 'GET' && pathname === '/api/exports/ebay_us_end_overflow.csv') {
+      const cfg = getSettings();
+      const plan = computeTop200Plan(null, cfg, { baseUrl });
+      const csvOut = generateEbayEndOverflowCsv(plan.overflow);
+      logSync('outbound', 'ebay_aabcas', 'export_end_overflow_csv', 'OVERFLOW', 'success', `Generated eBay Seller Hub *Action=End CSV for ${plan.overflow.length} non-Top-200 overflow SKUs.`);
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="ebay-us-aabcas-end-overflow-${plan.overflow.length}-skus.csv"`
+      });
+      res.end(csvOut);
       return;
     }
 
     const exportMap = {
-      '/api/exports/shopify.csv': { fn: (i, s, u) => generateShopifyCsv(i, s, u), file: 'shopify-co-master-products.csv' },
+      '/api/exports/shopify.csv': { fn: (i, s, u) => generateShopifyCsv(i, s, u), file: 'shopify-co-master-products.csv', defaultTier: 'all' },
       '/api/exports/ebay.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
       '/api/exports/ebay-freight.csv': { fn: (i, s, u) => generateEbayFreightCsv(i, s, u), file: 'ebay-us-freight-pickup-aabcas.csv' },
       '/api/exports/ebay-file-exchange.csv': { fn: (i, s, u) => generateEbayMotorsCsv(i, s, u), file: 'ebay-us-standard-aabcas.csv' },
@@ -1815,36 +1961,42 @@ const server = http.createServer(async (req, res) => {
         fn: (i, s, u, opts) => generateVendooOrCrosslistCsv(i, s, u, 'crosslist', opts),
         file: 'crosslist-ebay-offerup-fb-import.csv'
       },
-      '/api/exports/craigslist.csv': { fn: (i, s, u) => generateCraigslistCsv(i, s, u), file: 'craigslist-tacoma-98467-pts.csv' },
+      '/api/exports/craigslist.csv': { fn: (i, s, u) => generateCraigslistCsv(i, s, u), file: 'craigslist-tacoma-98467-ptd.csv' },
       '/api/exports/tiktok_shop.csv': { fn: (i, s, u) => generateTiktokShopCsv(i, s, u), file: 'tiktok-shop-bulk.csv' },
-      '/api/exports/car_part_hollander.csv': { fn: (i) => generateCarPartHollanderCsv(i), file: 'car-part-hollander-interchange.csv' }
+      '/api/exports/car_part_hollander.csv': { fn: (i) => generateCarPartHollanderCsv(i), file: 'car-part-hollander-interchange.csv', defaultTier: 'all' }
     };
 
     if (method === 'GET' && pathname === '/api/exports/crosslist-images.zip') {
       try {
+        const cfg = getSettings();
+        const tierParam = String(urlObj.searchParams.get('tier') || 'auto').toLowerCase();
+        const effectiveTier = tierParam === 'auto' ? (getTop200Config(cfg).enabled ? 'top200' : 'all') : tierParam;
         const batch = Number(urlObj.searchParams.get('batch') || 0);
         const size = Number(urlObj.searchParams.get('size') || 0);
         const maxWidth = Number(urlObj.searchParams.get('width') || 800);
         const forceRefresh = urlObj.searchParams.get('refresh') === '1';
-        const cacheKey = `${batch}:${size}:${maxWidth}`;
+        const cacheKey = `${effectiveTier}:${batch}:${size}:${maxWidth}`;
         global.__aldridgeCrosslistZipCache = global.__aldridgeCrosslistZipCache || new Map();
         const cached = global.__aldridgeCrosslistZipCache.get(cacheKey);
         const nowMs = Date.now();
 
         let pkg = cached && !forceRefresh && (nowMs - cached.ts) < 10 * 60 * 1000 ? cached.pkg : null;
         if (!pkg) {
-          const items = db.prepare('SELECT * FROM inventory_items').all();
-          pkg = await buildCrosslistImagesZipBuffer(items, getSettings(), baseUrl, { batch, size, maxWidth });
+          const allItems = db.prepare('SELECT * FROM inventory_items').all();
+          const items = filterItemsByDeploymentTier(allItems, cfg, effectiveTier);
+          pkg = await buildCrosslistImagesZipBuffer(items, cfg, baseUrl, { batch, size, maxWidth });
           if (pkg.zipBuffer.length < 120 * 1024 * 1024) {
             global.__aldridgeCrosslistZipCache.set(cacheKey, { ts: nowMs, pkg });
           }
         }
-        const suffix = batch > 0 && size > 0 ? `-batch${batch}` : '';
-        logSync('outbound', 'crosslist', 'export_images_zip', batch > 0 ? `BATCH-${batch}` : 'ALL', pkg.errors.length ? 'partial' : 'success', `Built Crosslist images ZIP (${pkg.imageCount}/${pkg.expectedImages} images, ${(pkg.zipBuffer.length / (1024 * 1024)).toFixed(1)} MB, errors=${pkg.errors.length}).`);
+        const tierSuffix = effectiveTier === 'top200' ? '-top200' : '';
+        const batchSuffix = batch > 0 && size > 0 ? `-batch${batch}` : '';
+        logSync('outbound', 'crosslist', 'export_images_zip', batch > 0 ? `BATCH-${batch}` : effectiveTier.toUpperCase(), pkg.errors.length ? 'partial' : 'success', `Built Crosslist images ZIP (${effectiveTier}, ${pkg.imageCount}/${pkg.expectedImages} images, ${(pkg.zipBuffer.length / (1024 * 1024)).toFixed(1)} MB, errors=${pkg.errors.length}).`);
         res.writeHead(200, {
           'Content-Type': 'application/zip',
           'Content-Length': String(pkg.zipBuffer.length),
-          'Content-Disposition': `attachment; filename="crosslist-images${suffix}.zip"`,
+          'Content-Disposition': `attachment; filename="crosslist-images${tierSuffix}${batchSuffix}.zip"`,
+          'X-Crosslist-Tier': effectiveTier,
           'X-Crosslist-Items': String(pkg.itemCount),
           'X-Crosslist-Images': String(pkg.imageCount),
           'X-Crosslist-Errors': String(pkg.errors.length)
@@ -1877,19 +2029,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === 'GET' && exportMap[pathname]) {
-      const items = db.prepare('SELECT * FROM inventory_items').all();
+      const cfg = getSettings();
       const spec = exportMap[pathname];
+      const tierParam = String(urlObj.searchParams.get('tier') || spec.defaultTier || 'auto').toLowerCase();
+      const effectiveTier = tierParam === 'auto' ? (getTop200Config(cfg).enabled ? 'top200' : 'all') : tierParam;
+      const allItems = db.prepare('SELECT * FROM inventory_items').all();
+      const items = filterItemsByDeploymentTier(allItems, cfg, effectiveTier);
       const batch = Number(urlObj.searchParams.get('batch') || 0);
       const size = Number(urlObj.searchParams.get('size') || 0);
-      const fileName = (pathname === '/api/exports/crosslist.csv' && batch > 0 && size > 0)
-        ? `crosslist-import-batch${batch}.csv`
-        : spec.file;
-      logSync('outbound', spec.file.split('-')[0], 'export_feed_download', 'ALL', 'success', `Generated channel export ${fileName} (${items.length} SKUs).`);
+      let fileName = spec.file;
+      if (pathname === '/api/exports/crosslist.csv') {
+        if (batch > 0 && size > 0) fileName = `crosslist-import${effectiveTier === 'top200' ? '-top200' : ''}-batch${batch}.csv`;
+        else if (effectiveTier === 'top200') fileName = 'crosslist-top200-ebay-offerup-fb.csv';
+      } else if (effectiveTier === 'top200') {
+        fileName = spec.file.replace(/\.csv$/i, '-top200.csv');
+      }
+      logSync('outbound', spec.file.split('-')[0], 'export_feed_download', effectiveTier.toUpperCase(), 'success', `Generated channel export ${fileName} (${items.length} SKUs, tier=${effectiveTier}).`);
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="${fileName}"`
       });
-      res.end(spec.fn(items, getSettings(), baseUrl, { batch, size }));
+      res.end(spec.fn(items, cfg, baseUrl, { batch, size }));
       return;
     }
 
