@@ -4387,6 +4387,8 @@ async function loadTop200PlanUi(forceRefresh = false) {
     if (limInp && data.config?.limit) limInp.value = String(data.config.limit);
     const boostChk = document.getElementById('top200-parcel-boost-chk');
     if (boostChk) boostChk.checked = data.config?.prefer_parcel_velocity !== false;
+    const refillChk = document.getElementById('top200-auto-refill-chk');
+    if (refillChk) refillChk.checked = data.config?.auto_refill_on_sale !== false;
     const modeSel = document.getElementById('top200-shopify-mode');
     if (modeSel && data.config?.shopify_overflow_mode) modeSel.value = data.config.shopify_overflow_mode;
 
@@ -4412,6 +4414,7 @@ function setTop200TabUi(tab) {
 function renderTop200RosterUi() {
   const data = state.top200Plan;
   const badgesEl = document.getElementById('top200-summary-badges');
+  const refillLogEl = document.getElementById('top200-refill-log');
   const listEl = document.getElementById('top200-roster-list');
   if (!data || !listEl) return;
 
@@ -4422,9 +4425,26 @@ function renderTop200RosterUi() {
       <span class="badge badge-ok">Parcel Fast-Sellers: ${s.top200_parcel || 0}</span>
       <span class="badge badge-warn">High-Ticket Local ($150–$${s.top200_max_price || 3500}): ${s.top200_local || 0}</span>
       <span class="badge badge-warn">Overflow Reserve: ${s.overflow_count || 0} SKUs ($${Number(s.overflow_value || 0).toLocaleString()})</span>
+      <span class="badge ${data.config?.auto_refill_on_sale !== false ? 'badge-ok' : 'badge-warn'}">Auto-Refill on Sale: ${data.config?.auto_refill_on_sale !== false ? 'ON' : 'OFF'}</span>
+      ${s.sold_cleanup_count ? `<span class="badge badge-warn">🔴 Sold Cleanup Ready: ${s.sold_cleanup_count}</span>` : ''}
       ${s.pinned_count ? `<span class="badge badge-ok">📌 Pinned: ${s.pinned_count}</span>` : ''}
       ${s.excluded_count ? `<span class="badge badge-warn">✕ Swapped Out: ${s.excluded_count}</span>` : ''}
     `;
+  }
+
+  if (refillLogEl) {
+    const recs = Array.isArray(data.recent_replacements) ? data.recent_replacements.slice(0, 4) : [];
+    if (recs.length) {
+      refillLogEl.style.display = 'block';
+      refillLogEl.innerHTML = `
+        <strong style="color:#15803d;">🔄 Recent Auto-Refill Promotions (Sold → #1 Reserve Promoted):</strong>
+        <div style="margin-top:0.25rem;display:flex;flex-direction:column;gap:0.2rem;">
+          ${recs.map((r) => `<div>• ${r.replaced_sku ? `<span class="mono">${esc(r.replaced_sku)}</span> sold → ` : ''}Promoted <span class="mono"><strong>${esc(r.promoted_sku)}</strong></span> ($${r.promoted_price} ${esc(r.promoted_title || '')}) ${r.shopify_pushed ? '✅ Shopify ACTIVE' : '⏳ Local Active'}</div>`).join('')}
+        </div>
+      `;
+    } else {
+      refillLogEl.style.display = 'none';
+    }
   }
 
   const tab = state.top200Tab || 'top200';
@@ -4494,19 +4514,73 @@ function renderTop200RosterUi() {
 async function saveTop200SettingsUi() {
   const limit = Number(document.getElementById('top200-limit-input')?.value || 200);
   const preferParcel = Boolean(document.getElementById('top200-parcel-boost-chk')?.checked);
+  const autoRefill = Boolean(document.getElementById('top200-auto-refill-chk')?.checked);
   const mode = document.getElementById('top200-shopify-mode')?.value || 'draft';
   try {
     const res = await fetch('/api/deployment/top200/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit, prefer_parcel_velocity: preferParcel, shopify_overflow_mode: mode })
+      body: JSON.stringify({
+        limit,
+        prefer_parcel_velocity: preferParcel,
+        auto_refill_on_sale: autoRefill,
+        shopify_overflow_mode: mode
+      })
     });
     const out = await res.json();
     if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
     await loadTop200PlanUi(true);
-    if (typeof showToast === 'function') showToast(`Updated Top-${out.config.limit} strategy ranking!`);
+    if (typeof showToast === 'function') showToast(`Updated Top-${out.config.limit} strategy (Auto-Refill: ${out.config.auto_refill_on_sale ? 'ON' : 'OFF'})!`);
   } catch (err) {
     if (typeof showToast === 'function') showToast(`Config error: ${err.message}`);
+  }
+}
+
+async function triggerTop200RefillUi() {
+  const btn = document.getElementById('btn-top200-refill-now');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const res = await fetch('/api/deployment/top200/refill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_slots: 10 })
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    await loadTop200PlanUi(true);
+    if (typeof showToast === 'function') {
+      showToast(
+        out.promoted_count > 0
+          ? `🔄 Promoted ${out.promoted_count} Reserve part(s) to ACTIVE!`
+          : 'Already at full Top-200 active cap — 0 empty slots to refill.'
+      );
+    }
+  } catch (err) {
+    if (typeof showToast === 'function') showToast(`Refill error: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Refill'; }
+  }
+}
+
+async function registerShopifyAutodelistWebhooksUi() {
+  const btn = document.getElementById('btn-reg-shopify-webhooks');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
+  try {
+    const res = await fetch('/api/shopify/webhooks/register', { method: 'POST' });
+    const out = await res.json();
+    const regCount = Array.isArray(out.registered) ? out.registered.length : 0;
+    const topics = (out.registered || []).map((w) => w.topic).join(', ');
+    if (typeof showToast === 'function') {
+      showToast(
+        out.ok
+          ? `✅ ${regCount} Shopify auto-delist webhooks active (${topics})`
+          : `⚠️ ${regCount} registered (${topics}); missing: ${(out.missing || []).join(', ')}`
+      );
+    }
+  } catch (err) {
+    if (typeof showToast === 'function') showToast(`Webhook sync error: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Sync Webhooks'; }
   }
 }
 

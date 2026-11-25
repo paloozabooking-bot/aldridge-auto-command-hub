@@ -177,6 +177,7 @@ function resolveExportDims(item = {}) {
   const l = Number(item.length_in || 0);
   const wi = Number(item.width_in || 0);
   const h = Number(item.height_in || 0);
+  const isStaleOverweightSmallPart = !det.local_pickup_only && det.weight_lbs < 35 && w > det.weight_lbs * 3;
   const isLegacyDefault =
     w <= 0 || w === 2 || w === 4.5 || w === 6 || w === 8.5 ||
     (l === 10 && wi === 8 && h === 6) ||
@@ -184,17 +185,24 @@ function resolveExportDims(item = {}) {
     (l === 14 && wi === 10 && (h === 7 || h === 8)) ||
     (l === 48 && wi === 30 && h === 14 && (det.length_in !== 48 || det.width_in !== 30 || det.height_in !== 14)) ||
     w < det.weight_lbs * 0.7 ||
-    l < det.length_in * 0.7;
+    l < det.length_in * 0.7 ||
+    isStaleOverweightSmallPart;
   if (isLegacyDefault || l <= 0 || wi <= 0 || h <= 0) {
     return det;
   }
+  const detGirth = det.length_in + 2 * (det.width_in + det.height_in);
+  const clearlySmallParcel =
+    !det.local_pickup_only &&
+    det.weight_lbs < 30 &&
+    detGirth <= 115 &&
+    computeShippingClass(det.weight_lbs, `${item.category || ''} ${item.title || ''}`, det.length_in, det.width_in, det.height_in) === 'parcel_calculated';
   return {
     weight_lbs: Number(w.toFixed(1)),
     length_in: Math.round(l),
     width_in: Math.round(wi),
     height_in: Math.round(h),
     labor_hours: Number(det.labor_hours ?? item.install_labor_hours ?? 0.75),
-    local_pickup_only: Boolean(det.local_pickup_only || item.shipping_class === 'local_pickup_only')
+    local_pickup_only: clearlySmallParcel ? false : Boolean(det.local_pickup_only || item.shipping_class === 'local_pickup_only')
   };
 }
 
@@ -209,7 +217,10 @@ function isHeavyLocalPickupItem(item, settings) {
   const threshold = Number(settings?.freight_weight_threshold_lbs || 70);
   const dims = resolveExportDims(item);
   const girth = dims.length_in + 2 * (dims.width_in + dims.height_in);
-  return dims.local_pickup_only || dims.weight_lbs >= threshold || girth > 130 || item.shipping_class !== 'parcel_calculated';
+  if (dims.local_pickup_only || dims.weight_lbs >= threshold || girth > 130) return true;
+  const computedShip = computeShippingClass(dims.weight_lbs, `${item.category || ''} ${item.title || ''}`, dims.length_in, dims.width_in, dims.height_in);
+  if (dims.weight_lbs < 30 && girth <= 115 && computedShip === 'parcel_calculated') return false;
+  return item.shipping_class !== 'parcel_calculated';
 }
 
 function resolveExportPhotoUrl(photoPath, baseUrl, settings) {
@@ -3081,6 +3092,15 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
   const now = new Date().toISOString();
   const updatedSkus = [];
   const delistedSkus = [];
+  const autoRefills = [];
+
+  const maybeAutoRefill = (soldSku, trigger) => {
+    try {
+      const { autoPromoteNextReservePart } = require('./top200-strategy');
+      const res = autoPromoteNextReservePart({ soldSku, trigger });
+      if (res && res.promoted) autoRefills.push(res);
+    } catch (_) {}
+  };
 
   if ((normalizedTopic === 'orders/create' || normalizedTopic === 'orders/paid') && Array.isArray(payload.line_items)) {
     for (const li of payload.line_items) {
@@ -3090,6 +3110,7 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
         productId: li.product_id
       });
       if (!item) continue;
+      const wasActive = item.status === 'active';
       const qtyOrdered = Math.max(1, Number(li.quantity || 1));
       const nextQty = Math.max(0, Number(item.quantity || 0) - qtyOrdered);
       const nextStatus = nextQty === 0 ? 'sold' : 'active';
@@ -3101,7 +3122,10 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
         nextQty, nextStatus, nextChannels, now, item.id
       );
       updatedSkus.push(item.sku);
-      if (nextQty === 0) delistedSkus.push(item.sku);
+      if (nextQty === 0) {
+        delistedSkus.push(item.sku);
+        if (wasActive) maybeAutoRefill(item.sku, `shopify_${normalizedTopic}`);
+      }
 
       logSync(
         'inbound',
@@ -3112,9 +3136,77 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
         `Shopify Order #${payload.name || payload.id || 'N/A'} set single-variant ${item.sku} qty=${nextQty} (status=${nextStatus}). Auto-delisted from Crosslist, eBay aabcas, Google Merchant XML, Meta CSV & Craigslist queue.`
       );
     }
+  } else if (normalizedTopic === 'variants/out_of_stock') {
+    const item = findInventoryItemForWebhook({
+      sku: payload.sku,
+      variantId: payload.id || payload.variant_id,
+      productId: payload.product_id,
+      inventoryItemId: payload.inventory_item_id
+    });
+    if (item) {
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
+      const wasActive = item.status === 'active';
+      const nextStatus = isLockedQuarantine ? item.status : 'sold';
+      const nextChannels = markInventoryChannelDelisted(item, isLockedQuarantine ? item.status : 'shopify_variant_out_of_stock');
+      db.prepare('UPDATE inventory_items SET quantity = 0, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+        nextStatus, nextChannels, now, item.id
+      );
+      updatedSkus.push(item.sku);
+      delistedSkus.push(item.sku);
+      if (wasActive && !isLockedQuarantine) maybeAutoRefill(item.sku, 'shopify_variant_out_of_stock');
+      logSync(
+        'inbound',
+        'shopify_webhook',
+        'variant_out_of_stock_auto_delist',
+        item.sku,
+        'success',
+        `Shopify variants/out_of_stock marked 1-in-stock ${item.sku} SOLD (qty=0) & auto-delisted across Crosslist, eBay aabcas, Google Merchant XML, Meta CSV & Craigslist.`
+      );
+    }
+  } else if (normalizedTopic === 'variants/in_stock') {
+    const item = findInventoryItemForWebhook({
+      sku: payload.sku,
+      variantId: payload.id || payload.variant_id,
+      productId: payload.product_id,
+      inventoryItemId: payload.inventory_item_id
+    });
+    if (item) {
+      const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
+      if (!isLockedQuarantine) {
+        const nextQty = Math.max(1, Number(payload.inventory_quantity || 1));
+        let nextChannels = item.channels_json || '{}';
+        try {
+          const ch = JSON.parse(nextChannels);
+          ch.delisted_all_feeds = false;
+          ch.crosslist_delist_required = false;
+          nextChannels = JSON.stringify(ch);
+        } catch (_) {}
+        const nextStatus = item.status === 'draft' ? 'draft' : 'active';
+        db.prepare('UPDATE inventory_items SET quantity = ?, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+          nextQty, nextStatus, nextChannels, now, item.id
+        );
+        updatedSkus.push(item.sku);
+        logSync('inbound', 'shopify_webhook', 'variant_in_stock_restore', item.sku, 'success', `Shopify variants/in_stock restored ${item.sku} qty=${nextQty} (status=${nextStatus}).`);
+      }
+    }
+  } else if (normalizedTopic === 'products/delete' && payload.id !== undefined) {
+    const item = findInventoryItemForWebhook({ productId: payload.id });
+    if (item) {
+      const wasActive = item.status === 'active';
+      const nextChannels = markInventoryChannelDelisted(item, 'shopify_product_deleted');
+      db.prepare('UPDATE inventory_items SET quantity = 0, status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+        'inactive', nextChannels, now, item.id
+      );
+      updatedSkus.push(item.sku);
+      delistedSkus.push(item.sku);
+      if (wasActive) maybeAutoRefill(item.sku, 'shopify_product_deleted');
+      logSync('inbound', 'shopify_webhook', 'product_deleted_auto_delist', item.sku, 'success', `Shopify products/delete removed ${item.sku} from active feeds.`);
+    }
   } else if (normalizedTopic === 'products/update' && Array.isArray(payload.variants)) {
     const shopifyStatus = String(payload.status || 'active').toLowerCase();
-    const isArchivedOrDraft = shopifyStatus === 'archived' || shopifyStatus === 'draft';
+    const rawTagsStr = Array.isArray(payload.tags) ? payload.tags.join(',') : String(payload.tags || '');
+    const isOverflowReserveDraft = shopifyStatus === 'draft' && /\bOverflow_294_Reserve\b/i.test(rawTagsStr);
+    const isArchivedOrDraft = (shopifyStatus === 'archived' || shopifyStatus === 'draft') && !isOverflowReserveDraft;
 
     for (const v of payload.variants) {
       if (String(v.sku || '').endsWith('-SELFPULL') || String(v.sku || '').endsWith('-INSTALL')) continue;
@@ -3127,8 +3219,24 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
       if (!item) continue;
 
       const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
+      const wasActive = item.status === 'active';
       const hasInvField = v.inventory_quantity !== undefined && v.inventory_quantity !== null;
       const rawQty = hasInvField ? Math.max(0, Number(v.inventory_quantity)) : Number(item.quantity || 0);
+
+      // ECHO-SAFE GUARD: Keep Top-200 Overflow_294_Reserve drafts at qty=1 / status='draft' so they stay in Reserve!
+      if (isOverflowReserveDraft && !isLockedQuarantine) {
+        const reserveQty = rawQty > 0 ? rawQty : 0;
+        const reserveStatus = reserveQty > 0 ? 'draft' : 'sold';
+        const nextPrice = Number.isFinite(parseFloat(v.price)) && parseFloat(v.price) > 0 ? parseFloat(v.price) : item.price_we_pull;
+        db.prepare('UPDATE inventory_items SET quantity = ?, price_we_pull = ?, status = ?, updated_at = ? WHERE id = ?').run(
+          reserveQty, nextPrice, reserveStatus, now, item.id
+        );
+        updatedSkus.push(item.sku);
+        if (reserveQty === 0) delistedSkus.push(item.sku);
+        logSync('inbound', 'shopify_webhook', 'top200_overflow_reserve_draft', item.sku, 'success', `Preserved Top-200 Overflow Reserve draft ${item.sku} (qty=${reserveQty}, status=${reserveStatus}).`);
+        continue;
+      }
+
       const nextQty = (isLockedQuarantine || isArchivedOrDraft) ? 0 : rawQty;
       const nextStatus = isLockedQuarantine
         ? item.status
@@ -3154,6 +3262,9 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
         WHERE id = ?
       `).run(nextQty, nextPrice, nextStatus, nextChannels, now, item.id);
       updatedSkus.push(item.sku);
+      if (wasActive && nextStatus === 'sold') {
+        maybeAutoRefill(item.sku, 'shopify_products_update_zero');
+      }
 
       logSync(
         'inbound',
@@ -3168,6 +3279,7 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
     const item = findInventoryItemForWebhook({ inventoryItemId: payload.inventory_item_id });
     if (item && payload.available !== undefined && payload.available !== null) {
       const isLockedQuarantine = item.status === 'compliance_blocked' || item.status === 'pending_verification' || item.status === 'duplicate_archived';
+      const wasActive = item.status === 'active';
       const nextQty = isLockedQuarantine ? 0 : Math.max(0, Number(payload.available));
       const nextStatus = isLockedQuarantine ? item.status : (nextQty === 0 ? 'sold' : 'active');
       const nextChannels = nextQty === 0
@@ -3177,9 +3289,16 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
         nextQty, nextStatus, nextChannels, now, item.id
       );
       updatedSkus.push(item.sku);
-      if (nextQty === 0) delistedSkus.push(item.sku);
+      if (nextQty === 0) {
+        delistedSkus.push(item.sku);
+        if (wasActive && !isLockedQuarantine) maybeAutoRefill(item.sku, 'shopify_inventory_levels_zero');
+      }
       logSync('inbound', 'shopify_webhook', 'inventory_level_sync', item.sku, 'success', `Shopify inventory_levels/update set ${item.sku} qty=${nextQty} (status=${nextStatus}).`);
     }
+  }
+
+  if (delistedSkus.length > 0 && global.__aldridgeCrosslistZipCache) {
+    global.__aldridgeCrosslistZipCache.clear();
   }
 
   return {
@@ -3188,7 +3307,8 @@ function handleShopifyWebhook(topic, rawBody, hmacHeader) {
     updated_count: updatedSkus.length,
     updated_skus: updatedSkus,
     delisted_count: delistedSkus.length,
-    delisted_skus: delistedSkus
+    delisted_skus: delistedSkus,
+    auto_refill_promotions: autoRefills
   };
 }
 
@@ -3375,10 +3495,18 @@ async function pushSingleItemToShopify(item, settings, uploadsDir) {
   return { pushed: false, queued_for_ebay: true, shopify_domain: domain };
 }
 
+// Guaranteed-authorized topics under standard Shopify Products/Inventory app scopes (zero extra admin scopes needed!)
 const REQUIRED_SHOPIFY_WEBHOOK_TOPICS = [
+  'products/update',
+  'products/delete',
+  'variants/out_of_stock',
+  'variants/in_stock'
+];
+
+// Optional bonus topics registered best-effort when read_orders / read_inventory scopes are enabled
+const OPTIONAL_SHOPIFY_WEBHOOK_TOPICS = [
   'orders/create',
   'orders/paid',
-  'products/update',
   'inventory_levels/update'
 ];
 
@@ -3395,6 +3523,7 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
       auth_mode: auth.authMode,
       address: webhookAddress,
       required_topics: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
+      optional_topics: OPTIONAL_SHOPIFY_WEBHOOK_TOPICS,
       registered: [],
       created: [],
       missing: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
@@ -3434,14 +3563,15 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
   const alreadyRegistered = [];
   const created = [];
   const errors = [];
+  const optionalSkipped = [];
 
-  for (const topic of REQUIRED_SHOPIFY_WEBHOOK_TOPICS) {
+  const registerTopic = async (topic, isOptional = false) => {
     const found = existingByTopic.get(topic);
     if (found) {
       alreadyRegistered.push({ id: found.id, topic: found.topic, address: found.address, format: found.format });
-      continue;
+      return;
     }
-    if (!registerMissing) continue;
+    if (!registerMissing) return;
 
     try {
       const postResp = await fetch(`https://${auth.shopDomain}/admin/api/2025-01/webhooks.json`, {
@@ -3464,7 +3594,11 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
       let postData = {};
       try { postData = JSON.parse(postText || '{}'); } catch (_) {}
       if (!postResp.ok || !postData.webhook) {
-        errors.push({ topic, status: postResp.status, error: postData.errors || postText.slice(0, 200) });
+        if (isOptional) {
+          optionalSkipped.push({ topic, status: postResp.status });
+        } else {
+          errors.push({ topic, status: postResp.status, error: postData.errors || postText.slice(0, 200) });
+        }
       } else {
         created.push({
           id: postData.webhook.id,
@@ -3474,8 +3608,16 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
         });
       }
     } catch (err) {
-      errors.push({ topic, error: err.message });
+      if (isOptional) optionalSkipped.push({ topic, error: err.message });
+      else errors.push({ topic, error: err.message });
     }
+  };
+
+  for (const topic of REQUIRED_SHOPIFY_WEBHOOK_TOPICS) {
+    await registerTopic(topic, false);
+  }
+  for (const topic of OPTIONAL_SHOPIFY_WEBHOOK_TOPICS) {
+    await registerTopic(topic, true);
   }
 
   const allRegistered = [...alreadyRegistered, ...created];
@@ -3488,7 +3630,7 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
     registerMissing ? 'auto_register_webhooks' : 'check_webhooks',
     'ALL',
     errors.length === 0 && missing.length === 0 ? 'success' : 'partial',
-    `Shopify webhooks on ${auth.shopDomain} -> ${webhookAddress}: ${alreadyRegistered.length} already active, ${created.length} newly registered, ${missing.length} missing, ${errors.length} error(s).`
+    `Shopify webhooks on ${auth.shopDomain} -> ${webhookAddress}: ${alreadyRegistered.length} already active, ${created.length} newly registered, ${missing.length} required missing, ${errors.length} error(s).`
   );
 
   return {
@@ -3497,10 +3639,12 @@ async function ensureShopifyWebhooksRegistered({ registerMissing = true, baseUrl
     auth_mode: auth.authMode,
     address: webhookAddress,
     required_topics: REQUIRED_SHOPIFY_WEBHOOK_TOPICS,
+    optional_topics: OPTIONAL_SHOPIFY_WEBHOOK_TOPICS,
     already_registered: alreadyRegistered,
     created,
     registered: allRegistered,
     missing,
+    optional_skipped: optionalSkipped,
     errors,
     total_store_webhooks: existingWebhooks.length + created.length
   };
@@ -4172,13 +4316,18 @@ async function hydrateInventoryFromShopifyCoMaster({
         heightIn = Number(dimMatch[3]);
       }
       const fallbackDims = resolvePartDimensionsAndWeight({ title: w.cleanTitle, category: w.productType });
+      const hydratedStaleOverweightSmallPart =
+        !fallbackDims.local_pickup_only &&
+        Number(fallbackDims.weight_lbs || 0) < 35 &&
+        weightLbs > Number(fallbackDims.weight_lbs || 0) * 3;
       const hydratedLegacySmallBox =
         !weightLbs || weightLbs <= 0 || weightLbs === 2 || weightLbs === 4.5 || weightLbs === 6 || weightLbs === 8.5 ||
         !lengthIn || !widthIn || !heightIn ||
         (lengthIn === 10 && widthIn === 8 && heightIn === 6) ||
         (lengthIn === 14 && widthIn === 12 && heightIn === 10) ||
         weightLbs < Number(fallbackDims.weight_lbs || 0) * 0.7 ||
-        lengthIn < Number(fallbackDims.length_in || 0) * 0.7;
+        lengthIn < Number(fallbackDims.length_in || 0) * 0.7 ||
+        hydratedStaleOverweightSmallPart;
       if (hydratedLegacySmallBox) {
         weightLbs = Number(fallbackDims.weight_lbs || 4.5);
         lengthIn = Number(fallbackDims.length_in || 10);
@@ -4186,12 +4335,14 @@ async function hydrateInventoryFromShopifyCoMaster({
         heightIn = Number(fallbackDims.height_in || 6);
       }
 
+      const computedShipClass = computeShippingClass(weightLbs, `${w.productType} ${w.cleanTitle}`, lengthIn, widthIn, heightIn);
+      const isClearlySmallParcel = !fallbackDims.local_pickup_only && weightLbs < 30 && computedShipClass === 'parcel_calculated';
       const shipClass =
         fallbackDims.local_pickup_only ||
-        /Local_Pickup_Only/i.test(w.meta['custom.fulfillment_type'] || '') ||
-        weightLbs >= 70
+        weightLbs >= 70 ||
+        (!isClearlySmallParcel && /Local_Pickup_Only/i.test(w.meta['custom.fulfillment_type'] || ''))
           ? 'local_pickup_only'
-          : computeShippingClass(weightLbs, `${w.productType} ${w.cleanTitle}`, lengthIn, widthIn, heightIn);
+          : computedShipClass;
 
       const price = Math.max(15, Number(w.v0?.price || 45));
       const laborRate = Number(settings.labor_rate_hourly || settings.shop_labor_rate || 174.99);
@@ -4219,6 +4370,13 @@ async function hydrateInventoryFromShopifyCoMaster({
         crosslist: !w.isOverflowReserveDraft,
         top200_selected: !w.isOverflowReserveDraft
       });
+
+      if (Array.isArray(w.tags) && w.tags.includes('Top_200_Pinned')) {
+        try {
+          const { updateTop200Config } = require('./top200-strategy');
+          updateTop200Config({ pin_sku: w.sku });
+        } catch (_) {}
+      }
 
       if (!existingSkusInDb.has(w.sku)) {
         db.prepare(`
@@ -4263,9 +4421,10 @@ async function hydrateInventoryFromShopifyCoMaster({
         db.prepare(`
           UPDATE inventory_items
           SET shopify_product_id = ?, shopify_variant_id = ?, shopify_inventory_item_id = ?,
-              photos_json = ?, status = ?, quantity = 1, updated_at = ?
+              photos_json = ?, weight_lbs = ?, length_in = ?, width_in = ?, height_in = ?,
+              shipping_class = ?, status = ?, quantity = 1, updated_at = ?
           WHERE UPPER(sku) = ?
-        `).run(prodId, varId, invItemId, JSON.stringify(w.photoUrls), hydratedStatus, now, w.sku);
+        `).run(prodId, varId, invItemId, JSON.stringify(w.photoUrls), weightLbs, lengthIn, widthIn, heightIn, shipClass, hydratedStatus, now, w.sku);
         updatedCount++;
       }
 
@@ -4991,6 +5150,7 @@ module.exports = {
   generateGoogleMerchantXml,
   generateMetaCatalogCsv,
   generateVendooOrCrosslistCsv,
+  buildZipStoreBuffer,
   buildCrosslistImagesZipBuffer,
   buildCrosslistImageFilename,
   generateCraigslistCsv,

@@ -346,7 +346,7 @@ const DIMENSION_RULES = [
   { match: /\b(alloy\s*wheel|steel\s*wheel|wheel\s*rim|\brim\b)\b/i, exclude: /\b(cover|hubcap|center\s*cap|lug|nut|stud|sensor|hub|bearing|speed|well|liner|arch|steering|flywheel)\b/i, weight: 24.0, l: 20, w: 20, h: 9, labor: 0.5 },
 
   // 5. Differentials / Axle Housings / Subframes / Frame Sections (72–85 lbs, Local_Pickup_Only)
-  { match: /\b(front\s*differential|rear\s*differential|differential\s*carrier|differential\s*assembly|third\s*member|rear\s*axle\s*assembly|front\s*axle\s*assembly|axle\s*housing)\b/i, weight: 85.0, l: 28, w: 18, h: 16, labor: 3.5, localPickup: true },
+  { match: /\b(front\s*differential|rear\s*differential|differential\s*carrier|differential\s*assembly|third\s*member|rear\s*axle\s*(?:assembly|beam)|front\s*axle\s*assembly|axle\s*(?:housing|beam))\b/i, weight: 85.0, l: 48, w: 18, h: 16, labor: 3.5, localPickup: true },
   { match: /\b(frame\s*section|frame\s*cut|frame\s*rail|chassis\s*frame|subframe|k-?frame|front\s*subframe\s*crossmember|rear\s*subframe)\b/i, weight: 75.0, l: 48, w: 30, h: 14, labor: 3.5, localPickup: true },
 
   // 6. Sunroof / Moonroof Assemblies & Glass (48 lbs, 44 x 36 x 8 in, Local_Pickup_Only)

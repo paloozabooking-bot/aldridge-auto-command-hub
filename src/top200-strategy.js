@@ -6,11 +6,13 @@ const DEFAULT_TOP200_CONFIG = {
   enabled: true,
   limit: 200,
   prefer_parcel_velocity: true,
+  auto_refill_on_sale: true,
   shopify_overflow_mode: 'draft', // 'draft' | 'tag_only' | 'delete'
   pinned_skus: [],
   excluded_skus: [],
   deployed_at: null,
-  last_deploy_summary: null
+  last_deploy_summary: null,
+  recent_replacements: []
 };
 
 // High-velocity parcel-shippable OEM categories that turn fast on eBay / Crosslist / OfferUp / FB
@@ -31,16 +33,19 @@ function getTop200Config(settingsInput = null) {
   const mode = ['draft', 'tag_only', 'delete'].includes(String(saved.shopify_overflow_mode || ''))
     ? String(saved.shopify_overflow_mode)
     : 'draft';
+  const recentReplacements = Array.isArray(saved.recent_replacements) ? saved.recent_replacements.slice(0, 50) : [];
 
   return {
     enabled: saved.enabled !== false,
     limit,
     prefer_parcel_velocity: saved.prefer_parcel_velocity !== false,
+    auto_refill_on_sale: saved.auto_refill_on_sale !== false,
     shopify_overflow_mode: mode,
     pinned_skus: pinned,
     excluded_skus: excluded,
     deployed_at: saved.deployed_at || null,
-    last_deploy_summary: saved.last_deploy_summary || null
+    last_deploy_summary: saved.last_deploy_summary || null,
+    recent_replacements: recentReplacements
   };
 }
 
@@ -85,6 +90,8 @@ function updateTop200Config(patch = {}) {
     limit: patch.limit !== undefined ? Math.max(10, Math.min(500, Math.round(Number(patch.limit) || 200))) : current.limit,
     prefer_parcel_velocity:
       patch.prefer_parcel_velocity !== undefined ? Boolean(patch.prefer_parcel_velocity) : current.prefer_parcel_velocity,
+    auto_refill_on_sale:
+      patch.auto_refill_on_sale !== undefined ? Boolean(patch.auto_refill_on_sale) : current.auto_refill_on_sale,
     shopify_overflow_mode:
       ['draft', 'tag_only', 'delete'].includes(String(patch.shopify_overflow_mode || ''))
         ? String(patch.shopify_overflow_mode)
@@ -92,7 +99,10 @@ function updateTop200Config(patch = {}) {
     pinned_skus: pinned,
     excluded_skus: excluded,
     deployed_at: patch.deployed_at !== undefined ? patch.deployed_at : current.deployed_at,
-    last_deploy_summary: patch.last_deploy_summary !== undefined ? patch.last_deploy_summary : current.last_deploy_summary
+    last_deploy_summary: patch.last_deploy_summary !== undefined ? patch.last_deploy_summary : current.last_deploy_summary,
+    recent_replacements: Array.isArray(patch.recent_replacements)
+      ? patch.recent_replacements.slice(0, 50)
+      : current.recent_replacements
   };
 
   updateSettings({ top200_strategy: next });
@@ -641,6 +651,293 @@ async function runTop200DeploymentJob({ overflowAction = 'draft', confirmDelete 
   return activeDeployJob;
 }
 
+function getSoldSkusForCleanup(limit = 150) {
+  const rows = db.prepare(`
+    SELECT id, sku, title, price_we_pull, status, quantity, updated_at, channels_json
+    FROM inventory_items
+    WHERE status = 'sold' OR (status = 'inactive' AND quantity <= 0)
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).all(Math.max(10, Math.min(500, Number(limit) || 150)));
+
+  return rows.map((r) => ({
+    id: r.id,
+    sku: r.sku,
+    title: cleanListingTitle(r.title || ''),
+    price: Number(r.price_we_pull || 0),
+    status: r.status,
+    updated_at: r.updated_at || null
+  }));
+}
+
+/**
+ * AUTOMATIC TOP-200 SLOT REFILL ENGINE:
+ * When a Top-200 part sells (via Shopify webhook or manual Mark Sold), automatically promotes the #1 highest-scoring
+ * Overflow Reserve draft part to ACTIVE in SQLite + pushes ACTIVE / Top_200_Active to Shopify via GraphQL (2025-01)
+ * so your live catalog stays pinned at exactly 200 high-ROI listings without manual intervention.
+ */
+function autoPromoteNextReservePart({ soldSku = '', trigger = 'sale_event' } = {}) {
+  try {
+    const settings = getSettings();
+    const cfg = getTop200Config(settings);
+    if (!cfg.enabled || !cfg.auto_refill_on_sale) {
+      return { promoted: false, reason: 'auto_refill_disabled' };
+    }
+
+    const activeCount = Number(
+      db.prepare("SELECT COUNT(*) AS c FROM inventory_items WHERE status = 'active' AND quantity > 0").get()?.c || 0
+    );
+    if (activeCount >= cfg.limit) {
+      return { promoted: false, reason: 'already_at_cap', active_count: activeCount, limit: cfg.limit };
+    }
+
+    // Score only 'draft' reserve parts so we pick the #1 highest-ROI eligible replacement
+    const draftRows = db.prepare("SELECT * FROM inventory_items WHERE status = 'draft' AND quantity > 0").all();
+    if (!draftRows.length) {
+      return { promoted: false, reason: 'no_draft_reserve_available', active_count: activeCount };
+    }
+
+    const plan = computeTop200Plan(draftRows, settings, { limit: 1 });
+    const nextCandidate = plan.top200.find((x) => !x.excluded);
+    if (!nextCandidate) {
+      return { promoted: false, reason: 'no_eligible_reserve_candidate', active_count: activeCount };
+    }
+
+    const now = new Date().toISOString();
+    let ch = {};
+    try { ch = JSON.parse(nextCandidate.row.channels_json || '{}'); } catch (_) {}
+    ch.top200_selected = true;
+    ch.top200_auto_promoted_at = now;
+    ch.top200_replaced_sku = soldSku || null;
+    ch.delisted_all_feeds = false;
+
+    db.prepare('UPDATE inventory_items SET status = ?, channels_json = ?, updated_at = ? WHERE id = ?').run(
+      'active',
+      JSON.stringify(ch),
+      now,
+      nextCandidate.id
+    );
+
+    if (global.__aldridgeCrosslistZipCache) {
+      global.__aldridgeCrosslistZipCache.clear();
+    }
+
+    const entry = {
+      promoted_sku: nextCandidate.sku,
+      promoted_title: nextCandidate.title,
+      promoted_price: nextCandidate.price_int,
+      promoted_reason: nextCandidate.reason,
+      replaced_sku: soldSku || null,
+      trigger,
+      promoted_at: now,
+      shopify_pushed: false
+    };
+
+    const nextLog = [entry, ...(cfg.recent_replacements || [])].slice(0, 50);
+    updateTop200Config({ recent_replacements: nextLog });
+
+    logSync(
+      'outbound',
+      'top200_auto_refill',
+      'promote_reserve_to_active',
+      nextCandidate.sku,
+      'success',
+      `Auto-Refill (${trigger}): ${soldSku ? `${soldSku} sold -> ` : ''}promoted #1 Reserve part ${nextCandidate.sku} ($${nextCandidate.price_int} ${nextCandidate.title}) from DRAFT to ACTIVE to hold Top-${cfg.limit} cap.`
+    );
+
+    // Push live ACTIVE + Top_200_Active status to Shopify asynchronously (non-blocking for webhook response!)
+    setImmediate(async () => {
+      try {
+        const { resolveShopifyAccessToken, shopifyFetchWithRetry } = require('./exporters');
+        const freshSettings = getSettings();
+        const auth = await resolveShopifyAccessToken(freshSettings, { forceRefresh: false });
+        if (!auth.shopDomain || !auth.token || auth.authMode === 'shpss_missing_client_id') return;
+
+        const gqlUrl = `https://${auth.shopDomain}/admin/api/2025-01/graphql.json`;
+        const tokenRef = { token: auth.token };
+        let prod = null;
+        const directId = String(nextCandidate.shopify_product_id || '').trim();
+        if (directId) {
+          const gid = directId.startsWith('gid://') ? directId : `gid://shopify/Product/${directId}`;
+          const r = await shopifyFetchWithRetry(
+            gqlUrl,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({
+                query: `query GetProd($id: ID!) { product(id: $id) { id status tags } }`,
+                variables: { id: gid }
+              })
+            },
+            { authMode: auth.authMode, settings: freshSettings, tokenRef }
+          );
+          if (r.ok) {
+            const j = await r.json();
+            prod = j?.data?.product || null;
+          }
+        }
+        if (!prod) {
+          const r = await shopifyFetchWithRetry(
+            gqlUrl,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({
+                query: `query FindBySku($q: String!) { products(first: 3, query: $q) { nodes { id status tags } } }`,
+                variables: { q: `sku:${nextCandidate.sku}` }
+              })
+            },
+            { authMode: auth.authMode, settings: freshSettings, tokenRef }
+          );
+          if (r.ok) {
+            const j = await r.json();
+            prod = j?.data?.products?.nodes?.[0] || null;
+          }
+        }
+        if (!prod?.id) return;
+
+        const tagSet = new Set(Array.isArray(prod.tags) ? prod.tags : []);
+        tagSet.delete('Overflow_294_Reserve');
+        tagSet.add('Top_200_Active');
+        tagSet.add('Top_200_AutoRefill');
+
+        const upd = await shopifyFetchWithRetry(
+          gqlUrl,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              query: `mutation AutoPromoteReserve($product: ProductUpdateInput!) {
+                productUpdate(product: $product) {
+                  product { id status tags }
+                  userErrors { field message }
+                }
+              }`,
+              variables: { product: { id: prod.id, status: 'ACTIVE', tags: Array.from(tagSet) } }
+            })
+          },
+          { authMode: auth.authMode, settings: freshSettings, tokenRef }
+        );
+        const uj = await upd.json();
+        const uerrs = uj?.data?.productUpdate?.userErrors || uj?.errors || [];
+        if (upd.ok && uerrs.length === 0) {
+          const latestCfg = getTop200Config();
+          const patched = (latestCfg.recent_replacements || []).map((rec) =>
+            rec.promoted_sku === nextCandidate.sku && rec.promoted_at === now ? { ...rec, shopify_pushed: true } : rec
+          );
+          updateTop200Config({ recent_replacements: patched });
+        }
+      } catch (_) {}
+    });
+
+    return {
+      promoted: true,
+      promoted_sku: nextCandidate.sku,
+      promoted_title: nextCandidate.title,
+      promoted_price: nextCandidate.price_int,
+      replaced_sku: soldSku || null
+    };
+  } catch (err) {
+    return { promoted: false, error: err.message || String(err) };
+  }
+}
+
+function generateTop200AuditRosterCsv(plan) {
+  const headers = [
+    'Rank', 'Tier', 'SKU', 'Title', 'Price_USD', 'Score', 'Shipping_Class',
+    'Weight_Lbs', 'OEM_MPN', 'Photos', 'Current_DB_Status', 'Pinned', 'Excluded', 'Strategy_Reason'
+  ];
+  const rows = [headers.join(',')];
+  for (const item of [...plan.top200, ...plan.overflow]) {
+    rows.push([
+      item.rank,
+      item.tier === 'top200' ? 'TOP_200_ACTIVE' : 'OVERFLOW_RESERVE',
+      item.sku,
+      item.title,
+      item.price.toFixed(2),
+      item.score.toFixed(2),
+      item.shipping_class,
+      item.weight_lbs,
+      item.oem_part_number || '',
+      item.photo_count,
+      item.status,
+      item.pinned ? 'YES' : 'NO',
+      item.excluded ? 'YES' : 'NO',
+      item.reason
+    ].map(csvEsc).join(','));
+  }
+  return rows.join('\n') + '\n';
+}
+
+function buildTop200DeploymentKitZip(settingsInput = null, baseUrl = 'https://aldridgeautosupply.com') {
+  const {
+    buildZipStoreBuffer,
+    generateEbayMotorsCsv,
+    generateVendooOrCrosslistCsv,
+    generateCraigslistCsv,
+    generateMetaCatalogCsv
+  } = require('./exporters');
+
+  const settings = settingsInput || getSettings();
+  const plan = computeTop200Plan(null, settings, { baseUrl });
+  const topRows = plan.top200.map((x) => x.row);
+
+  const readme = [
+    'ALDRIDGE AUTO SUPPLY — AUTOMATED TOP-200 MULTI-PLATFORM DEPLOYMENT KIT',
+    `Generated: ${new Date().toISOString()}`,
+    `Top-200 Active Roster: ${plan.summary.top200_count} SKUs ($${plan.summary.top200_value.toLocaleString()} = ${plan.summary.top200_value_share_pct}% of $${plan.summary.total_catalog_value.toLocaleString()} catalog)`,
+    `  - High-Ticket Local Pickup: ${plan.summary.top200_local} SKUs`,
+    `  - Fast-Selling Shippable Parcel: ${plan.summary.top200_parcel} SKUs`,
+    `Overflow Reserve: ${plan.summary.overflow_count} SKUs ($${plan.summary.overflow_value.toLocaleString()})`,
+    '',
+    'EXACT LAUNCH ORDER (ZERO CAP COLLISIONS):',
+    '1. SHOPIFY CO-MASTER (Automatic):',
+    `   Open ${baseUrl} -> Staff Portal -> Sync & Feeds -> click "Deploy Top 200 to Shopify + All Feeds".`,
+    '   Sets Top 200 -> ACTIVE (Top_200_Active) and Overflow -> DRAFT (Overflow_294_Reserve).',
+    '   Auto-Refill on Sale automatically promotes the #1 Reserve part whenever a Top-200 part sells!',
+    '',
+    '2. EBAY US (AABCAS — Seller Hub Reports -> Uploads):',
+    '   Step 2a: Upload "01_ebay_END_overflow_first.csv" (*Action=End) to deactivate non-Top-200 SKUs (Ended items do NOT consume eBay limits).',
+    '   Step 2b: Upload "02_ebay_ADD_top200_active.csv" to push the active Top-200 listings.',
+    '',
+    '3. CROSSLIST (OfferUp + FB Marketplace + eBay Bridge — Strict ~200-250 Cap):',
+    `   Step 3a: Install ${baseUrl}/crosslist-cleanup.user.js in Tampermonkey -> open Crosslist -> click "Auto-Delete Sold + Overflow" (Draft/Inactive items count toward Crosslist cap, so deleting them frees your slots).`,
+    `   Step 3b: Download Top-200 Images ZIP from ${baseUrl}/api/exports/crosslist-images.zip?tier=top200`,
+    '   Step 3c: Upload "03_crosslist_top200_single_batch.csv" + the Top-200 Images ZIP in 1 single batch (<250 items).',
+    '',
+    '4. CRAIGSLIST TACOMA (tac -> fsd -> ptd):',
+    `   Install/Update ${baseUrl}/craigslist-autofill.user.js (v2.4.0) in Tampermonkey.`,
+    '   - Visit accounts.craigslist.org to 1-click delete any SOLD or OVERFLOW active ads.',
+    '   - Click "Launch Next Unposted Part" in Staff Portal to auto-post strictly from the Top-200 queue.',
+    '',
+    '5. GOOGLE MERCHANT & META COMMERCE:',
+    `   Live feeds (${baseUrl}/api/feeds/google-merchant.xml & /api/feeds/meta-catalog.csv) automatically serve Top-200.`,
+    '   "05_meta_commerce_top200.csv" is also included for manual Meta Commerce uploads.',
+    '',
+    '6. AUDIT SHEET:',
+    '   Open "06_top200_vs_overflow_audit_roster.csv" in Excel/Google Sheets to review every SKU rank, score, and reason.',
+    ''
+  ].join('\n');
+
+  const entries = [
+    { name: 'README_LAUNCH_CHECKLIST.txt', data: Buffer.from(readme, 'utf8') },
+    { name: '01_ebay_END_overflow_first.csv', data: Buffer.from(generateEbayEndOverflowCsv(plan.overflow), 'utf8') },
+    { name: '02_ebay_ADD_top200_active.csv', data: Buffer.from(generateEbayMotorsCsv(topRows, settings, baseUrl), 'utf8') },
+    { name: '03_crosslist_top200_single_batch.csv', data: Buffer.from(generateVendooOrCrosslistCsv(topRows, settings, baseUrl, 'crosslist'), 'utf8') },
+    { name: '04_craigslist_top200_queue.csv', data: Buffer.from(generateCraigslistCsv(topRows, settings, baseUrl), 'utf8') },
+    { name: '05_meta_commerce_top200.csv', data: Buffer.from(generateMetaCatalogCsv(topRows, settings, baseUrl), 'utf8') },
+    { name: '06_top200_vs_overflow_audit_roster.csv', data: Buffer.from(generateTop200AuditRosterCsv(plan), 'utf8') }
+  ];
+
+  const zipBuffer = buildZipStoreBuffer(entries);
+  return {
+    zipBuffer,
+    fileCount: entries.length,
+    top200Count: plan.summary.top200_count,
+    overflowCount: plan.summary.overflow_count
+  };
+}
+
 module.exports = {
   DEFAULT_TOP200_CONFIG,
   getTop200Config,
@@ -649,6 +946,10 @@ module.exports = {
   computeTop200Plan,
   filterItemsByDeploymentTier,
   generateEbayEndOverflowCsv,
+  generateTop200AuditRosterCsv,
+  buildTop200DeploymentKitZip,
+  getSoldSkusForCleanup,
+  autoPromoteNextReservePart,
   getTop200DeployJobStatus,
   runTop200DeploymentJob
 };

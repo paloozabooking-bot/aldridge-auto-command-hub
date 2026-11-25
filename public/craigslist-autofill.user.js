@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts Bulk Auto-Poster
 // @namespace    https://aldridgeautosupply.com/
-// @version      2.3.0
-// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills Top-200 strategy listings from aldridgeautosupply.com/api/craigslist/queue, attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, syncs posted SKUs across Render restarts, auto-loads next unposted part after publish, and cleans overflow ads on accounts.craigslist.org.
+// @version      2.4.0
+// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills Top-200 strategy listings from aldridgeautosupply.com/api/craigslist/queue, attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, syncs posted SKUs across Render restarts, auto-loads next unposted part after publish, and cleans SOLD + Overflow ads on accounts.craigslist.org.
 // @author       Aldridge Auto's
 // @match        https://post.craigslist.org/*
 // @match        https://seattle.craigslist.org/*
@@ -22,7 +22,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2.3.0';
+  const SCRIPT_VERSION = '2.4.0';
   const DEFAULT_HUB = 'https://aldridgeautosupply.com';
   const START_POST_URL = 'https://post.craigslist.org/c/sea?lang=en&cc=us';
   const MAX_CL_PHOTOS = 24;
@@ -1328,7 +1328,7 @@
       return;
     }
 
-    // On accounts.craigslist.org dashboard (when logged in): scan for non-Top-200 overflow ads & offer 1-click delete
+    // On accounts.craigslist.org dashboard (when logged in): scan for SOLD + non-Top-200 overflow ads & offer 1-click delete
     if (host === 'accounts.craigslist.org') {
       if (document.querySelector('input[type="password"]')) return;
       const postingRows = Array.from(document.querySelectorAll('table.accthp_postings tbody tr, tr.posting-row'));
@@ -1336,36 +1336,54 @@
       try {
         const planRes = await apiGetJson(`${hubOrigin}/api/deployment/top200`);
         if (!planRes.ok || !planRes.data) return;
-        const overflowTitles = new Set(
-          (planRes.data.overflow || []).map((x) => String(x.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40)).filter((t) => t.length >= 16)
-        );
+        const normKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40);
+        const soldSkus = new Set((planRes.data.sold_skus || []).map((s) => String(s).toUpperCase()));
+        const soldTitles = new Set((planRes.data.sold_items || []).map((x) => normKey(x.title)).filter((t) => t.length >= 16));
+        const overflowTitles = new Set((planRes.data.overflow || []).map((x) => normKey(x.title)).filter((t) => t.length >= 16));
         const overflowSkus = new Set((planRes.data.overflow_skus || []).map((s) => String(s).toUpperCase()));
+        const soldRows = [];
         const overflowRows = [];
         for (const tr of postingRows) {
           const rowTxt = (tr.innerText || '').trim();
+          const upperTxt = rowTxt.toUpperCase();
           const normRow = rowTxt.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-          const skuHit = Array.from(overflowSkus).some((sku) => rowTxt.toUpperCase().includes(sku));
-          const titleHit = !skuHit && Array.from(overflowTitles).some((t) => normRow.includes(t));
           const delBtn = tr.querySelector('form[action*="delete"] input[type="submit"], form[action*="delete"] button, input[value="delete"], button[value="delete"]');
-          if ((skuHit || titleHit) && delBtn) {
-            tr.style.outline = '2px solid #dc2626';
-            tr.style.backgroundColor = 'rgba(220,38,38,0.08)';
-            overflowRows.push({ tr, delBtn });
+          if (!delBtn) continue;
+
+          const isSold =
+            Array.from(soldSkus).some((sku) => upperTxt.includes(sku)) ||
+            Array.from(soldTitles).some((t) => normRow.includes(t));
+          if (isSold) {
+            tr.style.outline = '3px solid #dc2626';
+            tr.style.backgroundColor = 'rgba(220,38,38,0.14)';
+            soldRows.push({ tr, delBtn, kind: 'SOLD' });
+            continue;
+          }
+
+          const isOverflow =
+            Array.from(overflowSkus).some((sku) => upperTxt.includes(sku)) ||
+            Array.from(overflowTitles).some((t) => normRow.includes(t));
+          if (isOverflow) {
+            tr.style.outline = '2px solid #ea580c';
+            tr.style.backgroundColor = 'rgba(234,88,12,0.09)';
+            overflowRows.push({ tr, delBtn, kind: 'OVERFLOW' });
           }
         }
+        const orderedTargets = [...soldRows, ...overflowRows];
         updateHud({
-          status: overflowRows.length
-            ? `Found ${overflowRows.length} non-Top-200 Overflow ad(s) highlighted in red on your CL dashboard.`
-            : `✅ Craigslist dashboard clean — 0 non-Top-200 overflow ads detected.`,
-          statusType: overflowRows.length ? 'warn' : 'success',
-          extraHtml: overflowRows.length
-            ? `<button id="ald-btn-cl-del-overflow" style="width:100%;background:#dc2626;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;margin-bottom:6px;">🗑 Delete Next Overflow Ad (${overflowRows.length} found)</button>`
+          status: orderedTargets.length
+            ? `Found ${soldRows.length} SOLD (red) + ${overflowRows.length} Overflow (orange) ad(s) on your CL dashboard.`
+            : `✅ Craigslist dashboard clean — 0 SOLD or non-Top-200 overflow ads detected.`,
+          statusType: orderedTargets.length ? 'warn' : 'success',
+          extraHtml: orderedTargets.length
+            ? `<button id="ald-btn-cl-del-overflow" style="width:100%;background:#dc2626;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;margin-bottom:6px;">🗑 Delete Next ${orderedTargets[0].kind} Ad (${orderedTargets.length} total)</button>`
             : '',
           onExtraBind: () => {
             document.getElementById('ald-btn-cl-del-overflow')?.addEventListener('click', () => {
-              if (!overflowRows.length) return;
-              if (!window.confirm(`Delete highlighted non-Top-200 overflow ad from Craigslist? (${overflowRows.length} found on page)`)) return;
-              overflowRows[0].delBtn.click();
+              if (!orderedTargets.length) return;
+              const next = orderedTargets[0];
+              if (!window.confirm(`Delete highlighted ${next.kind} ad from Craigslist? (${soldRows.length} sold, ${overflowRows.length} overflow found)`)) return;
+              next.delBtn.click();
             });
           }
         });

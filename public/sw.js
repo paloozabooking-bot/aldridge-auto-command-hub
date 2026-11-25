@@ -1,9 +1,9 @@
-const CACHE_NAME = 'aldridge-autos-hub-v32.16';
+const CACHE_NAME = 'aldridge-autos-hub-v32.17';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=32.16',
-  '/app.js?v=32.16',
+  '/styles.css?v=32.17',
+  '/app.js?v=32.17',
   '/storefront-menu.js?v=30.0',
   '/sourcing-storefront.js?v=30.0',
   '/vin-aggregator-ui.js?v=30.0',

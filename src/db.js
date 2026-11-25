@@ -1325,8 +1325,8 @@ function computeShippingClass(weightLbs, category = '', lengthIn = 10, widthIn =
   const catLower = (category || '').toLowerCase();
   const girthPlusLength = Number(lengthIn) + 2 * (Number(widthIn) + Number(heightIn));
 
-  // Audit Guard: Never let "Engine", "Transmission", "Axle", "Bumper", "Door", "Hood", or "Seat" substring-trap small shippable subparts!
-  const isSmallSubpart = /\b(module|ecu|ecm|pcm|tcm|bcm|computer|immobilizer|harness|fuse|relay|cable|shifter|pan|mount|bracket|sensor|solenoid|cooling|radiator|fan|shroud|latch|hinge|release|strut|lift\s*support|handle|switch|bezel|trim|mirror|lamp|light|lock\s*actuator|regulator|motor|speaker|cover\s*trim|filler\s*door|glove\s*box|visor|headrest|knob|armrest|belt|buckle|panel\s*trim)\b/i.test(catLower);
+  // Audit Guard: Never let "Engine", "Transmission", "Axle", "Bumper", "Door", "Hood", "Windshield", or "Seat" substring-trap small shippable subparts!
+  const isSmallSubpart = /\b(module|ecu|ecm|pcm|tcm|bcm|computer|immobilizer|harness|fuse|relay|cable|shifter|pan|mount|bracket|sensor|solenoid|cooling|radiator|fan|shroud|latch|hinge|release|strut|lift\s*support|handle|switch|bezel|trim|mirror|lamp|light|lock\s*actuator|regulator|motor|speaker|cover\s*trim|filler\s*door|glove\s*box|visor|headrest|knob|armrest|belt|buckle|panel\s*trim|interior\s*trim|wiper|washer|cowl|blade|reservoir|grille|starter|alternator)\b/i.test(catLower);
 
   // Hazmat / fluid-bearing / fragile oversized glass items are strictly Local Pickup Only in 98467
   const isHazmatOrGlass = /\b(lead[- ]acid|car\s*battery|automotive\s*battery|hybrid\s*battery|hv\s*battery|fuel\s*tank|gas\s*tank|hazmat|refrigerant|windshield|back\s*glass|rear\s*window\s*glass|door\s*window\s*glass|quarter\s*window\s*glass)\b/i.test(catLower);

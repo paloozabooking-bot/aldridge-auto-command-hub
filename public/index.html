@@ -40,7 +40,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=32.16" />
+  <link rel="stylesheet" href="/styles.css?v=32.17" />
   <script type="application/ld+json" id="seo-json-ld">
   {
     "@context": "https://schema.org",
@@ -1215,33 +1215,43 @@
                 <span class="badge badge-warn">Loading Top-200 strategy plan...</span>
               </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:290px;">
-              <div style="display:flex;gap:0.45rem;align-items:center;">
+            <div style="display:flex;flex-direction:column;gap:0.45rem;min-width:305px;">
+              <div style="display:flex;gap:0.45rem;align-items:center;flex-wrap:wrap;">
                 <label style="font-size:0.76rem;font-weight:700;white-space:nowrap;">Cap:</label>
-                <input type="number" id="top200-limit-input" class="input mono" value="200" min="10" max="500" style="width:78px;padding:0.3rem 0.45rem;" />
-                <label style="font-size:0.76rem;display:flex;align-items:center;gap:0.3rem;cursor:pointer;">
+                <input type="number" id="top200-limit-input" class="input mono" value="200" min="10" max="500" style="width:72px;padding:0.3rem 0.45rem;" onchange="saveTop200SettingsUi()" />
+                <label style="font-size:0.75rem;display:flex;align-items:center;gap:0.25rem;cursor:pointer;" title="Boost fast-selling shippable parcel parts over bulky $125 local parts">
                   <input type="checkbox" id="top200-parcel-boost-chk" checked onchange="saveTop200SettingsUi()" />
-                  Smart Parcel Velocity
+                  Parcel Velocity
+                </label>
+                <label style="font-size:0.75rem;display:flex;align-items:center;gap:0.25rem;cursor:pointer;" title="Automatically promote #1 Reserve part to ACTIVE whenever a Top-200 item sells">
+                  <input type="checkbox" id="top200-auto-refill-chk" checked onchange="saveTop200SettingsUi()" />
+                  Auto-Refill on Sale
                 </label>
               </div>
-              <select id="top200-shopify-mode" class="select" style="font-size:0.79rem;">
+              <select id="top200-shopify-mode" class="select" style="font-size:0.79rem;" onchange="saveTop200SettingsUi()">
                 <option value="draft">Shopify Overflow: Deactivate → DRAFT (Safe — keeps 294 reserve)</option>
                 <option value="tag_only">Shopify Overflow: Tag-Only (Keep 494 Active; External Feeds = Top 200)</option>
                 <option value="delete">Shopify Overflow: Permanent DELETE (Irreversible!)</option>
               </select>
               <button type="button" id="btn-run-top200-deploy" class="btn btn-primary btn-sm" onclick="runTop200DeploymentUi()">🚀 Execute Top-200 Deployment (Shopify + All Feeds)</button>
+              <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+                <a href="/api/exports/top200-deployment-kit.zip" download="aldridge-top200-deployment-kit.zip" class="btn btn-dark btn-sm" style="flex:1;font-size:0.73rem;text-align:center;">📦 Full Deployment Kit ZIP</a>
+                <button type="button" id="btn-reg-shopify-webhooks" class="btn btn-outline btn-sm" style="flex:1;font-size:0.73rem;" onclick="registerShopifyAutodelistWebhooksUi()">⚡ Sync Webhooks</button>
+                <button type="button" id="btn-top200-refill-now" class="btn btn-outline btn-sm" style="font-size:0.73rem;" onclick="triggerTop200RefillUi()" title="Promote #1 Reserve part(s) if active count is under cap">🔄 Refill</button>
+              </div>
             </div>
           </div>
 
           <div id="top200-deploy-progress" style="display:none;margin-bottom:0.8rem;padding:0.65rem 0.85rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);font-size:0.81rem;"></div>
+          <div id="top200-refill-log" style="display:none;margin-bottom:0.8rem;padding:0.55rem 0.8rem;border-radius:8px;background:rgba(22,163,74,0.06);border:1px solid rgba(22,163,74,0.28);font-size:0.78rem;"></div>
 
           <!-- Per-Platform Automated Actions (Respecting Platform-Specific Item Limits) -->
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.65rem;margin-bottom:0.85rem;">
             <div style="padding:0.7rem 0.8rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);">
               <div style="font-size:0.72rem;font-weight:800;color:#dc2626;letter-spacing:0.03em;">CROSSLIST (INACTIVE/DRAFTS COUNT TOWARD CAP!)</div>
-              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Delete Overflow + Upload Single Top-200 Batch</div>
+              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Delete Sold + Overflow • Upload Top-200 Batch</div>
               <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-                <a href="/crosslist-cleanup.user.js" target="_blank" rel="noopener" class="btn btn-dark btn-sm" style="font-size:0.74rem;">🧹 Install Auto-Deleter Script</a>
+                <a href="/crosslist-cleanup.user.js" target="_blank" rel="noopener" class="btn btn-dark btn-sm" style="font-size:0.74rem;">🧹 Cleaner Script v1.1.0</a>
                 <a href="/api/exports/crosslist.csv?tier=top200" download="crosslist-top200-ebay-offerup-fb.csv" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⬇ Top-200 CSV</a>
                 <a href="/api/exports/crosslist-images.zip?tier=top200" download="crosslist-images-top200.zip" class="btn btn-outline btn-sm" style="font-size:0.74rem;" onclick="notifyCrosslistZipDownload('Top-200 Crosslist Images ZIP')">📦 Top-200 ZIP</a>
               </div>
@@ -1258,9 +1268,9 @@
 
             <div style="padding:0.7rem 0.8rem;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border-light);">
               <div style="font-size:0.72rem;font-weight:800;color:#b45309;letter-spacing:0.03em;">CRAIGSLIST TACOMA (TAC → FSD → PTD)</div>
-              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Auto-Post Top 200 + Clean Overflow Ads</div>
+              <div style="font-weight:700;font-size:0.83rem;margin:0.15rem 0 0.4rem;">Auto-Post Top 200 + Clean Sold &amp; Overflow Ads</div>
               <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⚡ CL Script v2.3.0</a>
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="font-size:0.74rem;">⚡ CL Script v2.4.0</a>
                 <button type="button" class="btn btn-dark btn-sm" style="font-size:0.74rem;" onclick="launchNextCraigslistQueueItemUi()">▶ Launch Top-200 CL</button>
               </div>
             </div>
@@ -1322,7 +1332,7 @@
 
               <div class="cl-action-row">
                 <button type="button" class="btn btn-dark btn-sm" id="btn-cl-launch-next" onclick="launchNextCraigslistQueueItemUi()">▶ Launch Next Unposted Part</button>
-                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.3.0)</a>
+                <a href="/craigslist-autofill.user.js" target="_blank" rel="noopener" class="btn btn-primary btn-sm" id="btn-cl-install-script">⬇ Install / Update Auto-Fill Script (v2.4.0)</a>
                 <a href="/api/exports/craigslist.csv" download="craigslist-tacoma-98467-ptd.csv" class="btn btn-outline btn-sm">⬇ CL CSV</a>
               </div>
 
@@ -2061,7 +2071,7 @@
     </div>
   </footer>
 
-  <script src="/app.js?v=32.16"></script>
+  <script src="/app.js?v=32.17"></script>
   <script src="/storefront-menu.js?v=30.0"></script>
   <script src="/sourcing-storefront.js?v=30.0"></script>
   <script src="/vin-aggregator-ui.js?v=30.0"></script>

@@ -83,6 +83,9 @@ const {
   computeTop200Plan,
   filterItemsByDeploymentTier,
   generateEbayEndOverflowCsv,
+  buildTop200DeploymentKitZip,
+  getSoldSkusForCleanup,
+  autoPromoteNextReservePart,
   getTop200DeployJobStatus,
   runTop200DeploymentJob
 } = require('./top200-strategy');
@@ -793,10 +796,12 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.16',
+        sw_version: 'v32.17',
         top200_deployment_endpoint: '/api/deployment/top200',
+        top200_deployment_kit_zip: '/api/exports/top200-deployment-kit.zip',
         crosslist_cleanup_script: '/crosslist-cleanup.user.js',
         top200_strategy_enabled: getTop200Config(cfg).enabled,
+        top200_auto_refill_on_sale: getTop200Config(cfg).auto_refill_on_sale,
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -1114,14 +1119,20 @@ const server = http.createServer(async (req, res) => {
       const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
       const limitParam = Number(urlObj.searchParams.get('limit') || 0);
       const plan = computeTop200Plan(null, cfg, { limit: limitParam || undefined, baseUrl: canonicalBase });
+      const soldItems = getSoldSkusForCleanup(150);
       const stripRow = ({ row: _row, ...rest }) => rest;
       sendJson(res, 200, {
         ok: true,
         config: plan.config,
-        summary: plan.summary,
+        summary: {
+          ...plan.summary,
+          sold_cleanup_count: soldItems.length
+        },
         platform_matrix: plan.platform_matrix,
         active_job: getTop200DeployJobStatus(),
+        recent_replacements: plan.config.recent_replacements || [],
         downloads: {
+          deployment_kit_zip: `${canonicalBase}/api/exports/top200-deployment-kit.zip`,
           crosslist_top200_csv: `${canonicalBase}/api/exports/crosslist.csv?tier=top200`,
           crosslist_top200_images_zip: `${canonicalBase}/api/exports/crosslist-images.zip?tier=top200`,
           crosslist_cleanup_script: `${canonicalBase}/crosslist-cleanup.user.js`,
@@ -1135,6 +1146,8 @@ const server = http.createServer(async (req, res) => {
         },
         top200_skus: plan.top200.map((x) => x.sku),
         overflow_skus: plan.overflow.map((x) => x.sku),
+        sold_skus: soldItems.map((x) => x.sku),
+        sold_items: soldItems,
         top200: plan.top200.map(stripRow),
         overflow: plan.overflow.map(stripRow)
       });
@@ -1155,6 +1168,23 @@ const server = http.createServer(async (req, res) => {
         summary: plan.summary,
         top200: plan.top200.map(stripRow),
         overflow: plan.overflow.map(stripRow)
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/deployment/top200/refill') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const maxSlots = Math.max(1, Math.min(25, Number(b.max_slots || 10)));
+      const promotions = [];
+      for (let i = 0; i < maxSlots; i++) {
+        const resProm = autoPromoteNextReservePart({ soldSku: b.sold_sku || '', trigger: 'manual_or_cron_refill' });
+        if (!resProm || !resProm.promoted) break;
+        promotions.push(resProm);
+      }
+      sendJson(res, 200, {
+        ok: true,
+        promoted_count: promotions.length,
+        promotions
       });
       return;
     }
@@ -1946,6 +1976,27 @@ const server = http.createServer(async (req, res) => {
         'Content-Disposition': `attachment; filename="ebay-us-aabcas-end-overflow-${plan.overflow.length}-skus.csv"`
       });
       res.end(csvOut);
+      return;
+    }
+
+    // 1-Click Complete Top-200 Multi-Platform Deployment Kit ZIP (All 6 CSVs + Audit Sheet + Launch Checklist)
+    if (method === 'GET' && pathname === '/api/exports/top200-deployment-kit.zip') {
+      try {
+        const cfg = getSettings();
+        const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
+        const kit = buildTop200DeploymentKitZip(cfg, canonicalBase);
+        logSync('outbound', 'top200_deployment', 'export_deployment_kit_zip', 'TOP200', 'success', `Generated Top-200 Deployment Kit ZIP (${kit.fileCount} files, ${kit.top200Count} Top-200 / ${kit.overflowCount} Overflow, ${(kit.zipBuffer.length / 1024).toFixed(1)} KB).`);
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Length': String(kit.zipBuffer.length),
+          'Content-Disposition': `attachment; filename="aldridge-top${kit.top200Count}-deployment-kit.zip"`,
+          'X-Top200-Count': String(kit.top200Count),
+          'X-Overflow-Count': String(kit.overflowCount)
+        });
+        res.end(kit.zipBuffer);
+      } catch (err) {
+        sendJson(res, 500, { ok: false, error: err.message || 'Failed to build Top-200 Deployment Kit ZIP.' });
+      }
       return;
     }
 
