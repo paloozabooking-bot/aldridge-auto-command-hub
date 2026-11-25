@@ -1340,7 +1340,7 @@ function computeShippingClass(weightLbs, category = '', lengthIn = 10, widthIn =
   }
   if (
     !isSmallSubpart &&
-    /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transfer\s*case|differential|axle\s*assembly|rear\s*axle|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|body\s*shell|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|complete\s*door|car\s*hood|hood\s*panel|engine\s*hood|tailgate|liftgate|hatch\s*lid|trunk\s*lid|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|seat\s*assembly|seat\s*set)\b/i.test(catLower)
+    /\b(complete\s*engine|engine\s*assembly|engine\s*core|engine\s+(?:\d\.\d[lL]\s+)?(?:\d-?cyl\s+)?(?:[a-z0-9-]+\s+){0,3}assembly|long\s*block|short\s*block|automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transfer\s*case|differential|axle\s*assembly|rear\s*axle|front\s*bumper|rear\s*bumper|bumper\s*cover|bumper\s*assembly|body\s*shell|door\s*shell|front\s*door|rear\s*door|driver\s*door|passenger\s*door|sliding\s*door|complete\s*door|car\s*hood|hood\s*panel|engine\s*hood|tailgate|liftgate|hatch\s*lid|trunk\s*lid|front\s*seat|rear\s*seat|bench\s*seat|bucket\s*seat|driver\s*seat|passenger\s*seat|seat\s*assembly|seat\s*set)\b/i.test(catLower)
   ) {
     return 'local_pickup_only';
   }

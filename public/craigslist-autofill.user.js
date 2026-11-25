@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Aldridge Auto's — Craigslist Tacoma Auto Parts Bulk Auto-Poster
 // @namespace    https://aldridgeautosupply.com/
-// @version      2.1.0
-// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills every field from aldridgeautosupply.com/api/craigslist/queue, attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, tracks posted SKUs in Tampermonkey + Hub, and auto-loads the next unposted part after publish.
+// @version      2.2.0
+// @description  Auto-advances Seattle-Tacoma -> Tacoma/Pierce County (tac) -> For Sale By Dealer -> Auto Parts, auto-fills every field from aldridgeautosupply.com/api/craigslist/queue (sorted highest-value first with Heavy/Vehicle filters), attaches Shopify CDN photos via GM_xmlhttpRequest + DataTransfer, syncs posted SKUs across Render restarts, and auto-loads the next unposted part after publish.
 // @author       Aldridge Auto's
 // @match        https://post.craigslist.org/*
 // @match        https://seattle.craigslist.org/*
@@ -22,7 +22,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2.1.0';
+  const SCRIPT_VERSION = '2.2.0';
   const DEFAULT_HUB = 'https://aldridgeautosupply.com';
   const START_POST_URL = 'https://post.craigslist.org/c/sea?lang=en&cc=us';
   const MAX_CL_PHOTOS = 24;
@@ -36,6 +36,8 @@
     PENDING_PUBLISH: 'aldridge_cl_pending_publish_v2',
     AUTO_ADVANCE: 'aldridge_cl_auto_advance_v2',
     POSTING_MODE: 'aldridge_cl_posting_mode_v2', // 'dealer' (default: fsd/ptd) or 'owner' (fso/pts)
+    QUEUE_FILTER: 'aldridge_cl_queue_filter_v2', // 'all' | 'heavy' | 'high150'
+    VEHICLE_FILTER: 'aldridge_cl_vehicle_filter_v2',
     HUD_COLLAPSED: 'aldridge_cl_hud_collapsed_v2'
   };
 
@@ -378,31 +380,68 @@
   // ---------- Queue & Posted Tracking ----------
   let cachedQueueState = null;
 
+  function getQueueFilter() {
+    const v = String(gmGet(GM_KEYS.QUEUE_FILTER, 'all') || 'all');
+    return ['all', 'heavy', 'high150'].includes(v) ? v : 'all';
+  }
+
+  function getVehicleFilter() {
+    return String(gmGet(GM_KEYS.VEHICLE_FILTER, '') || '').trim();
+  }
+
   function isSkuPosted(sku, serverFlag = false) {
     if (serverFlag) return true;
     const postedMap = getPostedMap();
     return Boolean(postedMap[sku]);
   }
 
-  async function syncUnsyncedPostedToServer(hubOrigin) {
+  async function syncPostedBatchToServer(hubOrigin, skuEntries) {
+    if (!skuEntries.length) return;
+    try {
+      const res = await apiPostJson(`${hubOrigin}/api/craigslist/sync-posted`, {
+        posted: skuEntries
+      });
+      if (res.ok) {
+        const postedMap = getPostedMap();
+        let changed = false;
+        for (const e of skuEntries) {
+          if (postedMap[e.sku] && postedMap[e.sku].syncedToServer !== true) {
+            postedMap[e.sku] = { ...postedMap[e.sku], syncedToServer: true };
+            changed = true;
+          }
+        }
+        if (changed) savePostedMap(postedMap);
+        return;
+      }
+    } catch (_) {}
+
     const postedMap = getPostedMap();
-    const entries = Object.entries(postedMap).filter(([, meta]) => meta && meta.syncedToServer === false);
-    if (!entries.length) return;
     let changed = false;
-    for (const [sku, meta] of entries) {
+    for (const e of skuEntries) {
       try {
         const res = await apiPostJson(`${hubOrigin}/api/craigslist/mark-posted`, {
-          sku,
-          craigslist_url: meta.url || undefined,
-          craigslist_post_id: meta.postId || undefined
+          sku: e.sku,
+          craigslist_url: e.url || undefined,
+          craigslist_post_id: e.postId || undefined
         });
         if (res.ok || res.status === 404) {
-          postedMap[sku] = { ...meta, syncedToServer: true };
-          changed = true;
+          if (postedMap[e.sku]) {
+            postedMap[e.sku] = { ...postedMap[e.sku], syncedToServer: true };
+            changed = true;
+          }
         }
       } catch (_) {}
     }
     if (changed) savePostedMap(postedMap);
+  }
+
+  async function syncUnsyncedPostedToServer(hubOrigin) {
+    const postedMap = getPostedMap();
+    const entries = Object.entries(postedMap)
+      .filter(([, meta]) => meta && meta.syncedToServer === false)
+      .map(([sku, meta]) => ({ sku, postedAt: meta.postedAt, url: meta.url, postId: meta.postId }));
+    if (!entries.length) return;
+    await syncPostedBatchToServer(hubOrigin, entries);
   }
 
   async function markSkuPostedEverywhere(sku, hubOrigin, extra = {}) {
@@ -445,16 +484,28 @@
       await syncUnsyncedPostedToServer(hubOrigin);
     } catch (_) {}
 
-    const res = await apiGetJson(`${hubOrigin}/api/craigslist/queue`);
+    const qFilter = getQueueFilter();
+    const vFilter = getVehicleFilter();
+    const params = new URLSearchParams();
+    params.set('sort', qFilter === 'heavy' ? 'heavy_first' : 'price_desc');
+    if (qFilter === 'heavy') params.set('heavy_only', '1');
+    if (qFilter === 'high150') params.set('min_price', '150');
+    if (vFilter) params.set('vehicle', vFilter);
+
+    const res = await apiGetJson(`${hubOrigin}/api/craigslist/queue?${params.toString()}`);
     if (!res.ok || !res.data || !Array.isArray(res.data.queue)) {
       throw new Error(`Failed to load /api/craigslist/queue (HTTP ${res.status})`);
     }
     const postedMap = getPostedMap();
     const skippedSet = new Set(getSkippedList());
     const queue = res.data.queue;
+    const serverWasReset = Number(res.data.posted_count || 0) === 0 && Object.keys(postedMap).length > 0;
 
-    // Two-way mirror with server-confirmed posted/unmarked status
+    // Two-way reconciliation:
+    // - If Render restarted and wiped ephemeral SQLite (server posted_count === 0 while GM has history), bulk-reconcile back to server
+    // - Otherwise mirror both server-posted marks and explicit staff unmarks cleanly
     let mapUpdated = false;
+    const missingOnServer = [];
     for (const q of queue) {
       if (q.posted_craigslist && !postedMap[q.sku]) {
         postedMap[q.sku] = {
@@ -464,12 +515,25 @@
           syncedToServer: true
         };
         mapUpdated = true;
-      } else if (!q.posted_craigslist && postedMap[q.sku] && postedMap[q.sku].syncedToServer === true) {
-        delete postedMap[q.sku];
-        mapUpdated = true;
+      } else if (!q.posted_craigslist && postedMap[q.sku]) {
+        if (serverWasReset || postedMap[q.sku].syncedToServer === false) {
+          const meta = postedMap[q.sku];
+          missingOnServer.push({
+            sku: q.sku,
+            postedAt: meta.postedAt,
+            url: meta.url,
+            postId: meta.postId
+          });
+        } else {
+          delete postedMap[q.sku];
+          mapUpdated = true;
+        }
       }
     }
     if (mapUpdated) savePostedMap(postedMap);
+    if (missingOnServer.length > 0) {
+      syncPostedBatchToServer(hubOrigin, missingOnServer).catch(() => {});
+    }
 
     const postedItems = queue.filter((q) => isSkuPosted(q.sku, q.posted_craigslist));
     const unpostedItems = queue.filter((q) => !isSkuPosted(q.sku, q.posted_craigslist) && !skippedSet.has(q.sku));
@@ -479,6 +543,7 @@
       queue,
       postedItems,
       unpostedItems,
+      vehicleSummary: res.data.vehicle_summary || {},
       totalCount: queue.length,
       postedCount: postedItems.length,
       remainingCount: unpostedItems.length
@@ -778,7 +843,17 @@
       return;
     }
 
-    bar.style.width = '360px';
+    const qFilter = getQueueFilter();
+    const vFilter = getVehicleFilter();
+    const vehicleOptions = Object.entries(q?.vehicleSummary || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(
+        ([veh, cnt]) =>
+          `<option value="${escapeHtml(veh)}"${vFilter === veh ? ' selected' : ''}>${escapeHtml(veh)} (${cnt})</option>`
+      )
+      .join('');
+
+    bar.style.width = '368px';
     bar.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <div style="font-weight:800;color:#fbbf24;font-size:13px;">⚡ Aldridge CL Auto-Poster v${SCRIPT_VERSION}</div>
@@ -786,12 +861,23 @@
       </div>
 
       ${q ? `
-        <div style="display:flex;gap:8px;font-size:11px;color:#cbd5e1;margin-bottom:7px;background:#13233f;padding:5px 8px;border-radius:6px;">
+        <div style="display:flex;gap:8px;font-size:11px;color:#cbd5e1;margin-bottom:6px;background:#13233f;padding:5px 8px;border-radius:6px;">
           <span>Posted: <strong style="color:#4ade80;">${q.postedCount}</strong></span>
           <span>•</span>
           <span>Remaining: <strong style="color:#fbbf24;">${q.remainingCount}</strong></span>
           <span>•</span>
-          <span>Total: <strong>${q.totalCount}</strong></span>
+          <span>Queue: <strong>${q.totalCount}</strong></span>
+        </div>
+        <div style="display:flex;gap:5px;margin-bottom:7px;">
+          <select id="ald-sel-qfilter" style="flex:1;background:#13233f;color:#f8fafc;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:11px;">
+            <option value="all"${qFilter === 'all' ? ' selected' : ''}>All Parts ($↓ High First)</option>
+            <option value="heavy"${qFilter === 'heavy' ? ' selected' : ''}>Heavy Local Pickup Only</option>
+            <option value="high150"${qFilter === 'high150' ? ' selected' : ''}>High-Ticket ($150+)</option>
+          </select>
+          <select id="ald-sel-vfilter" style="flex:1;background:#13233f;color:#f8fafc;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:11px;">
+            <option value="">All Donor Vehicles</option>
+            ${vehicleOptions}
+          </select>
         </div>
       ` : ''}
 
@@ -802,7 +888,7 @@
             <span style="color:#4ade80;font-weight:800;">$${escapeHtml(item.price_int || Math.round(Number(item.price || 0)))}</span>
           </div>
           <div style="color:#e2e8f0;font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(item.cl_title || item.title || '')}">${escapeHtml(item.cl_title || item.title || '')}</div>
-          <div style="color:#94a3b8;font-size:11px;margin-top:2px;">📷 ${photoCount} Shopify CDN photo(s) • Tacoma (tac) • ${mode === 'dealer' ? 'Dealer (fsd/ptd)' : 'Owner (fso/pts)'}</div>
+          <div style="color:#94a3b8;font-size:11px;margin-top:2px;">📷 ${photoCount} Shopify photo(s) • ${item.heavy_local_pickup ? '📦 Heavy Local' : '📬 Parcel/Pickup'} • ${mode === 'dealer' ? 'Dealer (fsd/ptd)' : 'Owner (fso/pts)'}</div>
         </div>
       ` : ''}
 
@@ -839,6 +925,32 @@
       gmSet(GM_KEYS.HUD_COLLAPSED, true);
       renderHud();
     });
+
+    const applyFilterChange = async () => {
+      const nf = document.getElementById('ald-sel-qfilter')?.value || 'all';
+      const nv = document.getElementById('ald-sel-vfilter')?.value || '';
+      gmSet(GM_KEYS.QUEUE_FILTER, nf);
+      gmSet(GM_KEYS.VEHICLE_FILTER, nv);
+      setActiveItem(null);
+      try {
+        updateHud({ status: 'Applying queue filter & loading highest-value unposted SKU...', statusType: 'info' });
+        const fresh = await loadQueue(hubOrigin, true);
+        const nextMatch = fresh.unpostedItems[0] || null;
+        setActiveItem(nextMatch);
+        updateHud({
+          status: nextMatch
+            ? `Filter applied (${fresh.remainingCount} remaining). Ready for ${nextMatch.sku} ($${nextMatch.price_int}).`
+            : `No unposted SKUs match this filter (${fresh.postedCount} posted).`,
+          statusType: nextMatch ? 'success' : 'warn',
+          queueState: fresh,
+          activeItem: nextMatch
+        });
+      } catch (err) {
+        updateHud({ status: `Filter reload error: ${err.message}`, statusType: 'error' });
+      }
+    };
+    document.getElementById('ald-sel-qfilter')?.addEventListener('change', applyFilterChange);
+    document.getElementById('ald-sel-vfilter')?.addEventListener('change', applyFilterChange);
 
     document.getElementById('ald-btn-auto')?.addEventListener('click', () => {
       const nextVal = !isAutoAdvanceEnabled();

@@ -405,7 +405,11 @@ function cleanListingTitle(rawTitle) {
     t = /\bOEM\b/i.test(combined) ? combined : `${combined} OEM`;
   }
 
-  t = t.replace(/\(\s*([A-Za-z0-9 ]+)$/, '$1').replace(/\s{2,}/g, ' ').trim();
+  t = t
+    .replace(/\(\s*([A-Za-z0-9 ]+)$/, '$1')
+    .replace(/\b(\d\.\d[lL])\s+\1\b/gi, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
   if (t.length > 80) {
     t = t.slice(0, 80).replace(/\s+\S*$/, '').trim();
   }

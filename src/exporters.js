@@ -379,6 +379,42 @@ function renderLocalMarketplacePacket(item, settings) {
     .replaceAll('{{BIN_LOCATION}}', item.bin_location || 'BAY-B');
 }
 
+function renderCraigslistDescription(item, settings, baseUrl = '') {
+  const basePacket = renderLocalMarketplacePacket(item, settings);
+  const { pwaUrl } = resolveDirectPublicUrls(settings, baseUrl);
+  const { installTotal, hours, rate } = computeInstallEstimate(item, settings);
+  const partPrice = Math.max(1, Math.round(Number(item.price_we_pull || 0)));
+  const heavyPickupOnly = isHeavyLocalPickupItem(item, settings);
+  const businessName = settings?.business_name || "Aldridge Auto's";
+  const street = settings?.street_address || '5115 66th St W, Bldg B';
+  const cityStateZip = `University Place, ${settings?.state || 'WA'} ${settings?.zip || '98467'}`;
+  const phone = settings?.phone || '(253) 245-4206';
+  const weekdayHrs = settings?.hours_weekday || 'Mon–Fri: 12:00 PM – 7:00 PM';
+  const weekendHrs = settings?.hours_weekend || 'Sat: 12:00 PM – 6:00 PM • Sun: 1:00 PM – 4:00 PM';
+  const directUrl = `${pwaUrl}/?sku=${encodeURIComponent(item.sku || '')}`;
+
+  const lines = [
+    basePacket,
+    '',
+    '========================================',
+    `PART PRICE: $${partPrice} (1-of-1 Single Tested OEM Unit)`,
+    installTotal > partPrice
+      ? `TURNKEY CERTIFIED BAY INSTALL AVAILABLE: ~$${installTotal.toFixed(2)} Installed (~${hours.toFixed(1)} hrs certified bay labor @ $${rate.toFixed(2)}/hr — call/text to confirm fitment & book bay)`
+      : '',
+    heavyPickupOnly
+      ? 'FULFILLMENT: Free Counter / Forklift-Assisted Local Pickup in University Place / Tacoma WA 98467 (Heavy/Oversized Assembly — Local Pickup Only)'
+      : 'FULFILLMENT: Free Counter Pickup in University Place / Tacoma WA 98467 OR Calculated Parcel Shipping Nationwide',
+    '========================================',
+    `${businessName} — 5.0★ Rated Auto Repair & Tested OEM Parts`,
+    `Pickup & Shop Bay Address: ${street}, ${cityStateZip}`,
+    `Call or Text: ${phone} (mention Stock SKU: ${item.sku || ''})`,
+    `Hours: ${weekdayHrs} | ${weekendHrs}`,
+    `Buy or Reserve Online 24/7: ${directUrl}`
+  ].filter((line) => line !== '');
+
+  return lines.join('\n');
+}
+
 function generateMasterImportTemplateCsv() {
   const headers = [
     'sku', 'title', 'category', 'condition', 'brand', 'oem_part_number',
@@ -1279,13 +1315,13 @@ function generateCraigslistCsv(items, settings, baseUrl) {
     const { installTotal } = computeInstallEstimate(item, settings);
     const ymm = [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim() || 'OEM Auto Part';
     const postTitle = `${cleanListingTitle(item.title)} — ${heavyPickupOnly ? 'University Place 98467 Pickup' : '98467 Pickup or Ship'}`.slice(0, 70);
-    const body = renderLocalMarketplacePacket(item, settings, baseUrl);
+    const body = renderCraigslistDescription(item, settings, baseUrl);
 
     rows.push([
       item.sku,
       postTitle,
       Math.round(Number(item.price_we_pull || 0)),
-      'auto parts - by owner (pts)',
+      'auto parts - by dealer (ptd)',
       'seattle.craigslist.org > tac (Tacoma / Pierce County)',
       settings.zip || '98467',
       condOut === 'New' ? 'new' : 'good',
@@ -4077,22 +4113,26 @@ async function hydrateInventoryFromShopifyCoMaster({
   for (const w of winnersByTitleKey.values()) {
     try {
       let donorId = donorIdByVin.get(w.vin);
+      const donorYear = Number(w.fitYear || w.slot.years[w.slot.years.length - 1] || w.slot.years[0] || 2010);
       if (!donorId) {
-        let donor = db.prepare('SELECT id FROM donor_vehicles WHERE UPPER(vin) = ?').get(w.vin);
+        let donor = db.prepare('SELECT id, year FROM donor_vehicles WHERE UPPER(vin) = ?').get(w.vin);
         if (!donor) {
-          const stockNum = `DON-${w.slot.years[0]}-${w.slot.make.slice(0, 3).toUpperCase()}-${w.vin.slice(-5)}`;
+          const stockNum = `DON-${donorYear}-${w.slot.make.slice(0, 3).toUpperCase()}-${w.vin.slice(-5)}`;
           const dRes = db.prepare(`
             INSERT INTO donor_vehicles (
               org_id, stock_number, vin, year, make, model, trim, engine, transmission, drivetrain,
               status, notes, created_at
             ) VALUES (1, ?, ?, ?, ?, ?, '', '', 'Automatic', '', 'active', ?, ?)
           `).run(
-            stockNum, w.vin, Number(w.slot.years[0] || 2010), w.slot.make, w.slot.model,
+            stockNum, w.vin, donorYear, w.slot.make, w.slot.model,
             `Auto-hydrated from Shopify Co-Master (${domain})`, now
           );
           donorId = Number(dRes.lastInsertRowid);
         } else {
           donorId = Number(donor.id);
+          if (Number(donor.year) !== donorYear && w.fitYear) {
+            db.prepare('UPDATE donor_vehicles SET year = ? WHERE id = ?').run(donorYear, donorId);
+          }
         }
         donorIdByVin.set(w.vin, donorId);
       }
@@ -4107,7 +4147,7 @@ async function hydrateInventoryFromShopifyCoMaster({
               org_id, session_code, staff_name, vin, year, make, model,
               donor_vehicle_id, status, created_at, updated_at
             ) VALUES (1, ?, 'Shopify Co-Master Hydration', ?, ?, ?, ?, ?, 'active', ?, ?)
-          `).run(sessionCode, w.vin, Number(w.slot.years[0] || 2010), w.slot.make, w.slot.model, donorId, now, now);
+          `).run(sessionCode, w.vin, donorYear, w.slot.make, w.slot.model, donorId, now, now);
         }
         sessionCodeByVin.set(w.vin, sessionCode);
       }
@@ -4936,6 +4976,7 @@ module.exports = {
   resolveExportPhotoUrl,
   cleanListingTitle,
   normalizeExportCondition,
+  isHeavyLocalPickupItem,
   renderShopifyHtml,
   renderEbayHtml,
   importInventoryCsv,
@@ -4952,6 +4993,7 @@ module.exports = {
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
+  renderCraigslistDescription,
   resolveShopifyAccessToken,
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,

@@ -5,22 +5,26 @@ const { DatabaseSync } = require('node:sqlite');
 const { server } = require('./server');
 const { db, DATA_DIR, computeShippingClass, validateVinStrict, validatePartCompliance } = require('./db');
 const { isCounterfeitMpn, cleanListingTitle } = require('./audit-sanitizer');
+const { resolvePartDimensionsAndWeight } = require('./catalog-enrichment');
 
 // Minimal valid 1x1 JPEG base64 fixture for multi-angle upload verification
 const TINY_JPEG_DATA_URL =
   'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
 
 async function runVerification() {
-  // 0. Verify Legacy 905-SKU Archive DB Exists & Integrity = OK
+  // 0. Verify Legacy 905-SKU Archive DB Exists & Integrity = OK (when present locally; gitignored in clean CI checkouts)
   const archivePath = path.join(DATA_DIR, 'archive_905_legacy.db');
-  assert.ok(fs.existsSync(archivePath), 'data/archive_905_legacy.db backup exists');
-  const archiveDb = new DatabaseSync(archivePath);
-  const archiveCount = archiveDb.prepare('SELECT COUNT(*) AS c FROM inventory_items').get().c;
-  const archiveIntegrity = archiveDb.prepare('PRAGMA integrity_check').get().integrity_check;
-  archiveDb.close();
-  assert.ok(archiveCount >= 905, `Legacy archive preserves >= 905 rows (found ${archiveCount})`);
-  assert.strictEqual(archiveIntegrity, 'ok', 'Legacy archive SQLite integrity_check = ok');
-  console.log(`  ✓ Legacy Archive DB verified (data/archive_905_legacy.db • ${archiveCount} rows • integrity=${archiveIntegrity})`);
+  if (fs.existsSync(archivePath)) {
+    const archiveDb = new DatabaseSync(archivePath);
+    const archiveCount = archiveDb.prepare('SELECT COUNT(*) AS c FROM inventory_items').get().c;
+    const archiveIntegrity = archiveDb.prepare('PRAGMA integrity_check').get().integrity_check;
+    archiveDb.close();
+    assert.ok(archiveCount >= 905, `Legacy archive preserves >= 905 rows (found ${archiveCount})`);
+    assert.strictEqual(archiveIntegrity, 'ok', 'Legacy archive SQLite integrity_check = ok');
+    console.log(`  ✓ Legacy Archive DB verified (data/archive_905_legacy.db • ${archiveCount} rows • integrity=${archiveIntegrity})`);
+  } else {
+    console.log('  ℹ Legacy archive DB (data/archive_905_legacy.db) not present in clean checkout — skipping local archive check');
+  }
 
   // Ensure clean slate at start if a prior interrupted test left temporary rows
   db.prepare("DELETE FROM inventory_items").run();
@@ -254,16 +258,56 @@ async function runVerification() {
     rmaJson = await rmaRes.json();
     assert.strictEqual(rmaJson.status, 'rejected_policy_ineligible');
 
-    // 8. Preserved Audit Export Endpoints Check
+    // 8. Preserved Audit Export Endpoints & v32.15 Regression Checks
     assert.strictEqual(computeShippingClass(69.9, 'Alternator', 12, 10, 8), 'parcel_calculated');
     assert.strictEqual(computeShippingClass(70, 'Heavy Axle Housing', 48, 14, 12), 'local_pickup_only');
+    assert.strictEqual(computeShippingClass(18, '2010 TOYOTA Tundra 5.7L Engine Core 5.7L 8-Cyl 3UR-FBE OEM', 16, 12, 10), 'local_pickup_only');
+    assert.strictEqual(computeShippingClass(18, '2004 TOYOTA 4Runner 4.0L Engine 4.0L 6-Cyl 1GR-FE Assembly OEM', 16, 12, 10), 'local_pickup_only');
+    const engCoreDims = resolvePartDimensionsAndWeight({ title: '2010 TOYOTA Tundra 5.7L Engine Core 5.7L 8-Cyl 3UR-FBE OEM' });
+    assert.strictEqual(engCoreDims.weight_lbs, 320);
+    assert.strictEqual(engCoreDims.local_pickup_only, true);
+    assert.strictEqual(engCoreDims.labor_hours, 12);
+    const eng4rDims = resolvePartDimensionsAndWeight({ title: '2004 TOYOTA 4Runner 4.0L Engine 4.0L 6-Cyl 1GR-FE Assembly OEM' });
+    assert.strictEqual(eng4rDims.weight_lbs, 320);
+    assert.strictEqual(eng4rDims.local_pickup_only, true);
     assert.strictEqual(isCounterfeitMpn('GM80000013'), true);
     assert.ok(cleanListingTitle('Parting Out 2001 Honda Odessey Base : Alternator').includes('2001 Honda Odyssey Alternator OEM'));
+    assert.strictEqual(
+      cleanListingTitle('2010 TOYOTA Tundra 5.7L 5.7L 8-Cyl 3UR-FBE Engine Assembly OEM'),
+      '2010 TOYOTA Tundra 5.7L 8-Cyl 3UR-FBE Engine Assembly OEM'
+    );
+
+    // 8b. Craigslist v2.1 Queue Sorting, Rich Description & Bulk Sync-Posted Check
+    const clQueueRes = await fetch(`${base}/api/craigslist/queue?sort=price_desc`);
+    assert.strictEqual(clQueueRes.status, 200);
+    const clQueue = await clQueueRes.json();
+    assert.strictEqual(clQueue.subarea, 'tac');
+    assert.strictEqual(clQueue.posting_type, 'fsd');
+    assert.strictEqual(clQueue.category, 'ptd');
+    if (clQueue.queue.length >= 2) {
+      assert.ok(clQueue.queue[0].price_int >= clQueue.queue[1].price_int, 'Craigslist queue sorts highest price first by default');
+    }
+    if (clQueue.queue.length >= 1) {
+      const top = clQueue.queue[0];
+      assert.ok(top.cl_body.includes('5115 66th St W, Bldg B'), 'Craigslist description includes shop pickup address');
+      assert.ok(top.cl_body.includes('(253) 245-4206'), 'Craigslist description includes shop phone');
+      assert.ok(top.cl_body.includes('aldridgeautosupply.com'), 'Craigslist description includes direct storefront link');
+      const syncRes = await fetch(`${base}/api/craigslist/sync-posted`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ posted: [{ sku: top.sku, postId: '7900000001', url: 'https://seattle.craigslist.org/tac/ptd/d/test/7900000001.html' }] })
+      });
+      assert.strictEqual(syncRes.status, 200);
+      const syncJson = await syncRes.json();
+      assert.strictEqual(syncJson.ok, true);
+      assert.strictEqual(syncJson.synced_count, 1);
+    }
+
     for (const auditEp of ['/api/audit/sanitized-shopify.csv', '/api/audit/ebay-418-reconciliation.csv', '/api/audit/draft-trim-holds.csv']) {
       const ar = await fetch(`${base}${auditEp}`);
       assert.strictEqual(ar.status, 200, `Preserved audit export ${auditEp} still accessible`);
     }
-    console.log('  ✓ Heavy 70+ lb Parcel Checkout Block, Defect-Only RMA Gate & Preserved Audit Exports verified');
+    console.log('  ✓ Heavy Engine Core/Assembly Guard, Craigslist v2.1 Queue/Sync-Posted & Preserved Audit Exports verified');
   } finally {
     // 9. Always clean up all temporary verification rows & test upload JPEGs so active DB stays at 0 items
     db.prepare('DELETE FROM inventory_items').run();
@@ -274,7 +318,9 @@ async function runVerification() {
     const upDir = path.join(DATA_DIR, 'uploads');
     if (fs.existsSync(upDir)) {
       for (const f of fs.readdirSync(upDir)) {
-        fs.unlinkSync(path.join(upDir, f));
+        if (f === '.gitkeep') continue;
+        const fp = path.join(upDir, f);
+        if (fs.statSync(fp).isFile()) fs.unlinkSync(fp);
       }
     }
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);');

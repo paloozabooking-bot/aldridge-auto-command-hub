@@ -333,8 +333,8 @@ const DIMENSION_RULES = [
   { match: /\b(sensor|switch|relay|solenoid|knob|lock\s*actuator|door\s*handle|exterior\s*handle|interior\s*handle|grab\s*handle|hood\s*latch|door\s*latch|trunk\s*latch|tailgate\s*latch|hinge|filler\s*cap|oil\s*cap|radiator\s*cap|gas\s*cap|air\s*vent|dash\s*vent|bezel|cover\s*trim|horn|ignition\s*coil|coil\s*pack|fuel\s*injector|injector|clamp|retainer|hold\s*down|bolt|clip|owner'?s?\s*manual|mirror\s*glass|sun\s*visor|headrest|armrest|cup\s*holder|ash\s*tray|clock|display\s*screen|backup\s*camera|rear\s*camera|keyless|tpms|tire\s*pressure\s*monitor|yaw\s*rate|oxygen|o2\s*sensor|maf\s*sensor|camshaft|crankshaft|foot\s*rest|pedal\s*cover|stop\s*plate|bumper.*bracket|skirt\s*bracket|support\s*cover\s*trim|mounting\s*bracket|battery\s*terminal|dome\s*light|receiver\s*drier)\b/i, weight: 1.5, l: 10, w: 8, h: 6, labor: 0.6 },
   { match: /\b(ecm|ecu|pcm|bcm|tcm|tcu|control\s*module|warning\s*module|airbag\s*module|abs\s*module|body\s*control|engine\s*control|computer|fuse\s*(?:and\s*relay\s*)?box|relay\s*box|junction\s*box|junction\s*block|tipm|climate\s*control|hvac\s*control|heater\s*control|ac\s*control\s*panel|amplifier|bluetooth|blue&me|convergence|audio\s*receiver|tuner\s*assembly)\b/i, weight: 3.5, l: 10, w: 8, h: 6, labor: 0.8 },
 
-  // 2. Engines / Long Blocks / Short Blocks (320.0 lbs, 36 x 30 x 32 in, Local_Pickup_Only)
-  { match: /\b(complete\s*engine|engine\s*assembly|engine\s*long\s*block|long\s*block|short\s*block|motor\s*assembly)\b/i, exclude: /\b(window|wiper|blower|fan|starter|seat|mirror|washer|sunroof|door|abs|pump|mount|cover|under\s*cover|skid|accessory|belt|pulley|tensioner|bay|trim|intake|coolant|wiring|harness)\b/i, weight: 320.0, l: 36, w: 30, h: 32, labor: 12.0, localPickup: true },
+  // 2. Engines / Long Blocks / Short Blocks / Engine Cores (320.0 lbs, 36 x 30 x 32 in, Local_Pickup_Only)
+  { match: /\b(complete\s*engine|engine\s*assembly|engine\s*core|engine\s+(?:\d\.\d[lL]\s+)?(?:\d-?cyl\s+)?(?:[a-z0-9-]+\s+){0,3}assembly|engine\s*long\s*block|long\s*block|short\s*block|motor\s*assembly)\b/i, exclude: /\b(window|wiper|blower|fan|starter|seat|mirror|washer|sunroof|door|abs|pump|mount|cover|under\s*cover|skid|accessory|belt|pulley|tensioner|bay|trim|intake|coolant|wiring|harness|filter|air\s*box|splash|shield|control|module|ecm|ecu|pcm|sensor|valve)\b/i, weight: 320.0, l: 36, w: 30, h: 32, labor: 12.0, localPickup: true },
 
   // 3. Transmissions / Transaxles / Transfer Cases (145.0 lbs, 32 x 24 x 22 in, Local_Pickup_Only)
   { match: /\b(automatic\s*transmission|manual\s*transmission|transmission\s*assembly|transaxle|gearbox\s*assembly|cvt\s*transmission|transfer\s*case)\b/i, exclude: /\b(mount|crossmember|oil\s*pan|cooler|line|hose|cable|shifter|sensor|switch|module|tcm|tcu|dipstick|bracket)\b/i, weight: 145.0, l: 32, w: 24, h: 22, labor: 6.0, localPickup: true },
@@ -446,10 +446,10 @@ function resolveCategoryBookTimeLabor(item = {}, laborRateInput = SHOP_LABOR_RAT
     };
   };
 
-  // Tier 5: Engine Assemblies / Long Blocks / Short Blocks (12.0 hrs | 10.0–14.0 hrs)
+  // Tier 5: Engine Assemblies / Engine Cores / Long Blocks / Short Blocks (12.0 hrs | 10.0–14.0 hrs)
   if (
     !isSmallSubpartOrAccessory &&
-    /\b(complete\s*engine|engine\s*assembly|long\s*block|short\s*block|motor\s*assembly|v6\s*engine|v8\s*engine|i4\s*engine|4\.0l\s*engine|5\.7l\s*engine|4\.7l\s*engine|2\.4l\s*engine|1\.4l\s*engine)\b/i.test(titleLower)
+    /\b(complete\s*engine|engine\s*assembly|engine\s*core|engine\s+(?:\d\.\d[lL]\s+)?(?:\d-?cyl\s+)?(?:[a-z0-9-]+\s+){0,3}assembly|long\s*block|short\s*block|motor\s*assembly|v6\s*engine|v8\s*engine|i4\s*engine|4\.0l\s*engine|5\.7l\s*engine|4\.7l\s*engine|2\.4l\s*engine|1\.4l\s*engine)\b/i.test(titleLower)
   ) {
     return buildTier('engine_assembly', 12.0, '10.0–14.0 hrs', true);
   }

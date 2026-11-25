@@ -49,6 +49,7 @@ const {
   resolveExportPhotoUrl,
   cleanListingTitle,
   normalizeExportCondition,
+  isHeavyLocalPickupItem,
   importInventoryCsv,
   generateMasterImportTemplateCsv,
   generateShopifyCsv,
@@ -62,6 +63,7 @@ const {
   generateTiktokShopCsv,
   generateCarPartHollanderCsv,
   renderLocalMarketplacePacket,
+  renderCraigslistDescription,
   resolveShopifyAccessToken,
   ensureShopifyWebhooksRegistered,
   inspectLiveShopifyProducts,
@@ -776,7 +778,7 @@ const server = http.createServer(async (req, res) => {
         shopify_target: cfg.shopify_domain || 'aldridgesales.myshopify.com',
         ebay_target: `${cfg.ebay_seller_id || 'AABCAS'} (ebay.com US)`,
         shop_labor_rate_hourly: Number(cfg.shop_labor_rate || 174.99),
-        sw_version: 'v32.14',
+        sw_version: 'v32.15',
         shopify_comaster_auto_hydration: true,
         shopify_native_packed_dimensions: true,
         mixed_cart_local_pickup_guard: true,
@@ -812,13 +814,19 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/craigslist/queue') {
       const cfg = getSettings();
       const canonicalBase = resolvePublicAppBaseUrl(cfg) || baseUrl;
+      const sortMode = String(urlObj.searchParams.get('sort') || 'price_desc').toLowerCase();
+      const heavyOnly = urlObj.searchParams.get('heavy_only') === '1' || urlObj.searchParams.get('heavy_only') === 'true';
+      const minPrice = Math.max(0, Number(urlObj.searchParams.get('min_price') || 0));
+      const vehicleFilter = String(urlObj.searchParams.get('vehicle') || '').trim().toLowerCase();
+
       const donorMap = buildDonorMap();
       const rows = db.prepare("SELECT * FROM inventory_items WHERE status = 'active' AND quantity > 0 ORDER BY id DESC")
         .all()
         .filter((r) => getValidPhotos(r).length > 0 && validatePartCompliance({ title: r.title, category: r.category, description: r.description }).compliant)
         .map((r) => hydrateInventoryItem(r, donorMap))
         .filter((r) => isAllowedActiveDonorVehicle(r).allowed);
-      const queue = rows.map((i) => {
+
+      const allMapped = rows.map((i) => {
         const tax = resolvePartTaxonomyAndMetafields(i, cfg);
         const cleanPhotos = getValidPhotos(i).filter((u) => !isQrCardUrl(u));
         const photoUrls = cleanPhotos
@@ -835,20 +843,27 @@ const server = http.createServer(async (req, res) => {
         const priceInt = Math.max(1, Math.round(Number(i.price_we_pull || 0)));
         const condNorm = normalizeExportCondition(i.condition) === 'New' ? 'new' : 'good';
         const ymm = tax.customLabel0 || [i.fitment_years, i.fitment_make, i.fitment_model].filter(Boolean).join(' ').trim();
-        const clBody = renderLocalMarketplacePacket(i, cfg);
+        const heavyPickup = isHeavyLocalPickupItem(i, cfg);
+        const clBody = renderCraigslistDescription(i, cfg, canonicalBase);
         return {
+          id: i.id,
           sku: i.sku,
-          title: i.title,
+          title: cleanTitle || i.title,
           cl_title: clTitle,
           price: Number(i.price_we_pull || 0),
           price_int: priceInt,
           install_price: Number(i.price_pull_install || i.price_we_pull || 0),
+          install_labor_hours: Number(i.install_labor_hours || 0.75),
           condition: condNorm,
           condition_raw: i.condition || 'Used',
           brand: tax.brand || i.brand || 'OEM',
           mpn: tax.mpn || '',
           mpn_or_fitment: tax.mpn || ymm || '',
           ymm,
+          shipping_class: heavyPickup ? 'local_pickup_only' : (i.shipping_class || 'parcel_calculated'),
+          heavy_local_pickup: heavyPickup,
+          weight_lbs: Number(i.weight_lbs || 0),
+          dimensions_in: `${Math.ceil(Number(i.length_in || 10))}x${Math.ceil(Number(i.width_in || 8))}x${Math.ceil(Number(i.height_in || 6))}`,
           cl_body: clBody,
           zip: cfg.zip || '98467',
           geographic_area: `${cfg.city_display || 'University Place / Tacoma'} ${cfg.state || 'WA'} ${cfg.zip || '98467'}`,
@@ -859,6 +874,7 @@ const server = http.createServer(async (req, res) => {
           phone: cfg.phone || '(253) 245-4206',
           contact_name: cfg.business_name || "Aldridge Auto's",
           email: cfg.email || 'service@aldridgeautosupply.com',
+          storefront_url: `${canonicalBase}/?sku=${encodeURIComponent(i.sku)}`,
           subarea: 'tac',
           posting_type: 'fsd',
           category: 'ptd',
@@ -871,7 +887,31 @@ const server = http.createServer(async (req, res) => {
           launch_url: `https://post.craigslist.org/c/sea?lang=en&cc=us#aldridge_sku=${encodeURIComponent(i.sku)}&hub=${encodeURIComponent(canonicalBase)}`
         };
       });
+
+      const vehicleCounts = {};
+      for (const item of allMapped) {
+        const key = item.ymm || 'Other OEM';
+        vehicleCounts[key] = (vehicleCounts[key] || 0) + 1;
+      }
+
+      let queue = allMapped.filter((q) => {
+        if (heavyOnly && !q.heavy_local_pickup) return false;
+        if (minPrice > 0 && q.price_int < minPrice) return false;
+        if (vehicleFilter && !(q.ymm || '').toLowerCase().includes(vehicleFilter) && !(q.title || '').toLowerCase().includes(vehicleFilter)) return false;
+        return true;
+      });
+
+      if (sortMode === 'heavy_first') {
+        queue.sort((a, b) => Number(b.heavy_local_pickup) - Number(a.heavy_local_pickup) || b.price_int - a.price_int || b.id - a.id);
+      } else if (sortMode === 'newest') {
+        queue.sort((a, b) => b.id - a.id);
+      } else {
+        // Default: highest-value parts first for maximum ROI on Craigslist Tacoma
+        queue.sort((a, b) => b.price_int - a.price_int || Number(b.heavy_local_pickup) - Number(a.heavy_local_pickup) || b.id - a.id);
+      }
+
       const postedCount = queue.filter((q) => q.posted_craigslist).length;
+      const heavyCount = queue.filter((q) => q.heavy_local_pickup).length;
       sendJson(res, 200, {
         target: 'seattle.craigslist.org -> Tacoma/Pierce County (tac) -> for sale by dealer -> auto parts (ptd, ZIP 98467)',
         userscript_url: `${canonicalBase}/craigslist-autofill.user.js`,
@@ -880,9 +920,13 @@ const server = http.createServer(async (req, res) => {
         subarea: 'tac',
         posting_type: 'fsd',
         category: 'ptd',
+        sort: sortMode,
+        total_catalog_count: allMapped.length,
         count: queue.length,
+        heavy_count: heavyCount,
         posted_count: postedCount,
         remaining_count: queue.length - postedCount,
+        vehicle_summary: vehicleCounts,
         queue
       });
       return;
@@ -930,7 +974,7 @@ const server = http.createServer(async (req, res) => {
           photoDataUrls.push(p);
         }
       }
-      const clBody = renderLocalMarketplacePacket(row, cfg);
+      const clBody = renderCraigslistDescription(item, cfg, canonicalBase);
       const cleanTitle = cleanListingTitle(item.title || '').trim();
       const clTitle =
         `${cleanTitle} (OEM Tested — Tacoma)`.length <= 70
@@ -939,11 +983,13 @@ const server = http.createServer(async (req, res) => {
           ? `${cleanTitle} — Tacoma`
           : cleanTitle.slice(0, 70).trim();
       const ymm = tax.customLabel0 || [item.fitment_years, item.fitment_make, item.fitment_model].filter(Boolean).join(' ').trim();
+      const heavyPickup = isHeavyLocalPickupItem(item, cfg);
       sendJson(res, 200, {
         sku: item.sku,
         sold: false,
         cl_title: clTitle,
         price_int: Math.max(1, Math.round(Number(item.price_we_pull || 0))),
+        install_price: Number(item.price_pull_install || item.price_we_pull || 0),
         condition: normalizeExportCondition(item.condition) === 'New' ? 'new' : 'good',
         condition_raw: item.condition || 'Used',
         zip: cfg.zip || '98467',
@@ -955,6 +1001,9 @@ const server = http.createServer(async (req, res) => {
         phone: cfg.phone || '(253) 245-4206',
         contact_name: cfg.business_name || "Aldridge Auto's",
         email: cfg.email || 'service@aldridgeautosupply.com',
+        storefront_url: `${canonicalBase}/?sku=${encodeURIComponent(item.sku)}`,
+        shipping_class: heavyPickup ? 'local_pickup_only' : (item.shipping_class || 'parcel_calculated'),
+        heavy_local_pickup: heavyPickup,
         subarea: 'tac',
         posting_type: 'fsd',
         category: 'ptd',
@@ -1001,6 +1050,41 @@ const server = http.createServer(async (req, res) => {
         craigslist_url: ch.craigslist_url || null,
         craigslist_post_id: ch.craigslist_post_id || null
       });
+      return;
+    }
+
+    // Bulk reconcile posted Craigslist SKUs from Tampermonkey persistent storage (survives Render ephemeral SQLite restarts)
+    if (method === 'POST' && pathname === '/api/craigslist/sync-posted') {
+      const b = JSON.parse((await readRawBody(req)) || '{}');
+      const entries = Array.isArray(b.posted) ? b.posted : [];
+      const selectStmt = db.prepare('SELECT id, sku, channels_json FROM inventory_items WHERE sku = ?');
+      const updateStmt = db.prepare('UPDATE inventory_items SET channels_json = ?, updated_at = ? WHERE id = ?');
+      const now = new Date().toISOString();
+      let syncedCount = 0;
+      const syncedSkus = [];
+      for (const entry of entries.slice(0, 1000)) {
+        const sku = String(typeof entry === 'string' ? entry : (entry?.sku || '')).trim();
+        if (!sku) continue;
+        const row = selectStmt.get(sku);
+        if (!row) continue;
+        const ch = JSON.parse(row.channels_json || '{}');
+        const nextUrl = typeof entry === 'object' && entry?.url ? String(entry.url).trim() : ch.craigslist_url;
+        const nextPostId = typeof entry === 'object' && entry?.postId ? String(entry.postId).trim() : ch.craigslist_post_id;
+        const nextAt = typeof entry === 'object' && entry?.postedAt ? String(entry.postedAt).trim() : (ch.craigslist_posted_at || now);
+        if (!ch.craigslist_posted || nextUrl !== ch.craigslist_url || nextPostId !== ch.craigslist_post_id) {
+          ch.craigslist_posted = true;
+          ch.craigslist_posted_at = nextAt;
+          if (nextUrl) ch.craigslist_url = nextUrl;
+          if (nextPostId) ch.craigslist_post_id = nextPostId;
+          updateStmt.run(JSON.stringify(ch), now, row.id);
+          syncedCount++;
+          syncedSkus.push(sku);
+        }
+      }
+      if (syncedCount > 0) {
+        logSync('inbound', 'craigslist_tacoma_ptd', 'sync_posted_bulk', 'BATCH', 'success', `Reconciled ${syncedCount} posted Craigslist SKU(s) from Tampermonkey storage.`);
+      }
+      sendJson(res, 200, { ok: true, synced_count: syncedCount, synced_skus: syncedSkus });
       return;
     }
 
